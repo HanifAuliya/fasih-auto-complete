@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Batch Otomatis - Tahap 1 + 2: Excel -> Cari -> Isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      3.5
+// @version      3.12
 // @description  Membaca Excel penyisiran (Tindak Lanjut Fasih = false), mencari & membuka dokumen dengan filter wilayah, lalu mengisi Blok P + Blok II (usaha lama / tambah baru) dan mengirim tanpa konfirmasi. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -2586,6 +2586,204 @@
         "NELAYAN SUNGAI",
       ],
     });
+    // Tambahan dari produk yang belum kena di "ini baru.xlsx" (66 produk / 95 baris)
+    KBLI_KEYWORDS.push({
+      code: "03120",
+      exclude: [
+        "ASIN",
+        "KERING",
+        "SALAI",
+        "ASAP",
+        "OLAHAN",
+        "HIAS",
+        "JUAL",
+        "DAGANG",
+      ],
+      keywords: ["IKAN", "IKAN SEPAT", "ANEKA IKAN"],
+    });
+    KBLI_KEYWORDS.push({
+      code: "08103",
+      keywords: ["KARIKIL", "KRIKIL", "BATU KERIKIL"],
+    });
+    KBLI_KEYWORDS.push({ code: "47216", keywords: ["KAYU BAKAR"] });
+    KBLI_KEYWORDS.push({
+      code: "47749",
+      keywords: [
+        "BARANG BEKAS",
+        "KARDUS",
+        "KARDUS BEKAS",
+        "BARANG RONGSOK",
+        "RONGSOKAN",
+      ],
+    });
+    KBLI_KEYWORDS.push({
+      code: "47213",
+      keywords: [
+        "SAYUR KELILING",
+        "SAYURAN KELILING",
+        "PEDAGANG SAYUR",
+        "PEDAGANG SAYURAN",
+        "PEDANGANG SAYUR",
+      ],
+    });
+    KBLI_KEYWORDS.push({
+      code: "01131",
+      keywords: ["DAUN SOP", "KUCAI", "CANGKUK MANIS", "CANGKOK MANIS"],
+    });
+    KBLI_KEYWORDS.push({ code: "01114", keywords: ["KACANG SEMBUNYI"] });
+    KBLI_KEYWORDS.push({
+      code: "01133",
+      keywords: [
+        "TEMUN",
+        "TEMON",
+        "TEMON SURI",
+        "TIMUN SURI",
+        "BILUNGKA",
+        "TERON",
+      ],
+    });
+    KBLI_KEYWORDS.push({ code: "01289", keywords: ["SERAI", "SEREH"] });
+    KBLI_KEYWORDS.push({ code: "01210", keywords: ["ANGGUR"] });
+    KBLI_KEYWORDS.push({ code: "01220", keywords: ["SAWO"] });
+    KBLI_KEYWORDS.push({
+      code: "01299",
+      keywords: ["NIRA", "NIRA AREN", "AREN"],
+    });
+    KBLI_KEYWORDS.push({ code: "01291", keywords: ["LATEKS", "LATEK"] });
+    KBLI_KEYWORDS.push({ code: "01441", keywords: ["BIRI BIRI", "BIRI"] });
+    KBLI_KEYWORDS.push({ code: "01499", keywords: ["MARMOT"] });
+    KBLI_KEYWORDS.push({ code: "47772", keywords: ["GAS 3 KG", "GAS"] });
+    KBLI_KEYWORDS.push({
+      code: "47302",
+      keywords: [
+        "PERTALITE",
+        "BAHAN BAKAR",
+        "BAHAN BAKAR MINYAK",
+        "MINYAK ECERAN",
+      ],
+    });
+    KBLI_KEYWORDS.push({
+      code: "61201",
+      keywords: ["VOUCHER", "VOUCHER WIFI", "WIFI", "VOUCHER INTERNET"],
+    });
+    KBLI_KEYWORDS.push({
+      code: "47404",
+      keywords: ["VOUCHER DATA", "PONSEL", "KUOTA"],
+    });
+    KBLI_KEYWORDS.push({
+      code: "56102",
+      keywords: [
+        "BAKARAN",
+        "MARTABAK",
+        "TERANG BULAN",
+        "BERGER",
+        "BURGER",
+        "SEBLAK",
+        "LAKSA",
+      ],
+    });
+    KBLI_KEYWORDS.push({ code: "10750", keywords: ["RENDANG"] });
+    KBLI_KEYWORDS.push({
+      code: "47761",
+      keywords: ["BUCKET", "BUKET", "FLORIST"],
+    });
+    KBLI_KEYWORDS.push({ code: "47723", keywords: ["HERBAL", "HNI"] });
+    KBLI_KEYWORDS.push({ code: "47735", keywords: ["TITANIUM", "PERHIASAN"] });
+    KBLI_KEYWORDS.push({
+      code: "10797",
+      keywords: ["DAUN SAPAT", "BUBUK DAUN"],
+    });
+    KBLI_KEYWORDS.push({ code: "47762", keywords: ["BIBIT TANAMAN"] });
+    KBLI_KEYWORDS.push({ code: "13922", keywords: ["KASUR", "KASUR KAPUK"] });
+    KBLI_KEYWORDS.push({ code: "41011", keywords: ["TUKANG BANGUNAN"] });
+    KBLI_KEYWORDS.push({ code: "47249", keywords: ["BASRENG"] });
+    KBLI_KEYWORDS.push({
+      code: "68112",
+      keywords: [
+        "KONTRAKAN",
+        "RUMAH KONTRAKAN",
+        "KOST",
+        "KOS",
+        "SEWA RUMAH",
+        "PENYEWAAN RUMAH",
+      ],
+    });
+    KBLI_KEYWORDS.push({
+      code: "68111",
+      keywords: ["RUMAH SUBSIDI", "PERUMAHAN"],
+    });
+    KBLI_KEYWORDS.push({
+      code: "47799",
+      keywords: ["KOREK", "KOREK API", "LEM"],
+    });
+    KBLI_KEYWORDS.push({
+      code: "85595",
+      keywords: ["LES", "LES PRIVAT", "BIMBEL", "LES ANAK"],
+    });
+    KBLI_KEYWORDS.push({
+      code: "47192",
+      keywords: [
+        "KEPERLUAN SEHARI HARI",
+        "KELONTONGAN",
+        "BARANG JADI",
+        "KEBUTUHAN POKOK",
+      ],
+    });
+    KBLI_KEYWORDS.push({
+      code: "77291",
+      keywords: ["TENDA", "SEWA TENDA", "TENDA PERNIKAHAN"],
+    });
+    KBLI_KEYWORDS.push({
+      code: "47754",
+      keywords: ["PAYA", "UBANG", "AMPAS SAGU"],
+    });
+    KBLI_KEYWORDS.push({
+      code: "47711",
+      keywords: ["CELANA", "KAOS", "SARUNG"],
+    });
+    KBLI_KEYWORDS.push({
+      code: "73100",
+      keywords: ["CONTENT CREATOR", "ENDORS", "ENDORSE", "PENGIKLANAN"],
+    });
+    KBLI_KEYWORDS.push({ code: "31011", keywords: ["KURSI"] });
+    KBLI_KEYWORDS.push({ code: "47212", keywords: ["BUAH BUAHAN"] });
+    KBLI_KEYWORDS.push({ code: "47599", keywords: ["SAPU LIDI", "SAPU"] });
+    KBLI_KEYWORDS.push({
+      code: "93293",
+      keywords: ["PLAYGROUND", "MINI PLAYGROUND", "ARENA PERMAINAN"],
+    });
+    KBLI_KEYWORDS.push({ code: "47724", keywords: ["PARFUM", "MINYAK WANGI"] });
+    KBLI_KEYWORDS.push({
+      code: "16292",
+      keywords: ["DAUN RUMBIA", "ATAP RUMBIA", "ATAP DAUN", "ATAP DAUN RUMBIA"],
+    });
+    KBLI_KEYWORDS.push({ code: "47746", keywords: ["BARANG ANTIK"] });
+    KBLI_KEYWORDS.push({
+      code: "47215",
+      keywords: [
+        "JUAL IKAN",
+        "PENJUAL IKAN",
+        "PEDAGANG IKAN",
+        "DAGANG IKAN",
+        "JUALAN IKAN",
+      ],
+    });
+    // Perbaikan: sebelumnya salah kode
+    KBLI_KEYWORDS.push({
+      code: "10794",
+      keywords: ["KERIPIK SINGKONG", "KERIPIK PISANG"],
+    }); // dulu 47213 (SINGKONG > KERIPIK)
+    KBLI_KEYWORDS.push({ code: "47592", keywords: ["LAMPU"] });
+    KBLI_KEYWORDS.push({
+      code: "47713",
+      keywords: ["AKSESORIS RAMBUT", "AKSESORIS"],
+    });
+    KBLI_KEYWORDS.push({
+      code: "47781",
+      keywords: ["SOUVENIR", "KADO", "CENDERAMATA"],
+    });
+    // Keripik dijual keliling / di warung -> eceran makanan lainnya
+    TRADE_REMAP.push({ test: /^1079/, code: "47249" });
     return {
       KBLI_2025,
       matchKeyword,
@@ -2609,7 +2807,7 @@
   const CHANGE_WAIT_MS = 6000; // tunggu tabel mulai berubah / loading setelah cari atau filter
   const SETTLE_MS = 1500; // tabel dianggap selesai jika diam selama ini tanpa indikator loading
   const SETTLE_MAX_MS = 30000; // batas maksimal menunggu loading FASIH
-  const DEFAULT_DELAY_MS = 1000; // jeda tambahan setelah tabel selesai (bisa diubah di panel)
+  const DEFAULT_DELAY_MS = 3000; // jeda tambahan setelah tabel selesai (bisa diubah di panel)
   const REVIEW_WAIT_MS = 8000; // tunggu tombol Review muncul setelah dokumen dipilih
   const MATCH_GREEN = 0.75; // nama mirip minimal ini + No urut sama -> hijau
   const MATCH_YELLOW = 0.5;
@@ -2693,13 +2891,141 @@
       return false;
     }
   }
+  // Server FASIH membalas 429 (terlalu banyak permintaan) -> semua langkah skrip berhenti sampai waktu tunggu habis.
+  // Tunggu 10 menit, lalu 20, 40, maks 60 menit jika terulang dalam 2 jam.
+  const RATE_KEY = "fasih_rate_limit";
+  const rateInfo = () => {
+    try {
+      return JSON.parse(localStorage.getItem(RATE_KEY)) || {};
+    } catch (e) {
+      return {};
+    }
+  };
+  const rateLimited = () => Date.now() < (rateInfo().until || 0);
+  // Kecepatan: 0 Cepat, 1 Normal, 2 Aman. base = pilihan pengguna; penalty = turun otomatis setelah 429,
+  // naik lagi satu tingkat tiap 1 jam tanpa 429. Dipakai: max(base, penalty).
+  const SPEED_KEY = "fasih_speed";
+  const SPEEDS = [
+    { name: "Cepat", gap: [3000, 8000], perHour: 0, checkMs: 2000 },
+    { name: "Normal", gap: [10000, 20000], perHour: 40, checkMs: 3000 },
+    { name: "Aman", gap: [30000, 60000], perHour: 25, checkMs: 5000 },
+  ];
+  const loadSpeed = () => {
+    try {
+      return (
+        JSON.parse(localStorage.getItem(SPEED_KEY)) || { base: 0, penalty: 0 }
+      );
+    } catch (e) {
+      return { base: 0, penalty: 0 };
+    }
+  };
+  const saveSpeed = (s) => {
+    try {
+      localStorage.setItem(SPEED_KEY, JSON.stringify(s));
+    } catch (e) {
+      /* abaikan */
+    }
+  };
+  function speedLevel() {
+    const s = loadSpeed();
+    if (
+      s.penalty > 0 &&
+      Date.now() - (s.changedAt || 0) > 3600000 &&
+      !rateLimited()
+    ) {
+      s.penalty -= 1;
+      s.changedAt = Date.now();
+      saveSpeed(s);
+    }
+    return Math.max(s.base || 0, s.penalty || 0);
+  }
+  const currentSpeed = () => SPEEDS[speedLevel()];
+
+  function noteRateLimit(url) {
+    const prev = rateInfo();
+    if (Date.now() < (prev.until || 0)) return; // sudah dalam masa tunggu
+    const count =
+      Date.now() - (prev.at || 0) < 2 * 3600000 ? (prev.count || 0) + 1 : 1;
+    const minutes = Math.min(60, 15 * Math.pow(2, count - 1)); // 15, 30, 60 menit
+    const sp = loadSpeed();
+    sp.penalty = Math.min(2, Math.max(sp.base || 0, sp.penalty || 0) + 1);
+    sp.changedAt = Date.now();
+    saveSpeed(sp);
+    const info = {
+      at: Date.now(),
+      until: Date.now() + minutes * 60000,
+      count,
+      url: String(url || "").slice(0, 200),
+    };
+    try {
+      localStorage.setItem(RATE_KEY, JSON.stringify(info));
+    } catch (e) {
+      /* abaikan */
+    }
+    console.warn(
+      `[FASIH Otomatis] Server membalas 429 (terlalu banyak permintaan). Skrip berhenti ${minutes} menit.`,
+      url,
+    );
+  }
+  (function watch429() {
+    const origFetch = window.fetch;
+    if (origFetch && !origFetch.__fo429) {
+      const wrapped = function (input) {
+        return origFetch.apply(this, arguments).then((res) => {
+          if (res && res.status === 429)
+            noteRateLimit(
+              typeof input === "string" ? input : input && input.url,
+            );
+          return res;
+        });
+      };
+      wrapped.__fo429 = true;
+      window.fetch = wrapped;
+    }
+    const XHR = window.XMLHttpRequest && window.XMLHttpRequest.prototype;
+    if (XHR && !XHR.__fo429) {
+      const origOpen = XHR.open;
+      const origSend = XHR.send;
+      XHR.open = function (method, url) {
+        this.__foUrl = url;
+        return origOpen.apply(this, arguments);
+      };
+      XHR.send = function () {
+        this.addEventListener("loadend", () => {
+          if (this.status === 429) noteRateLimit(this.__foUrl);
+        });
+        return origSend.apply(this, arguments);
+      };
+      XHR.__fo429 = true;
+    }
+  })();
+  // Pemberitahuan kecil di pojok selama masa tunggu (juga saat "Cek semua" Tahap 1)
+  setInterval(() => {
+    let note = document.getElementById("fasih-rate-note");
+    if (!rateLimited()) {
+      if (note) note.remove();
+      return;
+    }
+    if (!note && document.body) {
+      note = document.createElement("div");
+      note.id = "fasih-rate-note";
+      note.style.cssText =
+        "position:fixed;top:12px;right:12px;z-index:1000003;max-width:340px;background:#7f1d1d;color:#fff;padding:10px 14px;border-radius:10px;font:13px/1.4 system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.25)";
+      document.body.appendChild(note);
+    }
+    if (note) {
+      const r = rateInfo();
+      note.textContent = `⛔ Server FASIH membatasi (429: terlalu banyak permintaan). Skrip berhenti otomatis sampai ${new Date(r.until).toLocaleTimeString()}, lalu lanjut sendiri. Jangan refresh berulang-ulang.`;
+    }
+  }, 3000);
+
   let pausedTotalMs = 0; // lama dijeda, supaya batas waktu tunggu tidak habis saat dijeda
   async function sleep(ms) {
     await new Promise((resolve) => setTimeout(resolve, ms));
-    if (!userPaused()) return;
+    if (!userPaused() && !rateLimited()) return;
     const t = Date.now();
-    while (userPaused())
-      await new Promise((resolve) => setTimeout(resolve, 400));
+    while (userPaused() || rateLimited())
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     pausedTotalMs += Date.now() - t;
   }
 
@@ -3000,8 +3326,14 @@
   // kalau masuk akal), sisanya tidak dibayar. Upah tetap diisi apa adanya. Hasil: true jika diubah.
   function fixTenagaKerja(values, notes) {
     const n = (k) => Number(values[k]) || 0;
-    let total = n("tk_laki") + n("tk_pr");
     let changed = false;
+    // Hanya 1 perempuan tanpa laki-laki -> tambah 1 laki-laki (dibayar/tidak dibayar diatur di bawah sesuai upah)
+    if (n("tk_pr") === 1 && n("tk_laki") === 0) {
+      values.tk_laki = "1";
+      notes.push("TK hanya 1 perempuan → ditambah 1 laki-laki");
+      changed = true;
+    }
+    let total = n("tk_laki") + n("tk_pr");
     if (total <= 0) {
       // laki/perempuan kosong tapi ada TK dibayar/tidak dibayar -> anggap laki-laki
       total = n("tk_dibayar") + n("tk_tdk_dibayar");
@@ -3180,7 +3512,9 @@
       }
     }
     const delay = loadState().delayMs;
-    await sleep(delay === undefined ? DEFAULT_DELAY_MS : delay);
+    await sleep(
+      Math.max(currentSpeed().checkMs, delay === undefined ? 0 : delay),
+    ); // minimal sesuai tingkat kecepatan
   }
 
   function isListPage() {
@@ -3388,16 +3722,92 @@
     return w ? `${w.desa.name} (${w.kec.name})` : "-";
   }
 
-  async function applyWilayah(w) {
-    if (appliedWilayahKey === wilayahKey(w)) return;
+  // Nomor RT dari pilihan SLS "[0001] RT 001" -> 1 (tanpa kata RT: pakai kode "[0003]" -> 3)
+  function slsOptionRt(text) {
+    const t = String(text || "").toUpperCase();
+    const rt = t.match(/\bRT\.?\s*0*(\d{1,3})(?!\d)/);
+    if (rt) return Number(rt[1]);
+    const code = t.match(/^\s*\[?0*(\d{1,4})\]?\s/);
+    return code ? Number(code[1]) : null;
+  }
+
+  // Pasang filter SLS = RT; rt null -> kosongkan filter SLS. Hasil: true jika filter RT itu terpasang.
+  async function setSlsFilter(rt) {
+    const btn = fieldButton("SLS");
+    if (!btn) return false; // halaman tanpa isian SLS
+    const shown = (btn.querySelector("span") || btn).innerText.trim();
+    const hasValue =
+      shown &&
+      !/^(PILIH|SELECT|SEMUA|ALL)\b/i.test(shown) &&
+      !!btn.querySelector('[title="Clear selection"]');
+    if (rt === null) {
+      if (hasValue) {
+        triggerClick(btn.querySelector('[title="Clear selection"]'));
+        await sleep(400);
+        if (visibleOptions().length) pressEscape();
+      }
+      return false;
+    }
+    if (hasValue && slsOptionRt(shown) === rt) return true;
+    triggerClick(btn);
+    await waitFor(() => visibleOptions().length, 6000);
+    let count = -1;
+    for (let i = 0; i < 8 && visibleOptions().length !== count; i++) {
+      count = visibleOptions().length;
+      await sleep(300);
+    }
+    const pick = () =>
+      visibleOptions().find(
+        (el) =>
+          slsOptionRt(el.getAttribute("data-value") || el.innerText) === rt,
+      );
+    let target = pick();
+    const input = document.querySelector("input[cmdk-input]");
+    if (!target && input) {
+      setInputValue(input, `RT ${String(rt).padStart(3, "0")}`);
+      target = await waitFor(pick, 3000);
+    }
+    if (!target) {
+      pressEscape();
+      await sleep(300);
+      return false;
+    }
+    triggerClick(target);
+    await waitFor(
+      () =>
+        fieldButton("SLS") && slsOptionRt(fieldButton("SLS").innerText) === rt,
+      5000,
+    );
+    return !!(
+      fieldButton("SLS") && slsOptionRt(fieldButton("SLS").innerText) === rt
+    );
+  }
+
+  let appliedSlsRt; // RT yang dipakai di filter SLS (null = tanpa SLS)
+  let appliedSlsOk = false;
+  // Hasil: true jika filter SLS untuk RT itu ikut terpasang
+  async function applyWilayah(w, rt = null) {
+    if (appliedWilayahKey === wilayahKey(w) && appliedSlsRt === rt)
+      return appliedSlsOk;
     const before = tableText();
     await openFilterPanel();
     if (await selectFieldOption("KECAMATAN", w.kec)) await sleep(1000); // daftar desa dimuat ulang
-    await selectFieldOption("DESA", w.desa);
+    if (await selectFieldOption("DESA", w.desa)) await sleep(1000); // daftar SLS dimuat ulang
+    let slsOk = false;
+    try {
+      slsOk = await setSlsFilter(rt);
+    } catch (e) {
+      console.warn("[Tahap 1] filter SLS gagal:", e);
+    }
     await closeFilterPanel();
     await waitTableSettled(before);
     appliedWilayahKey = wilayahKey(w);
-    console.log(`[Tahap 1] Filter wilayah: ${wilayahLabel(w)}`);
+    appliedSlsRt = rt;
+    appliedSlsOk = slsOk;
+    console.log(
+      `[Tahap 1] Filter wilayah: ${wilayahLabel(w)}${slsOk ? ` · SLS RT ${rt}` : ""}`,
+    );
+    return slsOk;
   }
 
   // Baca seluruh kecamatan -> desa dari Filter FASIH (sekali, disimpan di browser)
@@ -3551,19 +3961,66 @@
       };
     }
     if (!item.wilayah) updateItem(item.id, { wilayah });
-    await applyWilayah(wilayah);
+    const rt = rtNumber(item.alamat);
+    if (item.chosenKode) return findChosen(item, wilayah);
 
+    // 1) Desa + SLS (RT dari alamat Excel). 2) Tidak ketemu di SLS itu -> desa saja (RT di Excel bisa salah)
+    const slsOn = rt !== null && (await applyWilayah(wilayah, rt));
+    if (slsOn) {
+      const inSls = await searchDocument(item, rt, true);
+      if (inSls.status !== "red") return inSls;
+      await applyWilayah(wilayah, null);
+      const inDesa = await searchDocument(item, rt, false);
+      if (inDesa.status === "red")
+        inDesa.reason = `dokumen tidak ditemukan (sudah dicari di SLS RT ${rt} dan seluruh desa)`;
+      return inDesa;
+    }
+    await applyWilayah(wilayah, null);
+    return searchDocument(item, rt, false);
+  }
+
+  // Dokumen yang dipilih manual ("Pilih & isi"): cari baris dengan kode identitas yang sama persis
+  async function findChosen(item, wilayah) {
+    await applyWilayah(wilayah, null);
+    const want = normalize(item.chosenKode);
+    const queries = Array.from(
+      new Set([
+        ...buildQueries(item.krt),
+        String(item.chosenKode).split(/\s+-\s+|\s/)[0],
+      ]),
+    );
+    for (const query of queries) {
+      const row = (await searchList(query)).find(
+        (r) => normalize(r.kode) === want,
+      );
+      if (row)
+        return {
+          status: "green",
+          row,
+          reason: `dipilih manual (${item.chosenKode})`,
+          candidates: [],
+        };
+    }
+    return {
+      status: "red",
+      reason: `dokumen pilihan ${item.chosenKode} tidak ketemu di daftar desa`,
+      candidates: [],
+    };
+  }
+
+  // Cari di daftar yang sudah difilter. slsOn: semua baris daftar pasti berada di SLS/RT yang sama.
+  async function searchDocument(item, rt, slsOn) {
     let doubtful = [];
     for (const query of buildQueries(item.krt)) {
-      const rt = rtNumber(item.alamat);
       const scored = (await searchList(query)).map((r) => ({
         ...r,
         score: nameScore(item, r.nama),
         urutOk: !!item.noUrut && r.noUrut === item.noUrut,
-        // Desa sudah difilter; RT di alamat Excel = nomor SLS dokumen (dari kode identitas / alamat prelist)
+        // RT di alamat Excel = SLS dokumen (dari filter SLS / kode identitas / alamat prelist)
         slsOk:
-          rt !== null &&
-          (slsNumber(r.kode) === rt || rtNumber(r.alamat) === rt),
+          slsOn ||
+          (rt !== null &&
+            (slsNumber(r.kode) === rt || rtNumber(r.alamat) === rt)),
       }));
 
       const sure = scored
@@ -3577,7 +4034,7 @@
       ) {
         const why = sure[0].urutOk
           ? "no urut sama"
-          : `No urut beda, tapi desa & RT/SLS ${rt} sama`;
+          : `No urut beda, tapi di SLS RT ${rt} yang sama`;
         return {
           status: "green",
           row: sure[0],
@@ -3590,6 +4047,25 @@
           status: "yellow",
           reason: `${sure.length} dokumen sama-sama cocok`,
           candidates: sure.slice(0, 5),
+        };
+      }
+      // Di SLS itu hanya ada satu nama yang cukup mirip -> pilih itu
+      const similar = scored.filter((s) => s.score >= 0.6);
+      if (slsOn && similar.length === 1) {
+        return {
+          status: "green",
+          row: similar[0],
+          reason: `cocok (mirip ${Math.round(similar[0].score * 100)}%, satu-satunya nama mirip di SLS RT ${rt})`,
+          candidates: [],
+        };
+      }
+      // Di seluruh desa hanya ada satu nama yang mirip -> itu orangnya, walau No urut beda
+      if (!slsOn && similar.length === 1 && similar[0].score >= MATCH_GREEN) {
+        return {
+          status: "green",
+          row: similar[0],
+          reason: `cocok (mirip ${Math.round(similar[0].score * 100)}%, satu-satunya nama mirip di desa ini)`,
+          candidates: [],
         };
       }
 
@@ -3746,10 +4222,13 @@
         }
         // Dahulukan baris di desa yang filternya sedang aktif agar filter jarang diganti
         const pending = loadQueue().filter((q) => q.status === "pending");
+        const sameDesa = (q) => wilayahKey(wilayahFor(q)) === appliedWilayahKey;
         const item =
           pending.find(
-            (q) => wilayahKey(wilayahFor(q)) === appliedWilayahKey,
-          ) || pending[0];
+            (q) => sameDesa(q) && rtNumber(q.alamat) === appliedSlsRt,
+          ) ||
+          pending.find(sameDesa) ||
+          pending[0];
         if (!item) {
           const state = loadState();
           state.checking = false;
@@ -4091,8 +4570,9 @@
     [/JASA PERTANIAN/, "jasa_pertanian"],
   ];
 
+  // Selalu dihitung ulang (item.kbli hanya catatan hasil lama) agar perbaikan kata kunci ikut terpakai.
+  // Pilihan manual ("Tentukan KBLI") tersimpan di kamus, jadi tetap diutamakan.
   function itemKbli(item) {
-    if (item.kbli && KB.isValidKbli(item.kbli)) return item.kbli;
     const kamus = KB.loadKamus()[KB.kamusKeyOf(item.produk)];
     if (kamus && KB.isValidKbli(kamus)) return kamus;
     let code = KB.matchKeyword(item.produk);
@@ -4237,30 +4717,16 @@
     return m ? Number(m[1]) : /SELESAI/i.test(card.badge) ? 100 : 0;
   }
 
-  // Isian wajib (*) yang masih kosong di halaman usaha / anggota yang sedang terbuka
-  function emptyRequired(inst) {
-    return Array.from(document.querySelectorAll(`[id$="#${inst}"]`))
-      .filter(
-        (c) =>
-          visible(c) && c.querySelector('span[class~="tw:text-destructive"]'),
-      )
-      .filter((c) => {
-        const radios = Array.from(c.querySelectorAll('input[type="radio"]'));
-        if (radios.length)
-          return !radios.every((r) => r.disabled) && !radioValue(c);
-        const input = c.querySelector(
-          'input[type="text"]:not([disabled]), textarea:not([disabled])',
-        );
-        return input ? !input.value.trim() : false;
-      })
-      .map((c) => {
-        const label = (c.innerText || "")
-          .split("\n")[0]
-          .replace(/\s+/g, " ")
-          .trim()
-          .slice(0, 45);
-        return `${c.id.split("#")[0]} "${label}"`;
-      });
+  // Isian wajib (*) yang masih kosong di halaman usaha / anggota #inst, sebagai teks untuk catatan
+  function requiredLabels(inst) {
+    return emptyRequired(inst).map((c) => {
+      const label = (c.innerText || "")
+        .split("\n")[0]
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 45);
+      return `${c.id.split("#")[0]} "${label}"`;
+    });
   }
 
   // ---------- Blok I: anggota keluarga ----------
@@ -4302,6 +4768,84 @@
   const isOwnerName = (owners, name) =>
     owners.some((o) => nameSimilarity(o, name) >= 0.8);
 
+  // ---------- 9.a keberadaan anggota: hanya "1. Tinggal di rumah" yang bisa jadi penanggung jawab usaha ----------
+  let memberNamesSeen = [];
+  const KEBERADAAN = {
+    1: "tinggal di rumah",
+    2: "meninggal",
+    3: "pindah dalam negeri",
+    4: "pindah luar negeri",
+    5: "lainnya",
+  };
+  const visibleKeberadaan = () =>
+    Array.from(document.querySelectorAll('[id^="keberadaan_dtsen#"]')).find(
+      visible,
+    ) || null;
+
+  // Buka halaman anggota; hasil: nomor instance (#n) atau null
+  async function openMember(name) {
+    await goSection("SE2026 - L BLOK I", onBlokI, true);
+    await waitFor(() => !visibleKeberadaan(), 5000);
+    const card = memberCards().find((c) => c.name === name);
+    if (!card) return null;
+    triggerClick(card.card);
+    const kb = await waitFor(visibleKeberadaan, 15000);
+    if (!kb) return null;
+    await sleep(600);
+    return kb.id.split("#")[1];
+  }
+
+  // Tentukan penanggung jawab tiap baris Excel. Pemilik Excel yang tidak tinggal di rumah diganti
+  // anggota keluarga ke-2 (atau anggota lain yang tinggal di rumah).
+  async function resolveOwners(items) {
+    await goSection("SE2026 - L BLOK I", onBlokI, true);
+    const names = memberCards().map((c) => c.name);
+    memberNamesSeen = names.slice();
+    const cache = new Map();
+    const statusOf = async (name) => {
+      if (!cache.has(name)) {
+        const inst = await openMember(name);
+        const kb = inst && box("keberadaan_dtsen", inst);
+        cache.set(name, kb ? radioValue(kb) : "");
+      }
+      return cache.get(name);
+    };
+    for (const item of items) {
+      const orig = String(item.pemilik || item.krt || "")
+        .trim()
+        .toUpperCase();
+      item.ownerEff = orig;
+      const match = names.find((n) => nameSimilarity(orig, n) >= 0.8);
+      if (match) {
+        item.ownerEff = match;
+        const st = await statusOf(match);
+        if (st && st !== "1") {
+          const order = [names[1], ...names.filter((n, i) => i !== 1)].filter(
+            (n) => n && n !== match,
+          );
+          let sub = null;
+          for (const n of order) {
+            if ((await statusOf(n)) === "1") {
+              sub = n;
+              break;
+            }
+          }
+          const why = `${match} 9.a = ${KEBERADAAN[st] || st}`;
+          if (sub) {
+            item.ownerEff = sub;
+            runLog(`Penanggung jawab diganti: ${why} → ${sub}`);
+            item.ownerNote = `penanggung jawab diganti (${why}) → ${sub}`;
+          } else {
+            warn(
+              `${why}, tidak ada anggota lain yang tinggal di rumah untuk jadi penanggung jawab`,
+            );
+          }
+        }
+      }
+      updateItem(item.id, { ownerEff: item.ownerEff });
+    }
+  }
+
   // Ya untuk anggota yang jadi penanggung jawab usaha. decideAll: anggota lain dijawab Tidak.
   async function setMembersUsaha(owners, decideAll) {
     await goSection("SE2026 - L BLOK I", onBlokI, true);
@@ -4323,7 +4867,20 @@
         const card = memberCards().find((c) => c.name === name);
         if (!card) continue;
         triggerClick(card.card);
-        art = await waitFor(() => artFor(name), 15000);
+        art = await waitFor(
+          () =>
+            artFor(name) ||
+            (visibleKeberadaan() &&
+            radioValue(visibleKeberadaan()) &&
+            radioValue(visibleKeberadaan()) !== "1"
+              ? "absent"
+              : null),
+          15000,
+        );
+        if (art === "absent") {
+          runLog(`Blok I: ${name} tidak tinggal di rumah, dilewati`);
+          continue;
+        }
         if (!art) {
           warn(`anggota ${name}: pertanyaan "memiliki usaha" tidak muncul`);
           continue;
@@ -4340,20 +4897,33 @@
         );
       }
       await sleep(800);
-      const missingAk = emptyRequired(art.id.split("#")[1]);
+      const missingAk = requiredLabels(art.id.split("#")[1]);
       if (missingAk.length)
         warn(`anggota ${name} ada isian kosong: ${missingAk.join("; ")}`);
       runLog(`Blok I: ${name} memiliki usaha = ${owner ? "Ya" : "Tidak"}`);
     }
   }
 
+  // Jenis pertanian (Blok P) sebuah kartu usaha: dari KBLI-nya, atau dari nama kartu "UTP HORTIKULTURA ..."
+  function cardAgriCategory(inst, cardName) {
+    const kbli = box("kbli", inst);
+    const code = kbli
+      ? ((dropdownValue(kbli) || kbli.innerText).match(/\b(\d{5})\b/) || [])[1]
+      : "";
+    const byName = CARD_CATEGORY.find(([re]) =>
+      re.test(String(cardName || "").toUpperCase()),
+    );
+    return (code && agriCategory(code)) || (byName ? byName[1] : "");
+  }
+
   // Baca penanggung jawab (12.a) & keberadaan semua kartu usaha di Blok II
-  // Hasil: { owners: [...], found: jumlah usaha Ditemukan/Baru }
+  // Hasil: { owners: [...], found: jumlah usaha Ditemukan/Baru, cats: jenis pertanian yang punya usaha }
   let lastFoundCount = null;
-  async function readAllOwners(known) {
+  async function readAllOwners(known, knownCats = new Map()) {
     // known: Map(urutan kartu -> pemilik) untuk usaha yang baru diisi (pasti Ditemukan / Baru)
     await goSection("SE2026 - L BLOK II", onBlokII);
     const owners = new Map(known);
+    const cats = new Set(Array.from(knownCats.values()).filter(Boolean));
     let found = known.size;
     const total = usahaCards().length;
     for (let idx = 0; idx < total; idx++) {
@@ -4363,12 +4933,54 @@
       if (!card) continue;
       const inst = await openUsahaPage(card);
       const kb = box("keberadaan_usaha", inst);
-      if (kb && ["1", "2"].includes(radioValue(kb))) found++;
+      if (kb && ["1", "2"].includes(radioValue(kb))) {
+        found++;
+        const cat = cardAgriCategory(inst, card.name);
+        if (cat) cats.add(cat);
+      }
+      // Kartu mana pun (juga yang tidak ada di Excel): 'Pilih UMKM dalam satu SLS' kosong -> Tidak Ada
+      const umkm = box("pilih_umkm_sls", inst);
+      if (umkm && visible(umkm) && !dropdownValue(umkm)) {
+        await ensureUmkmTidakAda(inst);
+        runLog(`Usaha "${card.name}": Pilih UMKM SLS kosong → Tidak Ada`);
+      }
       const p = await waitBox("pengusaha_var", inst, 4000);
       owners.set(idx, p ? dropdownValue(p) : "");
     }
     lastFoundCount = found;
-    return { owners: Array.from(owners.values()).filter(Boolean), found };
+    return { owners: Array.from(owners.values()).filter(Boolean), found, cats };
+  }
+
+  // Blok P: jenis pertanian yang aktif (Ya) tapi tidak punya usaha Ditemukan/Baru di Blok II -> Tidak.
+  // Contoh: HORTIKULTURA & PERKEBUNAN sama-sama Ya padahal usahanya hanya hortikultura -> galat jumlah roster.
+  const AGRI_P = [
+    "tanaman_pangan",
+    "hortikultura",
+    "perkebunan",
+    "peternakan",
+    "kehutanan",
+    "perikanan",
+    "jasa_pertanian",
+  ];
+  async function syncBlokPAgri(cats) {
+    await goSection("SE2026 - P", onBlokP, true);
+    await sleep(800);
+    const changed = [];
+    for (const id of AGRI_P) {
+      const b = box(id);
+      if (!b || !visible(b) || cats.has(id) || radioValue(b) !== "1") continue;
+      if ((await fillField(id, undefined, "2", { container: b })) === "ok")
+        changed.push(id);
+      await sleep(1000); // FASIH menghapus kartu UTP jenis itu
+    }
+    const msg = changed.length
+      ? `Blok P: ${changed.join(", ")} diubah ke Tidak (tidak ada usahanya di Blok II; usaha pertanian yang ada: ${Array.from(cats).join(", ") || "-"})`
+      : "";
+    if (msg) {
+      runLog(msg);
+      docWarnings.push(msg);
+    }
+    return changed;
   }
 
   // Halaman P: isian "jumlah usaha" harus sama dengan jumlah usaha Ditemukan/Baru di Blok II
@@ -4592,7 +5204,7 @@
 
   // ---------- Nama usaha + (pemilik) ----------
   const ownerOf = (item) =>
-    String(item.pemilik || item.krt || "")
+    String(item.ownerEff || item.pemilik || item.krt || "")
       .trim()
       .toUpperCase();
   function withOwner(name, owner) {
@@ -4606,6 +5218,20 @@
     return `${base} (${owner})`;
   }
 
+  // Nama bawaan kartu yang dibuat FASIH setelah "memiliki usaha = Ya": "Usaha <NAMA ANGGOTA>"
+  const isPlaceholderName = (name) =>
+    /^USAHA\s+\S/i.test(String(name || "").trim()) &&
+    memberNamesSeen.some(
+      (n) =>
+        nameSimilarity(
+          String(name)
+            .trim()
+            .replace(/^USAHA\s+/i, "")
+            .replace(/\(.*\)\s*$/, ""),
+          n,
+        ) >= 0.85,
+    );
+
   // Isian nama: kosong -> nama usaha Excel + (pemilik); ada isi tanpa kurung -> ditambah (pemilik)
   async function ensureOwnerName(id, inst, item, wait) {
     const container = await waitBox(id, inst, wait);
@@ -4616,7 +5242,9 @@
       );
     if (!input) return;
     const target = withOwner(
-      input.value.trim() || item.namaUsaha,
+      isPlaceholderName(input.value)
+        ? item.namaUsaha
+        : input.value.trim() || item.namaUsaha,
       ownerOf(item),
     );
     if (input.value.trim().toUpperCase() !== target)
@@ -4742,7 +5370,7 @@
     await must("lap_keuangan", "2");
 
     // 12.a Pengusaha: pilih anggota keluarga yang namanya paling mirip pemilik Excel
-    const owner = item.pemilik || item.krt;
+    const owner = ownerOf(item);
     const pengusaha = await waitBox("pengusaha_var", inst);
     if (pengusaha && nameSimilarity(dropdownValue(pengusaha), owner) < 0.75) {
       const pick = (opts) => {
@@ -4987,10 +5615,14 @@
     runLog(`Blok P: ${blokP.join(", ")} = Ya`);
     await ensureRequired(undefined, null, "Blok P");
 
-    // 2) Blok I: penanggung jawab dari Excel dijawab "Ya" dulu agar muncul di pilihan 12.a
-    const excelOwners = Array.from(
-      new Set(items.map((i) => i.pemilik || i.krt)),
-    );
+    // 2) Blok I: cek 9.a keberadaan penanggung jawab (ganti bila tidak tinggal di rumah),
+    //    lalu jawab "Ya" agar muncul di 12.a dan FASIH membuat kartu "Usaha <NAMA>" untuk usaha baru
+    try {
+      await resolveOwners(items);
+    } catch (e) {
+      warn(`Blok I (keberadaan): ${e.message}`);
+    }
+    const excelOwners = Array.from(new Set(items.map(ownerOf)));
     try {
       await setMembersUsaha(excelOwners, false);
     } catch (e) {
@@ -5001,6 +5633,7 @@
     // Kartu diingat lewat urutannya: namanya bisa berubah setelah ditambah (PEMILIK)
     const usedIdx = new Set();
     const ownerByCard = new Map();
+    const catByCard = new Map();
     for (const item of items) {
       try {
         await goSection("SE2026 - L BLOK II", onBlokII);
@@ -5010,12 +5643,32 @@
           .filter((c) => !usedIdx.has(c.idx))
           .sort((a, b) => b.score - a.score)[0];
         if (!card || card.score < 0.6) {
-          const newName = withOwner(item.namaUsaha, ownerOf(item));
-          runLog(`Tambah usaha baru: ${newName}`);
-          card = await addUsaha(newName);
-          card.idx = usahaCards().findIndex(
-            (c) => c.card === card.card || c.name === card.name,
-          );
+          // Usaha baru: FASIH biasanya sudah membuat kartu "Usaha <PEMILIK>" (tertaut ke roster & jawaban Blok I)
+          const autoCard = () =>
+            usahaCards()
+              .map((c, idx) => ({ ...c, idx }))
+              .find(
+                (c) =>
+                  !usedIdx.has(c.idx) &&
+                  /^USAHA\s+/.test(c.name) &&
+                  cardPercent(c) < 100 &&
+                  nameSimilarity(
+                    c.name.replace(/^USAHA\s+/, ""),
+                    ownerOf(item),
+                  ) >= 0.85,
+              );
+          const auto = autoCard() || (await waitFor(autoCard, 3000));
+          if (auto) {
+            runLog(`Usaha baru memakai kartu otomatis "${auto.name}"`);
+            card = auto;
+          } else {
+            const newName = withOwner(item.namaUsaha, ownerOf(item));
+            runLog(`Tambah usaha baru: ${newName}`);
+            card = await addUsaha(newName);
+            card.idx = usahaCards().findIndex(
+              (c) => c.card === card.card || c.name === card.name,
+            );
+          }
         }
         usedIdx.add(card.idx);
         runLog(`Mengisi usaha "${card.name}" (${item.id})`);
@@ -5026,7 +5679,7 @@
         let notes = await fillUsaha(inst, item, ctx);
 
         // Jangan tinggalkan usaha sebelum isian wajib terisi & isian penting benar (terutama usaha baru)
-        let missing = emptyRequired(inst);
+        let missing = requiredLabels(inst);
         let wrong = checkUsaha(inst, item, isNew);
         for (
           let pass = 2;
@@ -5038,7 +5691,7 @@
           );
           await sleep(2000);
           notes = await fillUsaha(inst, item, ctx);
-          missing = emptyRequired(inst);
+          missing = requiredLabels(inst);
           wrong = checkUsaha(inst, item, isNew);
         }
         const pengusaha = box("pengusaha_var", inst);
@@ -5052,12 +5705,14 @@
           card.idx,
           pengusaha ? dropdownValue(pengusaha) : ownerOf(item),
         );
+        catByCard.set(card.idx, usahaProfile(item.kbli).agri || "");
         updateItem(item.id, {
-          usahaCard: card.name,
+          usahaCard: nameNow || card.name,
           kbli: item.kbli,
           notes: (item.notes || []).concat(
             notes,
             isNew ? [`usaha baru: ${nameNow}`] : [],
+            item.ownerNote ? [item.ownerNote] : [],
           ),
         });
         if (missing.length)
@@ -5094,7 +5749,12 @@
 
     // 5) Blok I lagi: Ya untuk semua penanggung jawab usaha (termasuk usaha lain), Tidak untuk anggota lain
     try {
-      const { owners: allOwners, found } = await readAllOwners(ownerByCard);
+      const {
+        owners: allOwners,
+        found,
+        cats,
+      } = await readAllOwners(ownerByCard, catByCard);
+      await syncBlokPAgri(cats);
       await setMembersUsaha(
         Array.from(new Set(allOwners.concat(excelOwners))),
         true,
@@ -5497,7 +6157,8 @@
       /roster|jumlah\s+usaha/i.test(`${err.title} ${err.messages.join(" ")}`)
     ) {
       runLog(`Perbaiki galat roster: ${label}`);
-      const { found } = await readAllOwners(new Map()); // buka semua kartu, hitung Ditemukan/Baru
+      const { found, cats } = await readAllOwners(new Map()); // buka semua kartu, hitung Ditemukan/Baru
+      await syncBlokPAgri(cats); // jenis pertanian di P yang tidak punya usaha -> Tidak
       await syncRoster(found);
       return;
     }
@@ -5554,6 +6215,12 @@
       await fixTkInForm(inst, item);
       return;
     }
+    if (base === "pilih_umkm_sls") {
+      await ensureUmkmTidakAda(inst);
+      if (/TIDAK ADA/i.test(dropdownValue(fresh(target))))
+        runLog(`Galat diperbaiki: ${label} → Tidak Ada`);
+      return;
+    }
 
     // Isian khusus yang nilainya bisa dibuat skrip
     let wanted = null;
@@ -5564,7 +6231,9 @@
       wanted = fullAlamat(textInput.value.trim() || pseudo.alamat, item);
     else if (/^nama_komersial|^nama_usaha_edit/.test(base) && item)
       wanted = withOwner(
-        textInput ? textInput.value || item.namaUsaha : item.namaUsaha,
+        textInput && textInput.value && !isPlaceholderName(textInput.value)
+          ? textInput.value
+          : item.namaUsaha,
         ownerOf(item),
       );
 
@@ -5602,9 +6271,43 @@
       if (group) triggerClick(group.querySelector('[role="radio"]'));
       return;
     }
-    warn(
-      `galat belum bisa diisi otomatis: ${label} (${err.messages.join(", ")})`,
+    // Isian angka kosong -> 0
+    if (
+      textInput &&
+      !textInput.value.trim() &&
+      NUMERIC_BASE.test(base) &&
+      !target.querySelector("[aria-haspopup]")
+    ) {
+      await retypeField(textInput, "0");
+      return;
+    }
+    // Dropdown kosong yang punya pilihan "Tidak Ada" -> pilih itu
+    if (target.querySelector("[aria-haspopup]") && !dropdownValue(target)) {
+      const ok = await chooseFromDropdown(target, "", (opts) =>
+        opts.find((o) => /TIDAK ADA/i.test(o.innerText)),
+      );
+      if (ok) {
+        runLog(`Galat diperbaiki: ${label} → Tidak Ada`);
+        return;
+      }
+      pressKey(document.activeElement || document.body, "Escape");
+    }
+    // Tidak bisa ditebak: form sudah terbuka di isian itu -> jeda agar Anda bisa mengisi, lalu dicek ulang
+    const run = loadRun();
+    setUserPause(
+      true,
+      `Galat perlu dibantu: ${label} (${err.messages.join(", ")}). Isian sudah dibuka`,
+      run.testMode ? 0 : 90000,
     );
+    await sleep(300); // tertahan di sini sampai "Lanjut"
+    if (
+      containerByTitle(err.title) &&
+      emptyRequired(inst).some((el) => el.id === target.id)
+    ) {
+      warn(
+        `galat belum bisa diisi otomatis: ${label} (${err.messages.join(", ")})`,
+      );
+    }
   }
 
   // Switch "Tampilkan Anomali Usaha dan Keluarga" di halaman CATATAN
@@ -5738,6 +6441,15 @@
       phaseAt: Date.now(),
       holdReason: hold ? reason : "",
     });
+    if (!hold) {
+      // setiap dokumen selesai: catat untuk batas per jam, lalu jeda
+      run.recent = (run.recent || [])
+        .filter((t) => Date.now() - t < 3600000)
+        .concat(run.docStartedAt || Date.now());
+      run.docStartedAt = 0;
+      const gap = currentSpeed().gap; // jeda acak antar-dokumen
+      run.nextAt = Date.now() + gap[0] + Math.random() * (gap[1] - gap[0]);
+    }
     if (run.limit && run.processed >= run.limit) run.running = hold; // tetap tampilkan alasan sebelum berhenti
     saveRun(run);
     runLog(`${status === "done" ? "✅" : "⚠️"} ${reason}`);
@@ -5759,8 +6471,11 @@
         q.values &&
         (!only || only.has(q.id)),
     );
+    // Dahulukan desa & RT yang filternya sedang terpasang (lebih sedikit ganti filter = lebih sedikit permintaan)
+    const sameDesa = (q) => wilayahKey(wilayahFor(q)) === appliedWilayahKey;
     return (
-      ready.find((q) => wilayahKey(wilayahFor(q)) === appliedWilayahKey) ||
+      ready.find((q) => sameDesa(q) && rtNumber(q.alamat) === appliedSlsRt) ||
+      ready.find(sameDesa) ||
       ready[0]
     );
   }
@@ -5777,6 +6492,23 @@
   }
 
   async function stepFind(run) {
+    // Jeda antar-dokumen & batas per jam
+    const recent = (run.recent || []).filter((t) => Date.now() - t < 3600000);
+    const perHour = currentSpeed().perHour;
+    const hourWait =
+      perHour && recent.length >= perHour
+        ? recent[recent.length - perHour] + 3600000
+        : 0;
+    const waitUntil = Math.max(run.nextAt || 0, hourWait);
+    if (Date.now() < waitUntil) {
+      const sec = Math.ceil((waitUntil - Date.now()) / 1000);
+      const msg =
+        hourWait > (run.nextAt || 0)
+          ? `Batas ${perHour} dokumen/jam (${currentSpeed().name}) tercapai, lanjut dalam ${Math.ceil(sec / 60)} menit`
+          : `Jeda antar-dokumen ${sec} detik`;
+      if (run.lastLog !== msg) runLog(msg);
+      return;
+    }
     if (!isListPage()) {
       goList(run);
       return;
@@ -5846,6 +6578,7 @@
       docKode: result.row.kode,
       submitClicked: false,
       listUrl: location.href,
+      docStartedAt: Date.now(),
     });
     location.href = href;
   }
@@ -5859,6 +6592,14 @@
         runLog("Lanjut otomatis setelah jeda");
         setUserPause(false);
       }
+      return;
+    }
+    if (rateLimited()) {
+      if (!runnerBusy) {
+        run.phaseAt = Date.now();
+        saveRun(run);
+      } // masa tunggu tidak dihitung macet
+      updateRunBar();
       return;
     }
     if (runnerBusy) return;
@@ -6042,12 +6783,20 @@
     const target = run.onlyIds ? run.onlyIds.length : run.limit;
     const hold = run.phase === "hold";
     const up = loadPause();
-    const upText = up.on
-      ? `${up.reason || "Dijeda"} — perbaiki form bila perlu, lalu klik "▶ Lanjut"${up.resumeAt ? ` (lanjut sendiri ${new Date(up.resumeAt).toLocaleTimeString()})` : ""}`
-      : "";
+    if (!up.on && rateLimited()) {
+      up.on = true;
+      up.reason = `⛔ Server membatasi (429). Berhenti otomatis sampai ${new Date(rateInfo().until).toLocaleTimeString()}`;
+      up.resumeAt = 0;
+      up.rate = true;
+    }
+    const upText = up.rate
+      ? `${up.reason}, lalu lanjut sendiri. Jangan refresh berulang-ulang.`
+      : up.on
+        ? `${up.reason || "Dijeda"} — perbaiki form bila perlu, lalu klik "▶ Lanjut"${up.resumeAt ? ` (lanjut sendiri ${new Date(up.resumeAt).toLocaleTimeString()})` : ""}`
+        : "";
     bar.innerHTML = `<span class="dot${paused || hold || up.on ? " paused" : ""}"></span>
       <div style="flex:1;min-width:0;">
-        <div class="t">${up.on ? "⏸ Dijeda · " : ""}${PHASE_LABEL[run.phase] || escapeHtml(run.phase)}${run.testMode ? " · Mode uji" : ""} · ${run.processed || 0}${target ? " / " + target : ""} baris</div>
+        <div class="t">${up.on ? "⏸ Dijeda · " : ""}${PHASE_LABEL[run.phase] || escapeHtml(run.phase)} · ${currentSpeed().name}${run.testMode ? " · Mode uji" : ""} · ${run.processed || 0}${target ? " / " + target : ""} baris</div>
         <div class="s" style="${hold || up.on ? "white-space:normal;color:#fcd34d;" : ""}">${escapeHtml(up.on ? upText : hold ? run.holdReason : run.lastLog || "")}</div>
         <div class="c">✓ ${c.done || 0} terkirim · ${c.yellow || 0} kuning · ${c.red || 0} merah</div>
       </div>
@@ -6058,7 +6807,7 @@
           : ""
       }
       ${hold ? `<button class="fo-btn go" data-bar="next">Lanjut ke berikutnya →</button>` : ""}
-      ${!paused && !hold ? (up.on ? `<button class="fo-btn go" data-bar="resume">▶ Lanjut</button>` : `<button class="fo-btn" data-bar="pause">⏸ Jeda</button>`) : ""}
+      ${!paused && !hold && !up.rate ? (up.on ? `<button class="fo-btn go" data-bar="resume">▶ Lanjut</button>` : `<button class="fo-btn" data-bar="pause">⏸ Jeda</button>`) : ""}
       <button class="fo-btn stop" data-bar="stop">Stop</button>`;
   }
 
@@ -6303,6 +7052,7 @@
           .map(
             (c) =>
               `<div class="fo-cand">↳ <b>${escapeHtml(c.kode)}</b> ${escapeHtml(c.nama)} · urut ${escapeHtml(c.noUrut || "-")} · ${c.score}%
+          <button class="fo-btn sm primary" data-act="choose-fill" data-id="${q.id}" data-kode="${escapeHtml(c.kode)}" title="Pakai dokumen ini lalu isi & kirim otomatis">▶ Pilih & isi</button>
           <button class="fo-btn sm" data-act="choose" data-id="${q.id}" data-kode="${escapeHtml(c.kode)}">Pilih & buka</button></div>`,
           )
           .join("");
@@ -6332,7 +7082,9 @@
     ) => `<button class="fo-stat${activeFilter === key ? " active" : ""}" style="--c:${color}" data-act="filter" data-filter="${key}">
         <div class="n" data-count-key="${key}">0</div><div class="l">${label}</div></button>`;
     const delaySec =
-      (state.delayMs === undefined ? DEFAULT_DELAY_MS : state.delayMs) / 1000;
+      (state.delayMs === undefined
+        ? DEFAULT_DELAY_MS
+        : Math.max(2000, state.delayMs)) / 1000;
 
     overlay.innerHTML = `
       <div class="fo-sheet">
@@ -6368,7 +7120,7 @@
             </div>
             <div class="fo-hint" style="margin-top:10px;">
               ${wilayahCount ? `✓ ${wilayahCount} desa tersimpan` : '<span style="color:#dc2626;">Daftar wilayah belum dibaca (cukup sekali)</span>'}
-              · Jeda setelah loading <input class="fo-input fo-num" data-delay type="number" min="0" max="10" step="0.5" value="${delaySec}"> detik
+              · Jeda setelah loading <input class="fo-input fo-num" data-delay type="number" min="2" max="30" step="0.5" value="${delaySec}"> detik
             </div>
             ${unresolved.length ? `<div class="fo-warn" style="margin-top:10px;">${unresolved.length} produk belum punya KBLI. Barisnya akan jadi kuning sampai KBLI ditentukan.</div>` : ""}
           </div>
@@ -6393,6 +7145,13 @@
                 <label class="fo-switch"><input type="checkbox" data-approve ${run.approveOff ? "" : "checked"}><i></i>Approve setelah kirim</label>
               </div>
               <div class="fo-hint" style="margin-top:8px;">Mode uji berhenti di halaman CATATAN tiap dokumen · Otomatis penuh langsung kirim tanpa berhenti.</div>
+              <div class="fo-rowflex" style="margin-top:10px;align-items:center;">
+                <span class="fo-hint" style="margin:0;">Kecepatan</span>
+                <div class="fo-seg">
+                  ${SPEEDS.map((sp, i) => `<label><input type="radio" name="t2speed" value="${i}" ${(loadSpeed().base || 0) === i ? "checked" : ""}><span>${sp.name}</span></label>`).join("")}
+                </div>
+                <span class="fo-hint" style="margin:0;">${speedLevel() > (loadSpeed().base || 0) ? `sedang diturunkan otomatis ke ${currentSpeed().name} (setelah 429)` : "turun sendiri kalau server membatasi (429)"}</span>
+              </div>
               <div class="fo-divider"></div>
               <div class="fo-rowflex">
                 <button class="fo-btn primary" data-act="t2sel" data-selcount>▶ Yang dicentang (${selected.size})</button>
@@ -6470,9 +7229,18 @@
       if (label) label.textContent = `▶ Yang dicentang (${ids.size})`;
     });
 
+    overlay.querySelectorAll('[name="t2speed"]').forEach(
+      (r) =>
+        (r.onchange = () => {
+          const sp = loadSpeed();
+          sp.base = Number(r.value);
+          saveSpeed(sp);
+        }),
+    );
+
     overlay.querySelector("[data-delay]").onchange = (e) => {
       const s = loadState();
-      s.delayMs = Math.max(0, Math.min(10, Number(e.target.value) || 0)) * 1000;
+      s.delayMs = Math.max(2, Math.min(30, Number(e.target.value) || 0)) * 1000; // < 2 detik memicu pembatasan server (429)
       saveState(s);
     };
 
@@ -6756,6 +7524,40 @@
       if (act === "open" && item) {
         overlay.remove();
         await findAndOpen(item, null);
+      }
+      if (act === "choose-fill" && item) {
+        if (loadRun().running) {
+          alert("Proses otomatis sedang berjalan. Stop dulu, lalu klik lagi.");
+          return;
+        }
+        const modeEl = overlay.querySelector('input[name="t2mode"]:checked');
+        const approveEl = overlay.querySelector("[data-approve]");
+        // Pilihan berlaku untuk semua baris usaha dari keluarga yang sama
+        const q = loadQueue();
+        const group = q.filter(
+          (i) =>
+            i.sheet === item.sheet &&
+            normName(i.krt) === normName(item.krt) &&
+            i.noUrut === item.noUrut &&
+            i.status !== "done",
+        );
+        group.forEach((i) => {
+          i.chosenKode = el.dataset.kode;
+          i.status = "green";
+          i.reason = `dipilih manual: ${el.dataset.kode}`;
+          i.candidates = [];
+        });
+        saveQueue(q);
+        const s = loadState();
+        s.checking = false;
+        saveState(s);
+        startRun(
+          0,
+          modeEl ? modeEl.value === "test" : true,
+          approveEl ? approveEl.checked : true,
+          group.map((i) => i.id),
+        );
+        return;
       }
       if (act === "choose" && item) {
         overlay.remove();
