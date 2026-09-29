@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Batch Otomatis - Tahap 1 + 2: Excel -> Cari -> Isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      2.9
+// @version      3.0
 // @description  Membaca Excel penyisiran (Tindak Lanjut Fasih = false), mencari & membuka dokumen dengan filter wilayah, lalu mengisi Blok P + Blok II (usaha lama / tambah baru) dan mengirim tanpa konfirmasi. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -3650,7 +3650,12 @@
     updateRunBar();
   }
 
-  const visible = (el) => !!el && el.offsetParent !== null;
+  // offsetParent bernilai null untuk elemen posisi "fixed" (dialog/popup), jadi cek juga ukurannya
+  const visible = (el) =>
+    !!el &&
+    (el.offsetParent !== null ||
+      (el.getClientRects().length > 0 &&
+        getComputedStyle(el).visibility !== "hidden"));
 
   function setFieldValue(el, value) {
     el.focus();
@@ -4467,10 +4472,11 @@
 
   async function submitDocument(run) {
     // Kunci agar Kirim tidak pernah terklik dua kali untuk dokumen yang sama
-    if (run.submitClicked)
-      throw new Error(
-        "status kirim tidak pasti (halaman dimuat ulang saat mengirim), cek manual",
-      );
+    if (run.submitClicked) {
+      // Halaman dimuat ulang setelah Kirim diklik: kalau ada tanda terkirim, lanjut; jangan kirim ulang
+      await backToReview(20000);
+      return;
+    }
     const items = docItems(run).map((i) => ({ ...i, kbli: itemKbli(i) }));
     const ctx = { hp: "" };
 
@@ -4520,21 +4526,35 @@
     runLog("Konfirmasi kirim (3/3)");
     triggerClick(konfirmasi);
 
-    // Terkirim -> tombol "Kembali ke Review" -> keluar dari halaman edit
-    const back = await waitFor(
-      () =>
-        Array.from(document.querySelectorAll("button")).find(
-          (b) => visible(b) && /KEMBALI KE REVIEW/i.test(b.innerText),
-        ),
-      45000,
+    await backToReview(60000);
+  }
+
+  // Terkirim -> "Kembali ke Review" (atau FASIH langsung pindah ke Review) -> keluar dari halaman edit
+  const backButton = () =>
+    Array.from(document.querySelectorAll("button")).find(
+      (b) =>
+        /KEMBALI KE REVIEW/i.test(b.innerText) && b.getClientRects().length > 0,
     );
-    if (!back)
+  const leftEdit = () => !/\/edit/.test(location.pathname);
+
+  async function backToReview(timeoutMs) {
+    const sign = await waitFor(
+      () => backButton() || (leftEdit() ? "left" : null),
+      timeoutMs,
+    );
+    if (!sign)
       throw new Error(
-        `tidak ada tanda terkirim (tombol "Kembali ke Review" tidak muncul): ${dialogText()}`,
+        `tidak ada tanda terkirim setelah Konfirmasi: ${dialogText() || "cek manual"}`,
       );
-    await sleep(500);
-    triggerClick(back);
-    await waitFor(() => !/\/edit/.test(location.pathname), 20000);
+    runLog("Terkirim, kembali ke Review");
+    if (sign !== "left") {
+      await sleep(500);
+      triggerClick(sign);
+      if (!(await waitFor(leftEdit, 15000))) {
+        sign.click(); // klik biasa jika klik pertama tidak berpindah halaman
+        await waitFor(leftEdit, 15000);
+      }
+    }
     await sleep(1500);
   }
 
@@ -5112,6 +5132,12 @@
       }
 
       if (run.phase === "submit") {
+        // Kirim sudah diklik lalu FASIH memuat ulang ke halaman Review -> dianggap terkirim, lanjut approve
+        if (!onEdit && run.submitClicked && onReview) {
+          runLog("Terkirim (halaman pindah ke Review)");
+          if (run.approve) return setPhase("approve");
+          return finishDoc("done", withWarnings("terkirim"));
+        }
         if (!onEdit) return;
         runLog("Mengirim dokumen");
         await submitDocument(run);
