@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Batch Otomatis - Tahap 1 + 2: Excel -> Cari -> Isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      3.2
+// @version      3.3
 // @description  Membaca Excel penyisiran (Tindak Lanjut Fasih = false), mencari & membuka dokumen dengan filter wilayah, lalu mengisi Blok P + Blok II (usaha lama / tambah baru) dan mengirim tanpa konfirmasi. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -2551,6 +2551,41 @@
       code: "11052",
       keywords: ["ISI ULANG AIR", "AIR GALON", "GALON", "ISI ULANG"],
     });
+    KBLI_KEYWORDS.push({
+      code: "13942",
+      keywords: [
+        "JALA IKAN",
+        "JALA",
+        "JARING IKAN",
+        "RENGGE",
+        "RAWAI",
+        "PUKAT",
+      ],
+    });
+    KBLI_KEYWORDS.push({
+      code: "56102",
+      keywords: [
+        "MAKAN MINUM",
+        "MAKANAN SIAP SAJI",
+        "SIAP SAJI",
+        "ANEKA MAKANAN",
+        "MAKANAN MINUMAN",
+        "MAKANAN DAN MINUMAN",
+      ],
+    });
+    KBLI_KEYWORDS.push({ code: "01131", keywords: ["SAYUR MANIS"] });
+    KBLI_KEYWORDS.push({
+      code: "03120",
+      exclude: ["OLAHAN", "ASIN", "SALAI", "KERING", "ASAP"],
+      keywords: [
+        "IKAN AIR TAWAR",
+        "IKAN SEGAR",
+        "IKAN SUNGAI",
+        "IKAN RAWA",
+        "MENANGKAP IKAN",
+        "NELAYAN SUNGAI",
+      ],
+    });
     return {
       KBLI_2025,
       matchKeyword,
@@ -3459,6 +3494,20 @@
     return bestScore >= 0.7 ? best : null;
   }
 
+  // Nomor RT dari teks alamat ("RT 003", "rt.3", "(RT003)") -> 3; null jika tidak ada
+  function rtNumber(text) {
+    const m = String(text || "")
+      .toUpperCase()
+      .match(/\bRT\.?\s*:?\s*0*(\d{1,3})(?!\d)/);
+    return m ? Number(m[1]) : null;
+  }
+
+  // Nomor SLS dari kode identitas 16 digit: PPKKCCCDDDSSSSUU (SSSS = SLS) -> 3; null jika bukan format itu
+  function slsNumber(kode) {
+    const m = String(kode || "").match(/\b(\d{16})\b/);
+    return m ? Number(m[1].slice(10, 14)) : null;
+  }
+
   // Hasil: { status: 'green'|'yellow'|'red', row?, reason, candidates }
   async function findDocument(item) {
     const wilayah = wilayahFor(item);
@@ -3475,23 +3524,33 @@
 
     let doubtful = [];
     for (const query of buildQueries(item.krt)) {
+      const rt = rtNumber(item.alamat);
       const scored = (await searchList(query)).map((r) => ({
         ...r,
         score: nameScore(item, r.nama),
         urutOk: !!item.noUrut && r.noUrut === item.noUrut,
+        // Desa sudah difilter; RT di alamat Excel = nomor SLS dokumen (dari kode identitas / alamat prelist)
+        slsOk:
+          rt !== null &&
+          (slsNumber(r.kode) === rt || rtNumber(r.alamat) === rt),
       }));
 
       const sure = scored
-        .filter((s) => s.urutOk && s.score >= MATCH_GREEN)
-        .sort((a, b) => b.score - a.score);
+        .filter((s) => (s.urutOk || s.slsOk) && s.score >= MATCH_GREEN)
+        .sort((a, b) => b.urutOk - a.urutOk || b.score - a.score);
       if (
         sure.length === 1 ||
-        (sure.length > 1 && sure[0].score - sure[1].score >= 0.1)
+        (sure.length > 1 &&
+          ((sure[0].urutOk && !sure[1].urutOk) ||
+            sure[0].score - sure[1].score >= 0.1))
       ) {
+        const why = sure[0].urutOk
+          ? "no urut sama"
+          : `No urut beda, tapi desa & RT/SLS ${rt} sama`;
         return {
           status: "green",
           row: sure[0],
-          reason: `cocok (mirip ${Math.round(sure[0].score * 100)}%, no urut sama)`,
+          reason: `cocok (mirip ${Math.round(sure[0].score * 100)}%, ${why})`,
           candidates: [],
         };
       }
@@ -3728,15 +3787,54 @@
       (el.getClientRects().length > 0 &&
         getComputedStyle(el).visibility !== "hidden"));
 
+  // Isi kotak teks seperti diketik sungguhan agar FASIH mencatatnya (bukan hanya tampil di layar)
   function setFieldValue(el, value) {
+    value = String(value);
     el.focus();
-    const proto =
-      el.tagName === "TEXTAREA"
-        ? HTMLTextAreaElement.prototype
-        : HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(proto, "value").set.call(el, value);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    let typed = false;
+    try {
+      if (typeof el.select === "function") el.select();
+      typed =
+        value === ""
+          ? document.execCommand("delete", false)
+          : document.execCommand("insertText", false, value);
+    } catch (e) {
+      typed = false;
+    }
+    if (!typed || el.value !== value) {
+      // Cadangan: setter bawaan + event input seperti ketikan
+      const proto =
+        el.tagName === "TEXTAREA"
+          ? HTMLTextAreaElement.prototype
+          : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, "value").set.call(el, value);
+      el.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          inputType: "insertText",
+          data: value,
+        }),
+      );
+    }
     el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  // Keluar dari kotak isian (blur) supaya nilai disimpan FASIH
+  function commitField(el) {
+    el.dispatchEvent(new KeyboardEvent("keyup", { key: "Tab", bubbles: true }));
+    el.blur();
+    el.dispatchEvent(new FocusEvent("blur"));
+    el.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+  }
+
+  // Ketik ulang: kosongkan lalu isi lagi (untuk isian yang tampil terisi tapi tidak terbaca FASIH)
+  async function retypeField(el, value) {
+    setFieldValue(el, "");
+    await sleep(150);
+    setFieldValue(el, value);
+    commitField(el);
+    await sleep(300);
   }
 
   function pressKey(el, key) {
@@ -3826,8 +3924,15 @@
     if (opts.onlyIfEmpty && input.value.trim()) return "ok";
     if (input.value.trim() !== String(value)) {
       setFieldValue(input, String(value));
-      input.blur();
-      input.dispatchEvent(new Event("focusout", { bubbles: true }));
+      commitField(input);
+      await sleep(250);
+      // Cek ulang: kalau nilainya hilang/berubah (tidak tercatat), ketik sekali lagi
+      const again =
+        fresh(container).querySelector(
+          'input[type="text"]:not([disabled]), textarea:not([disabled])',
+        ) || input;
+      if (again.value.trim() !== String(value))
+        await retypeField(again, String(value));
     }
     await sleep(120);
     return "ok";
@@ -3962,18 +4067,37 @@
   }
 
   // ---------- Navigasi form ----------
+  // Menu sidebar dicocokkan tanpa peduli spasi/tanda hubung ("SE2026 - P" = "SE2026-P" = "SE 2026 P")
+  const squash = (s) =>
+    String(s || "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "");
   function sidebarItem(title) {
-    return Array.from(
-      document.querySelectorAll(".fasih-form-sidebar > div[title]"),
-    ).find((el) =>
-      el.getAttribute("title").toUpperCase().startsWith(title.toUpperCase()),
+    const want = squash(title);
+    const items = Array.from(
+      document.querySelectorAll(
+        ".fasih-form-sidebar > div[title], .fasih-form-sidebar [title]",
+      ),
+    );
+    // Utamakan yang sama persis ("BLOK I" jangan tertukar dengan "BLOK II")
+    return (
+      items.find((el) => squash(el.getAttribute("title")) === want) ||
+      items.find((el) => squash(el.getAttribute("title")).startsWith(want)) ||
+      null
     );
   }
 
   async function goSection(title, readyCheck, force) {
     if (!force && readyCheck()) return true;
-    const item = await waitFor(() => sidebarItem(title), 15000);
-    if (!item) throw new Error(`menu "${title}" tidak ada di sidebar`);
+    const item = await waitFor(() => sidebarItem(title), 30000);
+    if (!item) {
+      const menus = Array.from(
+        document.querySelectorAll(".fasih-form-sidebar [title]"),
+      ).map((el) => el.getAttribute("title"));
+      throw new Error(
+        `menu "${title}" tidak ada di sidebar (menu yang ada: ${Array.from(new Set(menus)).slice(0, 8).join(" | ") || "sidebar belum termuat"})`,
+      );
+    }
     triggerClick(item);
     if (!(await waitFor(readyCheck, 20000)))
       throw new Error(`halaman "${title}" tidak terbuka`);
@@ -4271,6 +4395,147 @@
       await fillField("hp", inst, "9999", { container: hp });
   }
 
+  // ---------- 13.d input & 13.e proses (muncul untuk usaha yang memproduksi barang) ----------
+  const INPUT_PROSES = [
+    [
+      /JALA|JARING|RENGGE|RAWAI|PUKAT/,
+      "benang nilon, pelampung, pemberat timah",
+      "merajut benang nilon menjadi jala ikan secara manual menggunakan jarum jala, lalu memasang pelampung dan pemberat",
+    ],
+    [
+      /GALON|ISI ULANG|AIR MINUM/,
+      "air baku, galon kosong",
+      "menyaring air baku dengan filter, mensterilkan dengan lampu UV, lalu mengisikan ke galon",
+    ],
+    [
+      /TAHU/,
+      "kedelai, air, cuka",
+      "merendam dan menggiling kedelai, merebus sari kedelai, menggumpalkan lalu mencetak menjadi tahu",
+    ],
+    [
+      /TEMPE/,
+      "kedelai, ragi tempe",
+      "merebus dan mengupas kedelai, mencampur ragi, membungkus lalu memfermentasi 1-2 hari",
+    ],
+    [
+      /KERUPUK|AMPLANG|KERIPIK/,
+      "tepung tapioka/singkong, bumbu, minyak goreng",
+      "mencampur dan mengolah adonan, mengiris dan menjemur, lalu menggoreng dengan wajan",
+    ],
+    [
+      /KUE|ROTI|DONAT|BOLU|WADAI|DODOL/,
+      "tepung terigu/beras, telur, gula, mentega",
+      "mencampur bahan menjadi adonan, mencetak, lalu memanggang/mengukus menggunakan oven atau dandang",
+    ],
+    [
+      /IKAN ASIN|IKAN KERING|SALAI|IKAN ASAP|WADI/,
+      "ikan segar, garam",
+      "membersihkan ikan, melakukan penggaraman lalu penjemuran/pengasapan",
+    ],
+    [
+      /GULA MERAH|GULA AREN|GULA HABANG/,
+      "nira aren",
+      "memasak nira di wajan hingga mengental lalu mencetak menjadi gula merah",
+    ],
+    [
+      /PAKAIAN|JAHIT|BAJU|KONVEKSI|SASIRANGAN/,
+      "kain, benang",
+      "mengukur dan memotong kain lalu menjahit menggunakan mesin jahit",
+    ],
+    [
+      /MEUBEL|MEBEL|LEMARI|KURSI|KAYU|PAPAN|KUSEN/,
+      "kayu, paku, lem, cat",
+      "memotong dan menghaluskan kayu dengan gergaji dan ketam, merakit dengan paku/lem, lalu finishing cat/pelitur",
+    ],
+    [
+      /BATAKO|BATU BATA|BATA/,
+      "tanah liat/pasir, semen, air",
+      "mencampur bahan, mencetak dengan alat cetak lalu mengeringkan/membakar",
+    ],
+    [
+      /ANYAM|BAMBU|ROTAN|PURUN|TIKAR|BAKUL|KERAJINAN/,
+      "bambu/rotan/purun",
+      "membelah dan menjemur bahan lalu menganyam secara manual menjadi produk anyaman",
+    ],
+    [
+      /GILING|GABAH|BERAS|PENGGILINGAN/,
+      "gabah kering",
+      "menggiling gabah menggunakan mesin penggiling padi menjadi beras",
+    ],
+    [
+      /KOPI/,
+      "biji kopi",
+      "menyangrai biji kopi lalu menggiling menjadi kopi bubuk",
+    ],
+    [
+      /\bES\b|ES BATU|ES KRIM/,
+      "air, gula, perasa",
+      "mencampur bahan lalu membekukan di freezer",
+    ],
+    [
+      /MINYAK/,
+      "kelapa",
+      "memarut dan memeras kelapa lalu memanaskan santan hingga menjadi minyak",
+    ],
+    [
+      /MAKAN|NASI|MASAK|WARUNG|CATERING|KATERING|SOTO|BAKSO|LONTONG|KETUPAT|KATUPAT/,
+      "beras, sayuran, daging/ikan, bumbu dapur",
+      "memasak bahan makanan menggunakan kompor dan peralatan dapur lalu menyajikan kepada pembeli",
+    ],
+  ];
+
+  function inputProsesFor(item) {
+    const text = normalize(`${item.produk} ${item.namaUsaha}`);
+    const rule = INPUT_PROSES.find(([re]) => re.test(text));
+    const produk = String(item.produk || "").toLowerCase();
+    return rule
+      ? { input: rule[1], proses: rule[2] }
+      : {
+          input: `bahan baku pembuatan ${produk}`,
+          proses: `mengolah bahan baku menjadi ${produk} menggunakan peralatan sederhana`,
+        };
+  }
+
+  async function fillInputProses(inst, item) {
+    const ip = inputProsesFor(item);
+    await fillField("input", inst, ip.input, { onlyIfEmpty: true, wait: 1200 });
+    await fillField("proses", inst, ip.proses, {
+      onlyIfEmpty: true,
+      wait: 1200,
+    });
+  }
+
+  // ---------- Alamat minimal 10 huruf (9.b1 / 8.c) ----------
+  const letterCount = (s) => (String(s || "").match(/[A-Za-z]/g) || []).length;
+  function fullAlamat(base, item) {
+    let text = String(base || "")
+      .trim()
+      .toUpperCase();
+    const w = item ? wilayahFor(item) : null;
+    if (letterCount(text) < 10 && w)
+      text = `${text ? text + ", " : ""}DESA ${w.desa.name}, KEC. ${w.kec.name}`;
+    if (letterCount(text) < 10)
+      text = `${text ? text + ", " : ""}KABUPATEN HULU SUNGAI TENGAH`;
+    return text;
+  }
+
+  async function ensureAlamat(id, inst, item, wait) {
+    const container = await waitBox(id, inst, wait);
+    const input =
+      container &&
+      container.querySelector(
+        'input[type="text"]:not([disabled]), textarea:not([disabled])',
+      );
+    if (!input) return;
+    if (letterCount(input.value) >= 10) return;
+    await fillField(
+      id,
+      inst,
+      fullAlamat(input.value.trim() || (item && item.alamat), item),
+      { container },
+    );
+  }
+
   // ---------- Nama usaha + (pemilik) ----------
   const ownerOf = (item) =>
     String(item.pemilik || item.krt || "")
@@ -4396,19 +4661,13 @@
     // Nama usaha selalu diakhiri (NAMA PEMILIK), contoh: UTP HORTIKULTURA (ABDUL BASIT)
     await ensureOwnerName("nama_usaha_edit", inst, item, 800);
     await ensureOwnerName("nama_komersial", inst, item);
-    await must("alamat_usaha_view", item.alamat, {
-      onlyIfEmpty: true,
-      wait: 800,
-    });
+    await ensureAlamat("alamat_usaha_view", inst, item, 800);
     const rt = rtFromAlamat(item.alamat);
     if (rt) await must("rt", rt, { onlyIfEmpty: true, wait: 800 });
     await fixHp(inst);
     await must("jenis_kawasan", "10");
     await must("jenis_usaha", p.jenisUsaha);
-    await must("alamat_usaha_utama", item.alamat, {
-      onlyIfEmpty: true,
-      wait: 800,
-    });
+    await ensureAlamat("alamat_usaha_utama", inst, item, 800);
     // 9.b2 / 9.b3 alamat usaha utama: dropdown Provinsi 63 Kalimantan Selatan, Kabupaten 07 Hulu Sungai Tengah
     await fillWilayahDropdown(
       "prov_usaha_utama",
@@ -4466,6 +4725,9 @@
       if (!p.trade && !p.food && !p.industry)
         await fillField("keg_jasa", inst, "1");
     }
+
+    // 13.d input & 13.e proses (hanya muncul untuk usaha yang memproduksi barang)
+    await fillInputProses(inst, item);
 
     await must("produk", item.produk);
     await must("kbli_genai", "999999");
@@ -4727,7 +4989,7 @@
         dialogKirim = opened.dialogKirim;
         break;
       }
-      triggerClick(opened.galat.btn);
+      if (opened.galat.btn) triggerClick(opened.galat.btn); // kalau daftar galat belum terbuka
       await waitFor(() => readGalatList().length, 8000);
       await sleep(500);
       const errors = readGalatList().map(({ section, title, messages }) => ({
@@ -4913,8 +5175,19 @@
       );
     runLog("Kirim (1/3)");
     triggerClick(nav);
-    await waitFor(() => summaryCount("GALAT") || findDialogKirim(), 15000);
+    await waitFor(
+      () =>
+        summaryCount("GALAT") || findDialogKirim() || readGalatList().length,
+      15000,
+    );
     await sleep(1500); // ringkasan galat dihitung
+    const list = readGalatList();
+    // FASIH kadang langsung membuka daftar galat (tanpa kartu ringkasan)
+    if (list.length && !summaryCount("GALAT"))
+      return {
+        galat: { btn: null, n: list.length, listOpen: true },
+        dialogKirim: null,
+      };
     return { galat: summaryCount("GALAT"), dialogKirim: findDialogKirim() };
   }
 
@@ -5047,7 +5320,7 @@
     // Buka ulang daftar galat untuk mendapat tombol "Lihat" yang masih hidup
     const opened = await openKirimDialog();
     if (!opened.galat || !opened.galat.n) return;
-    triggerClick(opened.galat.btn);
+    if (opened.galat.btn) triggerClick(opened.galat.btn);
     await waitFor(() => readGalatList().length, 8000);
     const cur = readGalatList().find(
       (x) => x.title === err.title && x.section === err.section,
@@ -5068,20 +5341,76 @@
     const [base, inst] = target.id.split("#");
     runLog(`Perbaiki galat: ${label}`);
 
-    if (base === "hp") {
-      await fillField("hp", inst, "9999", { container: target });
-      return;
-    }
+    const textInput = target.querySelector(
+      'input[type="text"]:not([disabled]), textarea:not([disabled])',
+    );
     const item =
       inst && box("keberadaan_usaha", inst)
         ? itemForInstance(inst, items)
         : null;
+    // Usaha yang tidak ada di Excel: pakai nama usaha/produk yang tertulis di formnya
+    const pseudo = item || {
+      namaUsaha:
+        (
+          (box("nama_komersial", inst) || document).querySelector(
+            "input, textarea",
+          ) || {}
+        ).value || "",
+      produk:
+        (
+          (box("produk", inst) || document).querySelector("input, textarea") ||
+          {}
+        ).value || "",
+      alamat: "",
+      pemilik: "",
+      krt: "",
+    };
+
+    // Isian khusus yang nilainya bisa dibuat skrip
+    let wanted = null;
+    if (base === "hp") wanted = "9999";
+    else if (base === "input" || base === "proses")
+      wanted = inputProsesFor(pseudo)[base];
+    else if (/^alamat/.test(base) && textInput)
+      wanted = fullAlamat(textInput.value.trim() || pseudo.alamat, item);
+    else if (/^nama_komersial|^nama_usaha_edit/.test(base) && item)
+      wanted = withOwner(
+        textInput ? textInput.value || item.namaUsaha : item.namaUsaha,
+        ownerOf(item),
+      );
+
+    if (wanted !== null && textInput) {
+      await retypeField(textInput, wanted);
+      return;
+    }
     if (item) {
       await fillUsaha(inst, item, ctx); // usaha dari Excel: isi ulang lengkap
+      // Isian yang tampak terisi tapi tetap galat -> ketik ulang supaya tercatat
+      const t = fresh(target).querySelector(
+        'input[type="text"]:not([disabled]), textarea:not([disabled])',
+      );
+      if (t && t.value.trim()) await retypeField(t, t.value.trim());
       return;
     }
     if (FIXED_ANSWERS[base] !== undefined) {
       await fillField(base, inst, FIXED_ANSWERS[base], { container: target });
+      return;
+    }
+    // Tampak terisi tapi dianggap kosong oleh FASIH -> ketik ulang nilai yang sama
+    if (textInput && textInput.value.trim()) {
+      await retypeField(textInput, textInput.value.trim());
+      return;
+    }
+    const radios = Array.from(
+      target.querySelectorAll('input[type="radio"]:not([disabled])'),
+    );
+    const current = radioValue(target);
+    if (radios.length && current) {
+      await setRadio(target, current); // klik ulang pilihan yang sama
+      const group = target
+        .querySelector(`input[type="radio"][value="${current}"]`)
+        .closest('[role="group"]');
+      if (group) triggerClick(group.querySelector('[role="radio"]'));
       return;
     }
     warn(
