@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Batch Otomatis - Tahap 1 + 2: Excel -> Cari -> Isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      3.3
+// @version      3.5
 // @description  Membaca Excel penyisiran (Tindak Lanjut Fasih = false), mencari & membuka dokumen dengan filter wilayah, lalu mengisi Blok P + Blok II (usaha lama / tambah baru) dan mengirim tanpa konfirmasi. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -2682,11 +2682,31 @@
   // =========================================================================
   // UTILITAS
   // =========================================================================
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  // Jeda oleh pengguna (tombol ⏸ di bar): skrip berhenti di sleep berikutnya sampai "Lanjut"
+  const PAUSE_KEY = "fasih_t2_pause";
+  function userPaused() {
+    try {
+      const run = JSON.parse(localStorage.getItem("fasih_t2_run"));
+      const pause = JSON.parse(localStorage.getItem(PAUSE_KEY));
+      return !!(run && run.running && pause && pause.on);
+    } catch (e) {
+      return false;
+    }
+  }
+  let pausedTotalMs = 0; // lama dijeda, supaya batas waktu tunggu tidak habis saat dijeda
+  async function sleep(ms) {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    if (!userPaused()) return;
+    const t = Date.now();
+    while (userPaused())
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    pausedTotalMs += Date.now() - t;
+  }
 
   async function waitFor(check, timeoutMs) {
     const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
+    const paused0 = pausedTotalMs;
+    while (Date.now() - start - (pausedTotalMs - paused0) < timeoutMs) {
       const result = check();
       if (result) return result;
       await sleep(250);
@@ -2975,20 +2995,31 @@
     return isFinite(n) && n >= 0 ? String(Math.round(n)) : null;
   }
 
-  // TK: total = laki + perempuan. Kalau dibayar + tidak dibayar beda, disesuaikan:
-  // upah 0 -> semua tidak dibayar; upah > 0 -> dibayar minimal 1, sisanya tidak dibayar. Hasil: true jika diubah.
+  // TK: total = laki + perempuan, dan dibayar/tidak dibayar harus cocok dengan upah/gaji:
+  // upah 0 -> dibayar 0, semua tidak dibayar; upah > 0 -> dibayar minimal 1 (angka Excel dipakai
+  // kalau masuk akal), sisanya tidak dibayar. Upah tetap diisi apa adanya. Hasil: true jika diubah.
   function fixTenagaKerja(values, notes) {
     const n = (k) => Number(values[k]) || 0;
-    const total = n("tk_laki") + n("tk_pr");
-    if (total <= 0 || total === n("tk_dibayar") + n("tk_tdk_dibayar"))
-      return false;
+    let total = n("tk_laki") + n("tk_pr");
+    let changed = false;
+    if (total <= 0) {
+      // laki/perempuan kosong tapi ada TK dibayar/tidak dibayar -> anggap laki-laki
+      total = n("tk_dibayar") + n("tk_tdk_dibayar");
+      if (total <= 0) return false;
+      values.tk_laki = String(total);
+      values.tk_pr = "0";
+      notes.push(`TK laki/perempuan kosong, diisi laki-laki ${total}`);
+      changed = true;
+    }
+    const upah = n("gaji") > 0;
+    const dibayar = upah ? Math.min(total, Math.max(1, n("tk_dibayar"))) : 0;
+    if (dibayar === n("tk_dibayar") && total - dibayar === n("tk_tdk_dibayar"))
+      return changed;
     const before = `dibayar ${n("tk_dibayar")} + tidak dibayar ${n("tk_tdk_dibayar")}`;
-    const dibayar =
-      n("gaji") > 0 ? Math.min(total, Math.max(1, n("tk_dibayar"))) : 0;
     values.tk_dibayar = String(dibayar);
     values.tk_tdk_dibayar = String(total - dibayar);
     notes.push(
-      `TK disesuaikan: total ${total} (${before} → dibayar ${dibayar} + tidak dibayar ${total - dibayar}, upah ${n("gaji") > 0 ? "ada" : "0"})`,
+      `TK disesuaikan: total ${total} (${before} → dibayar ${dibayar} + tidak dibayar ${total - dibayar}, upah ${upah ? values.gaji : "0"})`,
     );
     return true;
   }
@@ -3763,6 +3794,29 @@
     '[role="option"], [cmdk-item], [data-reka-collection-item], [role="listbox"] li, [role="dialog"] li';
 
   const loadRun = () => loadJson(RUN_KEY, { running: false });
+  const loadPause = () => loadJson(PAUSE_KEY, { on: false });
+
+  // on=true: jeda (reason tampil di bar; autoMs>0 = lanjut sendiri setelah sekian ms)
+  function setUserPause(on, reason, autoMs) {
+    const prev = loadPause();
+    if (on) {
+      saveJson(PAUSE_KEY, {
+        on: true,
+        at: Date.now(),
+        reason: reason || "",
+        resumeAt: autoMs ? Date.now() + autoMs : 0,
+      });
+    } else {
+      saveJson(PAUSE_KEY, { on: false });
+      if (prev.on) {
+        const run = loadRun();
+        run.phaseAt =
+          (run.phaseAt || Date.now()) + (Date.now() - (prev.at || Date.now())); // waktu jeda tidak dihitung macet
+        saveRun(run);
+      }
+    }
+    updateRunBar();
+  }
   const saveRun = (r) => saveJson(RUN_KEY, r);
 
   function runLog(message) {
@@ -4641,6 +4695,7 @@
     const code = item.kbli;
     const p = usahaProfile(code);
     const v = item.values;
+    fixTenagaKerja(v, notes);
     const must = async (id, value, opts) => {
       const r = await fillField(id, inst, value, opts);
       if (r === "fail") warn(`gagal mengisi ${id}`);
@@ -4804,7 +4859,99 @@
       await fillField(id, inst, value, { wait: 1200 });
     }
     await sleep(800);
+    await ensureRequired(inst, item, `usaha "${item.namaUsaha}"`);
     return notes;
+  }
+
+  // ---------- Isian bertanda bintang (*) wajib terisi ----------
+  const starred = (el) =>
+    Array.from(el.querySelectorAll("span")).some(
+      (s) =>
+        s.textContent.trim() === "*" &&
+        /destructive|danger|red/.test(s.className),
+    );
+  const NUMERIC_BASE =
+    /^(tk_|gaji|biaya|beli|operasional|non_operasional|nilai|pendapatan|aset|luas|pribadi|non_profit|publik|non_publik|pemerintah|asing|jumlah)/;
+
+  // Kotak rincian berbintang yang tampil, aktif, tapi belum dijawab (inst: hanya usaha #inst; undefined: semua)
+  function emptyRequired(inst) {
+    const boxes = Array.from(document.querySelectorAll("[id]")).filter((el) => {
+      if (
+        !/^[a-z0-9_]+(#\d+)?$/i.test(el.id) ||
+        el.closest("#fasih-t1-panel, #fasih-t2-bar")
+      )
+        return false;
+      if (inst !== undefined && el.id.split("#")[1] !== String(inst))
+        return false;
+      return visible(el) && starred(el);
+    });
+    return boxes
+      .filter((el) => !boxes.some((o) => o !== el && el.contains(o)))
+      .filter((el) => {
+        const radios = el.querySelectorAll('input[type="radio"]');
+        if (radios.length)
+          return Array.from(radios).some((r) => !r.disabled) && !radioValue(el);
+        const checks = el.querySelectorAll(
+          'input[type="checkbox"]:not([disabled])',
+        );
+        if (checks.length) return !Array.from(checks).some((c) => c.checked);
+        const t = el.querySelector(
+          'input[type="text"]:not([disabled]), input[type="number"]:not([disabled]), input:not([type]):not([disabled]), textarea:not([disabled])',
+        );
+        return !!t && !t.value.trim();
+      });
+  }
+
+  // Isi yang bisa ditebak aman; sisanya -> jeda supaya pengguna bisa bantu mengisi
+  async function ensureRequired(inst, item, where) {
+    for (let round = 0; round < 2; round++) {
+      const empty = emptyRequired(inst);
+      if (!empty.length) return;
+      const left = [];
+      for (const el of empty) {
+        const [base, i] = el.id.split("#");
+        const text = el.querySelector(
+          'input[type="text"]:not([disabled]), textarea:not([disabled])',
+        );
+        const dropdown = !!el.querySelector("[aria-haspopup]");
+        let value = null;
+        if (item && item.values && item.values[base] !== undefined)
+          value = item.values[base];
+        else if (FIXED_ANSWERS[base] !== undefined) value = FIXED_ANSWERS[base];
+        else if (base === "hp") value = "9999";
+        else if ((base === "input" || base === "proses") && item)
+          value = inputProsesFor(item)[base];
+        else if (/^alamat/.test(base) && text && item)
+          value = fullAlamat(item.alamat, item);
+        else if (NUMERIC_BASE.test(base) && text && !dropdown) value = "0";
+        if (
+          value !== null &&
+          (await fillField(base, i, value, { container: el })) === "ok"
+        ) {
+          runLog(`Isian wajib ${base} kosong → diisi ${value}`);
+        } else {
+          left.push(
+            (el.innerText || base)
+              .split("\n")[0]
+              .replace(/\s*\*\s*$/, "")
+              .trim()
+              .slice(0, 60) || base,
+          );
+        }
+      }
+      if (!left.length) continue;
+      if (round === 0) {
+        // Beri kesempatan pengguna mengisi (mode uji: tunggu "Lanjut"; otomatis: lanjut sendiri 90 detik), lalu cek lagi
+        setUserPause(
+          true,
+          `Isian wajib (*) belum terisi di ${where}: ${left.join("; ")}`,
+          loadRun().testMode ? 0 : 90000,
+        );
+        await sleep(300); // tertahan di sini sampai "Lanjut"
+      } else {
+        warn(`isian wajib (*) masih kosong di ${where}: ${left.join("; ")}`);
+      }
+    }
   }
 
   // ---------- Satu dokumen ----------
@@ -4838,6 +4985,7 @@
         );
     }
     runLog(`Blok P: ${blokP.join(", ")} = Ya`);
+    await ensureRequired(undefined, null, "Blok P");
 
     // 2) Blok I: penanggung jawab dari Excel dijawab "Ya" dulu agar muncul di pilihan 12.a
     const excelOwners = Array.from(
@@ -5301,6 +5449,42 @@
     return bestScore >= 0.6 ? best : null;
   }
 
+  // TK dibayar/tidak dibayar vs upah di form yang terbuka: pakai angka Excel kalau ada, kalau tidak angka di form
+  const TK_FIELDS = [
+    "tk_laki",
+    "tk_pr",
+    "tk_dibayar",
+    "tk_tdk_dibayar",
+    "gaji",
+  ];
+  async function fixTkInForm(inst, item) {
+    const values = {};
+    TK_FIELDS.forEach((id) => {
+      const b = box(id, inst);
+      const i = b && b.querySelector("input");
+      values[id] = String(
+        Number(String(i ? i.value : "").replace(/[^0-9]/g, "")) || 0,
+      );
+    });
+    if (item)
+      TK_FIELDS.forEach((id) => {
+        if (item.values[id] !== undefined) values[id] = String(item.values[id]);
+      });
+    const notes = [];
+    fixTenagaKerja(values, notes);
+    notes.forEach((x) => runLog(x));
+    for (const id of TK_FIELDS) {
+      const i = box(id, inst) && box(id, inst).querySelector("input");
+      if (!i) continue;
+      if (
+        String(Number(String(i.value).replace(/[^0-9]/g, "")) || 0) !==
+          values[id] ||
+        !i.value.trim()
+      )
+        await retypeField(i, values[id]);
+    }
+  }
+
   // Perbaiki satu galat: buka lewat "Lihat", isi sesuai jenis rinciannya
   async function fixGalat(err, items, ctx) {
     const label = `${err.section} · ${err.title}`;
@@ -5365,6 +5549,11 @@
       pemilik: "",
       krt: "",
     };
+
+    if (/^(tk_|gaji)/.test(base) && inst) {
+      await fixTkInForm(inst, item);
+      return;
+    }
 
     // Isian khusus yang nilainya bisa dibuat skrip
     let wanted = null;
@@ -5663,7 +5852,16 @@
 
   async function runnerTick() {
     const run = loadRun();
-    if (!run.running || runnerBusy) return;
+    if (!run.running) return;
+    const pause = loadPause();
+    if (pause.on) {
+      if (pause.resumeAt && Date.now() > pause.resumeAt) {
+        runLog("Lanjut otomatis setelah jeda");
+        setUserPause(false);
+      }
+      return;
+    }
+    if (runnerBusy) return;
     runnerBusy = true;
     try {
       if (run.phase === "hold") return; // menunggu klik "Lanjut"
@@ -5764,6 +5962,7 @@
       );
       return;
     }
+    saveJson(PAUSE_KEY, { on: false });
     saveRun({
       running: true,
       limit,
@@ -5791,6 +5990,7 @@
     const run = loadRun();
     run.running = false;
     saveRun(run);
+    saveJson(PAUSE_KEY, { on: false });
     runLog("Dihentikan.");
   }
 
@@ -5810,6 +6010,8 @@
       bar.addEventListener("click", (e) => {
         const act = e.target.closest("[data-bar]")?.dataset.bar;
         if (act === "stop") stopRun();
+        if (act === "pause") setUserPause(true, "Dijeda oleh Anda");
+        if (act === "resume") setUserPause(false);
         if (act === "send") setPhase("submit");
         if (act === "skip")
           finishDoc("filled", "MODE UJI: terisi, belum dikirim");
@@ -5839,10 +6041,14 @@
     };
     const target = run.onlyIds ? run.onlyIds.length : run.limit;
     const hold = run.phase === "hold";
-    bar.innerHTML = `<span class="dot${paused || hold ? " paused" : ""}"></span>
+    const up = loadPause();
+    const upText = up.on
+      ? `${up.reason || "Dijeda"} — perbaiki form bila perlu, lalu klik "▶ Lanjut"${up.resumeAt ? ` (lanjut sendiri ${new Date(up.resumeAt).toLocaleTimeString()})` : ""}`
+      : "";
+    bar.innerHTML = `<span class="dot${paused || hold || up.on ? " paused" : ""}"></span>
       <div style="flex:1;min-width:0;">
-        <div class="t">${PHASE_LABEL[run.phase] || escapeHtml(run.phase)}${run.testMode ? " · Mode uji" : ""} · ${run.processed || 0}${target ? " / " + target : ""} baris</div>
-        <div class="s" style="${hold ? "white-space:normal;color:#fcd34d;" : ""}">${escapeHtml(hold ? run.holdReason : run.lastLog || "")}</div>
+        <div class="t">${up.on ? "⏸ Dijeda · " : ""}${PHASE_LABEL[run.phase] || escapeHtml(run.phase)}${run.testMode ? " · Mode uji" : ""} · ${run.processed || 0}${target ? " / " + target : ""} baris</div>
+        <div class="s" style="${hold || up.on ? "white-space:normal;color:#fcd34d;" : ""}">${escapeHtml(up.on ? upText : hold ? run.holdReason : run.lastLog || "")}</div>
         <div class="c">✓ ${c.done || 0} terkirim · ${c.yellow || 0} kuning · ${c.red || 0} merah</div>
       </div>
       ${
@@ -5852,6 +6058,7 @@
           : ""
       }
       ${hold ? `<button class="fo-btn go" data-bar="next">Lanjut ke berikutnya →</button>` : ""}
+      ${!paused && !hold ? (up.on ? `<button class="fo-btn go" data-bar="resume">▶ Lanjut</button>` : `<button class="fo-btn" data-bar="pause">⏸ Jeda</button>`) : ""}
       <button class="fo-btn stop" data-bar="stop">Stop</button>`;
   }
 
