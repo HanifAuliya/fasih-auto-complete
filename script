@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Batch Otomatis - Tahap 1 + 2: Excel -> Cari -> Isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      3.0
+// @version      3.2
 // @description  Membaca Excel penyisiran (Tindak Lanjut Fasih = false), mencari & membuka dokumen dengan filter wilayah, lalu mengisi Blok P + Blok II (usaha lama / tambah baru) dan mengirim tanpa konfirmasi. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -2585,6 +2585,7 @@
   // Potongan judul kolom Excel (huruf kecil) -> kunci internal
   const EXCEL_COLUMNS = {
     krt: "kepala rumah tangga",
+    petugas: "nama petugas",
     noUrut: "no urut bangunan",
     alamat: "alamat rumah",
     namaUsaha: "nama usaha",
@@ -2939,6 +2940,24 @@
     return isFinite(n) && n >= 0 ? String(Math.round(n)) : null;
   }
 
+  // TK: total = laki + perempuan. Kalau dibayar + tidak dibayar beda, disesuaikan:
+  // upah 0 -> semua tidak dibayar; upah > 0 -> dibayar minimal 1, sisanya tidak dibayar. Hasil: true jika diubah.
+  function fixTenagaKerja(values, notes) {
+    const n = (k) => Number(values[k]) || 0;
+    const total = n("tk_laki") + n("tk_pr");
+    if (total <= 0 || total === n("tk_dibayar") + n("tk_tdk_dibayar"))
+      return false;
+    const before = `dibayar ${n("tk_dibayar")} + tidak dibayar ${n("tk_tdk_dibayar")}`;
+    const dibayar =
+      n("gaji") > 0 ? Math.min(total, Math.max(1, n("tk_dibayar"))) : 0;
+    values.tk_dibayar = String(dibayar);
+    values.tk_tdk_dibayar = String(total - dibayar);
+    notes.push(
+      `TK disesuaikan: total ${total} (${before} → dibayar ${dibayar} + tidak dibayar ${total - dibayar}, upah ${n("gaji") > 0 ? "ada" : "0"})`,
+    );
+    return true;
+  }
+
   // Angka rincian 24-28 + tahun berdiri dari satu baris Excel
   function excelValues(get) {
     const values = {};
@@ -2973,12 +2992,7 @@
     }
     values.tahun_operasi = tahun;
 
-    const n = (k) => Number(values[k]);
-    if (n("tk_laki") + n("tk_pr") !== n("tk_dibayar") + n("tk_tdk_dibayar")) {
-      issues.push(
-        `TK laki+perempuan (${n("tk_laki") + n("tk_pr")}) ≠ dibayar+tidak dibayar (${n("tk_dibayar") + n("tk_tdk_dibayar")})`,
-      );
-    }
+    fixTenagaKerja(values, notes);
     return { values, issues, notes };
   }
 
@@ -3026,6 +3040,7 @@
           alamat: get("alamat").toUpperCase(),
           namaUsaha: get("namaUsaha").toUpperCase(),
           pemilik: get("pemilik").toUpperCase(),
+          petugas: get("petugas").toUpperCase(),
           produk: get("produk").toUpperCase(),
           status: "pending",
           reason: "",
@@ -3337,10 +3352,20 @@
     return { kecamatan: kecs.length, desa: index.length };
   }
 
-  // Deteksi desa dari teks alamat Excel (persis, lalu mirip untuk salah ketik)
+  // Kata umum di alamat yang bukan nama desa (dibuang sebelum dicocokkan)
+  const ALAMAT_NOISE =
+    /\b(DESA|DS|KEL|KELURAHAN|DSN|DUSUN|JL|JLN|JALAN|GG|GANG|RT|RW|NO|NOMOR|KEC|KECAMATAN|KAB|KABUPATEN|KM|BLOK|KOMP|KOMPLEK|PERUM|LINGKUNGAN|LINGK|LK)\b/g;
+
+  // Deteksi desa dari teks alamat Excel: persis -> tanpa spasi (BATUBINI = BATU BINI) -> mirip (salah ketik)
   function detectWilayah(alamat) {
     const index = loadJson(WILAYAH_KEY, []);
-    const text = ` ${normalize(alamat)} `;
+    const cleaned = normalize(alamat)
+      .replace(/\d+/g, " ")
+      .replace(ALAMAT_NOISE, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!cleaned) return null;
+    const text = ` ${cleaned} `;
     const exact = index
       .filter(
         (w) =>
@@ -3352,24 +3377,72 @@
       );
     if (exact.length) return exact[0];
 
-    const tokens = normalize(alamat).split(" ");
+    const compact = cleaned.replace(/ /g, "");
+    const glued = index
+      .filter(
+        (w) =>
+          normalize(w.desa.name).replace(/ /g, "").length >= 5 &&
+          compact.includes(normalize(w.desa.name).replace(/ /g, "")),
+      )
+      .sort(
+        (a, b) => normalize(b.desa.name).length - normalize(a.desa.name).length,
+      );
+    if (glued.length) return glued[0];
+
+    const tokens = cleaned.split(" ");
     let best = null;
     let bestScore = 0;
     index.forEach((w) => {
       const name = normalize(w.desa.name);
       const len = name.split(" ").length;
-      for (let i = 0; i + len <= tokens.length; i++) {
-        const score = levenshteinRatio(
-          tokens.slice(i, i + len).join(" "),
-          name,
-        );
-        if (score > bestScore) {
-          bestScore = score;
-          best = w;
+      for (let size = Math.max(1, len - 1); size <= len + 1; size++) {
+        for (let i = 0; i + size <= tokens.length; i++) {
+          const score = levenshteinRatio(
+            tokens.slice(i, i + size).join(""),
+            name.replace(/ /g, ""),
+          );
+          if (score > bestScore) {
+            bestScore = score;
+            best = w;
+          }
         }
       }
     });
-    return bestScore >= 0.85 ? best : null;
+    const need = best && normalize(best.desa.name).length >= 6 ? 0.8 : 0.88;
+    return bestScore >= need ? best : null;
+  }
+
+  // Desa tebakan dari petugas: petugas yang sama biasanya menyisir desa yang sama
+  let petugasCache = null;
+  function guessByPetugas(item) {
+    if (!item.petugas) return null;
+    const queue = loadQueue();
+    const key = `${queue.length}|${loadJson(WILAYAH_KEY, []).length}`;
+    if (!petugasCache || petugasCache.key !== key) {
+      const tally = {};
+      queue.forEach((q) => {
+        const w = q.wilayah || detectWilayah(q.alamat);
+        if (!w || !q.petugas) return;
+        const p = normName(q.petugas);
+        tally[p] = tally[p] || {};
+        const wk = wilayahKey(w);
+        tally[p][wk] = tally[p][wk] || { w, n: 0 };
+        tally[p][wk].n++;
+      });
+      const map = {};
+      Object.entries(tally).forEach(([p, byDesa]) => {
+        const list = Object.values(byDesa).sort((a, b) => b.n - a.n);
+        const total = list.reduce((s, x) => s + x.n, 0);
+        if (list[0].n >= 3 && list[0].n / total >= 0.7) map[p] = list[0].w; // cukup yakin
+      });
+      petugasCache = { key, map };
+    }
+    return petugasCache.map[normName(item.petugas)] || null;
+  }
+
+  // Desa untuk satu baris: diatur manual -> dari alamat -> tebakan dari petugas
+  function wilayahFor(item) {
+    return item.wilayah || detectWilayah(item.alamat) || guessByPetugas(item);
   }
 
   function findWilayahByName(name) {
@@ -3388,11 +3461,11 @@
 
   // Hasil: { status: 'green'|'yellow'|'red', row?, reason, candidates }
   async function findDocument(item) {
-    const wilayah = item.wilayah || detectWilayah(item.alamat);
+    const wilayah = wilayahFor(item);
     if (!wilayah) {
       return {
         status: "yellow",
-        reason: 'desa tidak terdeteksi dari alamat (klik "Set desa")',
+        reason: `desa tidak terdeteksi dari alamat "${item.alamat}" (klik "Set desa")`,
         candidates: [],
         noWilayah: true,
       };
@@ -3585,9 +3658,7 @@
         const pending = loadQueue().filter((q) => q.status === "pending");
         const item =
           pending.find(
-            (q) =>
-              wilayahKey(q.wilayah || detectWilayah(q.alamat)) ===
-              appliedWilayahKey,
+            (q) => wilayahKey(wilayahFor(q)) === appliedWilayahKey,
           ) || pending[0];
         if (!item) {
           const state = loadState();
@@ -4098,20 +4169,68 @@
     }
   }
 
-  // Baca penanggung jawab (12.a) semua kartu usaha di Blok II
+  // Baca penanggung jawab (12.a) & keberadaan semua kartu usaha di Blok II
+  // Hasil: { owners: [...], found: jumlah usaha Ditemukan/Baru }
+  let lastFoundCount = null;
   async function readAllOwners(known) {
+    // known: Map(urutan kartu -> pemilik) untuk usaha yang baru diisi (pasti Ditemukan / Baru)
+    await goSection("SE2026 - L BLOK II", onBlokII);
     const owners = new Map(known);
-    const names = usahaCards().map((c) => c.name);
-    for (const name of names) {
-      if (owners.has(name)) continue;
+    let found = known.size;
+    const total = usahaCards().length;
+    for (let idx = 0; idx < total; idx++) {
+      if (known.has(idx)) continue;
       await goSection("SE2026 - L BLOK II", onBlokII);
-      const card = usahaCards().find((c) => c.name === name);
+      const card = usahaCards()[idx];
       if (!card) continue;
       const inst = await openUsahaPage(card);
+      const kb = box("keberadaan_usaha", inst);
+      if (kb && ["1", "2"].includes(radioValue(kb))) found++;
       const p = await waitBox("pengusaha_var", inst, 4000);
-      owners.set(name, p ? dropdownValue(p) : "");
+      owners.set(idx, p ? dropdownValue(p) : "");
     }
-    return Array.from(owners.values()).filter(Boolean);
+    lastFoundCount = found;
+    return { owners: Array.from(owners.values()).filter(Boolean), found };
+  }
+
+  // Halaman P: isian "jumlah usaha" harus sama dengan jumlah usaha Ditemukan/Baru di Blok II
+  async function syncRoster(found) {
+    await goSection("SE2026 - P", onBlokP, true);
+    await sleep(800);
+    const boxes = Array.from(document.querySelectorAll("[id]")).filter(
+      (el) =>
+        visible(el) &&
+        /^jumlah_usaha/i.test(el.id) &&
+        el.querySelector("input, textarea"),
+    );
+    const report = [];
+    for (const el of boxes) {
+      const input = el.querySelector(
+        'input[type="text"]:not([disabled]), input[type="number"]:not([disabled]), textarea:not([disabled])',
+      );
+      const shown = (el.querySelector("input, textarea") || {}).value || "";
+      if (
+        input &&
+        /ditemukan|roster/i.test(el.id + " " + el.innerText) &&
+        shown.trim() !== String(found)
+      ) {
+        await fillField("", undefined, String(found), { container: el });
+        report.push(`${el.id}: ${shown || "kosong"} → ${found}`);
+      } else {
+        report.push(`${el.id} = ${shown || "-"}${input ? "" : " (otomatis)"}`);
+      }
+    }
+    runLog(
+      `Roster P vs Blok II (${found} usaha): ${report.join("; ") || "isian jumlah usaha tidak ditemukan"}`,
+    );
+    const auto = boxes.find((el) => /ditemukan/i.test(el.id));
+    const autoVal = auto
+      ? ((auto.querySelector("input, textarea") || {}).value || "").trim()
+      : "";
+    if (auto && autoVal && autoVal !== String(found))
+      warn(
+        `jumlah usaha di P (${autoVal}) ≠ usaha ditemukan/baru di Blok II (${found})`,
+      );
   }
 
   // Dropdown wilayah (muncul hanya untuk jenis usaha tertentu). Dilewati jika tidak muncul / sudah benar.
@@ -4152,6 +4271,105 @@
       await fillField("hp", inst, "9999", { container: hp });
   }
 
+  // ---------- Nama usaha + (pemilik) ----------
+  const ownerOf = (item) =>
+    String(item.pemilik || item.krt || "")
+      .trim()
+      .toUpperCase();
+  function withOwner(name, owner) {
+    // "UTP TANAMAN PANGAN <nurhasanah>" -> buang bagian <...> lalu pakai format (PEMILIK)
+    const base = String(name || "")
+      .replace(/\s*<[^>]*>\s*/g, " ")
+      .trim()
+      .toUpperCase();
+    if (!base || !owner) return base;
+    if (/\([^)]+\)\s*$/.test(base)) return base; // sudah ada nama dalam kurung
+    return `${base} (${owner})`;
+  }
+
+  // Isian nama: kosong -> nama usaha Excel + (pemilik); ada isi tanpa kurung -> ditambah (pemilik)
+  async function ensureOwnerName(id, inst, item, wait) {
+    const container = await waitBox(id, inst, wait);
+    const input =
+      container &&
+      container.querySelector(
+        'input[type="text"]:not([disabled]), textarea:not([disabled])',
+      );
+    if (!input) return;
+    const target = withOwner(
+      input.value.trim() || item.namaUsaha,
+      ownerOf(item),
+    );
+    if (input.value.trim().toUpperCase() !== target)
+      await fillField(id, inst, target, { container });
+  }
+
+  // Usaha baru: "Pilih UMKM dalam satu SLS" = Tidak Ada
+  async function ensureUmkmTidakAda(inst) {
+    const umkm = box("pilih_umkm_sls", inst);
+    if (!umkm || /TIDAK ADA/i.test(dropdownValue(umkm))) return;
+    await chooseFromDropdown(umkm, "", (opts) =>
+      opts.find((o) => /TIDAK ADA/i.test(o.innerText)),
+    );
+    if (
+      !/TIDAK ADA/i.test(dropdownValue(fresh(umkm))) &&
+      dropdownValue(fresh(umkm))
+    ) {
+      warn(
+        'usaha baru: "Pilih UMKM dalam satu SLS" tidak bisa diubah ke Tidak Ada',
+      );
+    }
+  }
+
+  // Cek ulang isian penting usaha (terutama usaha baru). Hasil: daftar yang belum benar.
+  function checkUsaha(inst, item, isNew) {
+    const problems = [];
+    const p = usahaProfile(item.kbli);
+    const radio = (id) => {
+      const b = box(id, inst);
+      return b ? radioValue(b) : null;
+    };
+    const text = (id) => {
+      const b = box(id, inst);
+      const i = b && b.querySelector("input, textarea");
+      return i ? i.value.trim() : null;
+    };
+    const kb = radio("keberadaan_usaha");
+    if (kb !== (isNew ? "2" : "1"))
+      problems.push(
+        `keberadaan = ${kb || "kosong"} (seharusnya ${isNew ? "2. Baru" : "1. Ditemukan"})`,
+      );
+    const umkm = box("pilih_umkm_sls", inst);
+    if (
+      isNew &&
+      umkm &&
+      dropdownValue(umkm) &&
+      !/TIDAK ADA/i.test(dropdownValue(umkm))
+    )
+      problems.push(`UMKM SLS = ${dropdownValue(umkm)}`);
+    const komersial = text("nama_komersial");
+    if (komersial !== null && !/\([^)]+\)\s*$/.test(komersial))
+      problems.push(`8.b tanpa nama pemilik: "${komersial}"`);
+    const ju = radio("jenis_usaha");
+    if (ju !== null && ju !== p.jenisUsaha)
+      problems.push(`9.a = ${ju || "kosong"} (seharusnya ${p.jenisUsaha})`);
+    const peng = box("pengusaha_var", inst);
+    if (peng && nameSimilarity(dropdownValue(peng), ownerOf(item)) < 0.75)
+      problems.push(
+        `12.a = "${dropdownValue(peng) || "kosong"}" (pemilik ${ownerOf(item)})`,
+      );
+    const kbli = box("kbli", inst);
+    if (
+      kbli &&
+      !(
+        dropdownValue(kbli).includes(item.kbli) ||
+        kbli.innerText.includes(item.kbli)
+      )
+    )
+      problems.push(`KBLI bukan ${item.kbli}`);
+    return problems;
+  }
+
   // ---------- Isi satu usaha ----------
   async function fillUsaha(inst, item, ctx) {
     const notes = [];
@@ -4172,19 +4390,12 @@
       await sleep(1800); // isi rincian dirender ulang
     } else {
       await must("keberadaan_usaha", "2");
-      const umkm = box("pilih_umkm_sls", inst);
-      if (umkm && !dropdownValue(umkm)) {
-        await chooseFromDropdown(umkm, "", (opts) =>
-          opts.find((o) => /TIDAK ADA/i.test(o.innerText)),
-        );
-      }
+      await ensureUmkmTidakAda(inst);
     }
 
-    await must("nama_usaha_edit", item.namaUsaha, {
-      onlyIfEmpty: true,
-      wait: 800,
-    });
-    await must("nama_komersial", item.namaUsaha, { onlyIfEmpty: true });
+    // Nama usaha selalu diakhiri (NAMA PEMILIK), contoh: UTP HORTIKULTURA (ABDUL BASIT)
+    await ensureOwnerName("nama_usaha_edit", inst, item, 800);
+    await ensureOwnerName("nama_komersial", inst, item);
     await must("alamat_usaha_view", item.alamat, {
       onlyIfEmpty: true,
       wait: 800,
@@ -4377,57 +4588,82 @@
     }
 
     // 3) Blok II: buka / tambah usaha sesuai Excel lalu isi sampai 100%
-    const used = new Set();
+    // Kartu diingat lewat urutannya: namanya bisa berubah setelah ditambah (PEMILIK)
+    const usedIdx = new Set();
     const ownerByCard = new Map();
     for (const item of items) {
       try {
         await goSection("SE2026 - L BLOK II", onBlokII);
         const profile = usahaProfile(item.kbli);
         let card = usahaCards()
-          .filter((c) => !used.has(c.name))
-          .map((c) => ({ ...c, score: cardScore(c, item, profile) }))
+          .map((c, idx) => ({ ...c, idx, score: cardScore(c, item, profile) }))
+          .filter((c) => !usedIdx.has(c.idx))
           .sort((a, b) => b.score - a.score)[0];
         if (!card || card.score < 0.6) {
-          runLog(`Tambah usaha baru: ${item.namaUsaha}`);
-          card = await addUsaha(item.namaUsaha);
+          const newName = withOwner(item.namaUsaha, ownerOf(item));
+          runLog(`Tambah usaha baru: ${newName}`);
+          card = await addUsaha(newName);
+          card.idx = usahaCards().findIndex(
+            (c) => c.card === card.card || c.name === card.name,
+          );
         }
-        used.add(card.name);
+        usedIdx.add(card.idx);
         runLog(`Mengisi usaha "${card.name}" (${item.id})`);
         const inst = await openUsahaPage(card);
+        const isNew = !box("keberadaan_usaha", inst).querySelector(
+          'input[type="radio"][value="1"]',
+        );
         let notes = await fillUsaha(inst, item, ctx);
 
-        // Jangan tinggalkan usaha sebelum semua isian wajib terisi (isian bersyarat bisa muncul belakangan)
+        // Jangan tinggalkan usaha sebelum isian wajib terisi & isian penting benar (terutama usaha baru)
         let missing = emptyRequired(inst);
-        for (let pass = 2; missing.length && pass <= 3; pass++) {
+        let wrong = checkUsaha(inst, item, isNew);
+        for (
+          let pass = 2;
+          (missing.length || wrong.length) && pass <= 3;
+          pass++
+        ) {
           runLog(
-            `Usaha "${card.name}" belum lengkap (${missing.length} isian), isi ulang ke-${pass}`,
+            `Usaha "${card.name}" belum pas (${missing.length + wrong.length} isian), isi ulang ke-${pass}`,
           );
           await sleep(2000);
           notes = await fillUsaha(inst, item, ctx);
           missing = emptyRequired(inst);
+          wrong = checkUsaha(inst, item, isNew);
         }
         const pengusaha = box("pengusaha_var", inst);
+        const nameNow =
+          (
+            (box("nama_komersial", inst) || document).querySelector(
+              "input, textarea",
+            ) || {}
+          ).value || card.name;
         ownerByCard.set(
-          card.name,
-          pengusaha ? dropdownValue(pengusaha) : item.pemilik || item.krt,
+          card.idx,
+          pengusaha ? dropdownValue(pengusaha) : ownerOf(item),
         );
         updateItem(item.id, {
           usahaCard: card.name,
           kbli: item.kbli,
-          notes: (item.notes || []).concat(notes),
+          notes: (item.notes || []).concat(
+            notes,
+            isNew ? [`usaha baru: ${nameNow}`] : [],
+          ),
         });
         if (missing.length)
           warn(
             `usaha "${card.name}" masih ada isian kosong: ${missing.join("; ")}`,
           );
+        if (wrong.length)
+          warn(`usaha "${card.name}" belum benar: ${wrong.join("; ")}`);
 
         await goSection("SE2026 - L BLOK II", onBlokII);
         const done = await waitFor(() => {
-          const c = usahaCards().find((x) => x.name === card.name);
+          const c = usahaCards()[card.idx];
           return c && cardPercent(c) >= 100 ? c : null;
         }, 8000);
         if (!done) {
-          const c = usahaCards().find((x) => x.name === card.name);
+          const c = usahaCards()[card.idx];
           warn(
             `usaha "${card.name}" belum 100% (${c ? cardPercent(c) + "%, " + c.badge : "kartu hilang"})`,
           );
@@ -4448,13 +4684,15 @@
 
     // 5) Blok I lagi: Ya untuk semua penanggung jawab usaha (termasuk usaha lain), Tidak untuk anggota lain
     try {
-      const allOwners = await readAllOwners(ownerByCard);
+      const { owners: allOwners, found } = await readAllOwners(ownerByCard);
       await setMembersUsaha(
         Array.from(new Set(allOwners.concat(excelOwners))),
         true,
       );
+      // 6) Jumlah roster usaha di halaman P harus sama dengan usaha Ditemukan/Baru di Blok II
+      await syncRoster(found);
     } catch (e) {
-      warn(`Blok I (akhir): ${e.message}`);
+      warn(`Blok I / roster (akhir): ${e.message}`);
     }
 
     // Simpan catatan ke baris Excel; tetap lanjut ke CATATAN & Kirim
@@ -4797,6 +5035,15 @@
       await openCatatan();
       return;
     }
+    // Galat jumlah roster usaha: hitung ulang usaha Ditemukan/Baru di Blok II lalu samakan di halaman P
+    if (
+      /roster|jumlah\s+usaha/i.test(`${err.title} ${err.messages.join(" ")}`)
+    ) {
+      runLog(`Perbaiki galat roster: ${label}`);
+      const { found } = await readAllOwners(new Map()); // buka semua kartu, hitung Ditemukan/Baru
+      await syncRoster(found);
+      return;
+    }
     // Buka ulang daftar galat untuk mendapat tombol "Lihat" yang masih hidup
     const opened = await openKirimDialog();
     if (!opened.galat || !opened.galat.n) return;
@@ -4995,11 +5242,8 @@
         (!only || only.has(q.id)),
     );
     return (
-      ready.find(
-        (q) =>
-          wilayahKey(q.wilayah || detectWilayah(q.alamat)) ===
-          appliedWilayahKey,
-      ) || ready[0]
+      ready.find((q) => wilayahKey(wilayahFor(q)) === appliedWilayahKey) ||
+      ready[0]
     );
   }
 
@@ -5037,6 +5281,15 @@
     // Baris yang belum bisa diproses tidak dibuka sama sekali
     const problems = [];
     siblings.forEach((s) => {
+      // Antrean lama: TK tidak seimbang dulu jadi masalah; sekarang disesuaikan otomatis
+      const notes = (s.notes || []).slice();
+      if (
+        fixTenagaKerja(s.values, notes) ||
+        (s.issues || []).some((x) => /^TK laki/.test(x))
+      ) {
+        s.issues = (s.issues || []).filter((x) => !/^TK laki/.test(x));
+        updateItem(s.id, { values: s.values, issues: s.issues, notes });
+      }
       const kbli = itemKbli(s);
       if (kbli) updateItem(s.id, { kbli });
       else problems.push(`KBLI produk "${s.produk}" belum ditentukan`);
@@ -5524,7 +5777,7 @@
         <div style="min-width:0;">
           <div class="fo-name">${escapeHtml(q.krt)} <span class="fo-badge" style="--c:${color}">${STATUS_LABEL[q.status] || q.status}</span></div>
           <div class="fo-meta">${escapeHtml(q.namaUsaha)}${q.jumlahUsaha > 1 ? ` · usaha ${q.usahaKe}/${q.jumlahUsaha}` : ""} · urut ${escapeHtml(q.noUrut || "-")} · ${q.id}</div>
-          <div class="fo-meta">📍 ${escapeHtml(wilayahLabel(q.wilayah || detectWilayah(q.alamat)))} · ${escapeHtml(q.alamat)}${q.kode ? ` · ${escapeHtml(q.kode)}` : ""}</div>
+          <div class="fo-meta">📍 ${escapeHtml(wilayahLabel(wilayahFor(q)))} · ${escapeHtml(q.alamat)}${q.kode ? ` · ${escapeHtml(q.kode)}` : ""}</div>
           ${q.reason ? `<div class="fo-reason" style="--c:${color}">${escapeHtml(q.reason)}</div>` : ""}${cands}
         </div>
         <div class="fo-actions">
@@ -5623,6 +5876,7 @@
               <input class="fo-input" data-search placeholder="Cari nama, usaha, alamat, kode…" style="flex:1;min-width:180px;">
               <button class="fo-btn sm" data-act="selall">☑ Centang semua</button>
               <button class="fo-btn sm" data-act="selnone">Hapus centang</button>
+              <button class="fo-btn sm" data-act="setdesa-sel" title="Atur desa untuk semua baris yang dicentang">📍 Set desa (dicentang)</button>
             </div>
             <div class="fo-list">${rowsHtml || '<div class="fo-empty">Tidak ada baris di kategori ini.</div>'}</div>
             ${shown.length >= 200 ? '<div class="fo-hint" style="margin-top:8px;text-align:center;">Menampilkan 200 baris pertama · lengkapnya di Laporan CSV</div>' : ""}
@@ -5776,6 +6030,39 @@
             `Gagal membaca daftar wilayah: ${err.message}\n\nKirim screenshot panel Filter FASIH ke pembuat skrip.`,
           );
         }
+        openPanel();
+        return;
+      }
+      if (act === "setdesa-sel") {
+        const ids = loadState().selected || [];
+        if (!ids.length) {
+          alert("Centang dulu baris yang desanya mau diatur.");
+          return;
+        }
+        const name = prompt(
+          `Nama desa untuk ${ids.length} baris yang dicentang:`,
+        );
+        if (!name) return;
+        const w = findWilayahByName(name);
+        if (!w) {
+          alert(`Desa "${name}" tidak ditemukan di daftar wilayah.`);
+          return;
+        }
+        if (
+          !confirm(`Pakai desa ${wilayahLabel(w)} untuk ${ids.length} baris?`)
+        )
+          return;
+        const q = loadQueue();
+        q.filter((i) => ids.includes(i.id)).forEach((i) => {
+          i.wilayah = w;
+          if (i.status === "yellow" || i.status === "red") {
+            i.status = "pending";
+            i.reason = "";
+            i.candidates = [];
+          }
+        });
+        saveQueue(q);
+        petugasCache = null;
         openPanel();
         return;
       }
