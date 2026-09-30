@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Batch Otomatis - Tahap 1 + 2: Excel -> Cari -> Isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      3.12
+// @version      3.14
 // @description  Membaca Excel penyisiran (Tindak Lanjut Fasih = false), mencari & membuka dokumen dengan filter wilayah, lalu mengisi Blok P + Blok II (usaha lama / tambah baru) dan mengirim tanpa konfirmasi. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -3916,9 +3916,55 @@
     return petugasCache.map[normName(item.petugas)] || null;
   }
 
-  // Desa untuk satu baris: diatur manual -> dari alamat -> tebakan dari petugas
+  // Nama jalan dari alamat: "JL TANJUNG PURA RT 009 RW 003" -> "TANJUNG PURA"
+  function streetKey(alamat) {
+    const t = normalize(alamat)
+      .replace(/\bJLN?\b|\bJALAN\b/g, " JL ")
+      .replace(/\s+/g, " ");
+    const m = t.match(
+      /\b(?:JL|GG|GANG)\s+([A-Z][A-Z ]{2,}?)(?=\s+(?:RT|RW|NO|NOMOR|GG|GANG|KM|DESA|DS|KEL|KEC|KAB|BLOK|KOMP)\b|\s+\d|\s*$)/,
+    );
+    return m ? m[1].trim() : "";
+  }
+
+  // Desa tebakan dari nama jalan: baris lain di jalan yang sama yang desanya sudah diketahui
+  // (terdeteksi dari alamat, atau diatur lewat "Set desa"). Minimal 70% baris sepakat.
+  let streetCache = null;
+  function guessByStreet(item) {
+    const key = streetKey(item.alamat);
+    if (!key) return null;
+    const queue = loadQueue();
+    const cacheKey = `${queue.length}|${queue.filter((q) => q.wilayah).length}|${loadJson(WILAYAH_KEY, []).length}`;
+    if (!streetCache || streetCache.key !== cacheKey) {
+      const tally = {};
+      queue.forEach((q) => {
+        const s = streetKey(q.alamat);
+        const w = s && (q.wilayah || detectWilayah(q.alamat));
+        if (!w) return;
+        tally[s] = tally[s] || {};
+        const wk = wilayahKey(w);
+        tally[s][wk] = tally[s][wk] || { w, n: 0 };
+        tally[s][wk].n += q.wilayah ? 2 : 1; // pilihan manual lebih dipercaya
+      });
+      const map = {};
+      Object.entries(tally).forEach(([s, byDesa]) => {
+        const list = Object.values(byDesa).sort((a, b) => b.n - a.n);
+        const total = list.reduce((sum, x) => sum + x.n, 0);
+        if (list[0].n / total >= 0.7) map[s] = list[0].w;
+      });
+      streetCache = { key: cacheKey, map };
+    }
+    return streetCache.map[key] || null;
+  }
+
+  // Desa untuk satu baris: diatur manual -> dari alamat -> dari nama jalan -> tebakan dari petugas
   function wilayahFor(item) {
-    return item.wilayah || detectWilayah(item.alamat) || guessByPetugas(item);
+    return (
+      item.wilayah ||
+      detectWilayah(item.alamat) ||
+      guessByStreet(item) ||
+      guessByPetugas(item)
+    );
   }
 
   function findWilayahByName(name) {
@@ -4846,8 +4892,61 @@
     }
   }
 
-  // Ya untuk anggota yang jadi penanggung jawab usaha. decideAll: anggota lain dijawab Tidak.
-  async function setMembersUsaha(owners, decideAll) {
+  // Jenis usaha Blok P yang disebut di pertanyaan "Apakah <NAMA> memiliki usaha berikut? <jenis>"
+  // (usaha_lain paling akhir: "LAINNYA" juga muncul di teks lain)
+  const ART_CATEGORY = [
+    ["usaha_kos", /\bKOS\b|\bKOST\b|INDEKOS|KONTRAKAN|SEWA/],
+    ["usaha_keliling", /KELILING/],
+    ["usaha_online", /ONLINE|DARING/],
+    ["usaha_bongkar", /BONGKAR/],
+    ["usaha_konstruksi", /KONSTRUKSI/],
+    ["tanaman_pangan", /TANAMAN PANGAN/],
+    ["hortikultura", /HORTIKULTURA/],
+    ["perkebunan", /PERKEBUNAN/],
+    ["peternakan", /PETERNAKAN|TERNAK/],
+    ["kehutanan", /KEHUTANAN/],
+    ["perikanan", /PERIKANAN/],
+    ["jasa_pertanian", /JASA PERTANIAN/],
+    ["usaha_lain", /LAIN/],
+  ];
+
+  // Semua pertanyaan "memiliki usaha berikut?" milik anggota ini (satu per jenis usaha yang aktif di Blok P)
+  function artQuestions(name) {
+    const els = Array.from(document.querySelectorAll("[id]")).filter(
+      (el) =>
+        /^[a-z0-9_]+#\d+$/i.test(el.id) &&
+        visible(el) &&
+        el.querySelector('input[type="radio"]') &&
+        /memiliki\s+usaha\s+berikut/i.test(
+          (el.innerText || "").split("\n").slice(0, 8).join(" "),
+        ),
+    );
+    const leaves = els.filter(
+      (el) => !els.some((o) => o !== el && el.contains(o)),
+    );
+    return leaves.filter((el) => {
+      const span = el.querySelector("span");
+      return (
+        !span ||
+        nameSimilarity(span.innerText, name) >= 0.9 ||
+        normalize(el.innerText).includes(normalize(name))
+      );
+    });
+  }
+
+  function questionCategory(el) {
+    const text = normalize(
+      (el.innerText || "").replace(/^[\s\S]*?berikut\s*\??/i, ""),
+    ).toUpperCase();
+    const hit = ART_CATEGORY.find(([, re]) => re.test(text));
+    return hit ? hit[0] : "";
+  }
+
+  // Jawab pertanyaan usaha anggota keluarga.
+  // owners: penanggung jawab. catsByOwner: Map(nama -> Set jenis Blok P usahanya dari Excel).
+  // Pemilik: Ya untuk jenis usahanya (FASIH lalu membuat kartu "Usaha <NAMA>"); jenis lain yang masih kosong -> Tidak.
+  // decideAll: anggota yang bukan pemilik dijawab Tidak.
+  async function setMembersUsaha(owners, decideAll, catsByOwner = new Map()) {
     await goSection("SE2026 - L BLOK I", onBlokI, true);
     const names = memberCards().map((c) => c.name);
     const missing = owners.filter(
@@ -4861,15 +4960,15 @@
     for (const name of names) {
       const owner = isOwnerName(owners, name);
       if (!owner && !decideAll) continue;
-      let art = artFor(name);
-      if (!art) {
+      let qs = artQuestions(name);
+      if (!qs.length) {
         await goSection("SE2026 - L BLOK I", onBlokI, true);
         const card = memberCards().find((c) => c.name === name);
         if (!card) continue;
         triggerClick(card.card);
-        art = await waitFor(
+        const got = await waitFor(
           () =>
-            artFor(name) ||
+            (artQuestions(name).length ? "ok" : null) ||
             (visibleKeberadaan() &&
             radioValue(visibleKeberadaan()) &&
             radioValue(visibleKeberadaan()) !== "1"
@@ -4877,30 +4976,56 @@
               : null),
           15000,
         );
-        if (art === "absent") {
+        if (got === "absent") {
           runLog(`Blok I: ${name} tidak tinggal di rumah, dilewati`);
           continue;
         }
-        if (!art) {
+        if (!got) {
           warn(`anggota ${name}: pertanyaan "memiliki usaha" tidak muncul`);
           continue;
         }
         await sleep(800);
+        qs = artQuestions(name);
       }
-      const want = owner ? "1" : "2";
-      if (
-        radioValue(art) !== want &&
-        (await fillField("", undefined, want, { container: art })) !== "ok"
-      ) {
-        warn(
-          `anggota ${name}: jawaban "memiliki usaha" tidak bisa diubah ke ${owner ? "Ya" : "Tidak"}`,
-        );
+      const ownerKey = Array.from(catsByOwner.keys()).find(
+        (k) => nameSimilarity(k, name) >= 0.8,
+      );
+      const cats = ownerKey ? catsByOwner.get(ownerKey) : null;
+      const done = [];
+      for (const q0 of qs) {
+        const q = fresh(q0);
+        const cat = questionCategory(q);
+        const current = radioValue(q);
+        let want;
+        if (!owner) want = "2";
+        else if (cats && cats.size) {
+          if (!cat) {
+            if (current) continue;
+            want = "1"; // jenis tidak dikenali & belum dijawab -> Ya
+          } else if (cats.has(cat))
+            want = "1"; // jenis usahanya -> Ya (FASIH membuat kartu "Usaha <NAMA>")
+          else if (!current)
+            want = "2"; // jenis lain belum dijawab -> Tidak
+          else continue; // jenis lain sudah dijawab -> biarkan
+        } else if (!current)
+          want = "2"; // pemilik usaha lama (jenis tak diketahui): pertanyaan baru -> Tidak
+        else continue;
+        if (
+          current !== want &&
+          (await fillField("", undefined, want, { container: q })) !== "ok"
+        ) {
+          warn(
+            `anggota ${name}: "memiliki usaha" ${cat || ""} tidak bisa diubah ke ${want === "1" ? "Ya" : "Tidak"}`,
+          );
+        }
+        done.push(`${cat || "usaha"}=${want === "1" ? "Ya" : "Tidak"}`);
+        await sleep(800); // FASIH membuat kartu "Usaha <NAMA>" setelah Ya
       }
-      await sleep(800);
-      const missingAk = requiredLabels(art.id.split("#")[1]);
+      const inst = qs[0] && qs[0].id.split("#")[1];
+      const missingAk = inst ? requiredLabels(inst) : [];
       if (missingAk.length)
         warn(`anggota ${name} ada isian kosong: ${missingAk.join("; ")}`);
-      runLog(`Blok I: ${name} memiliki usaha = ${owner ? "Ya" : "Tidak"}`);
+      runLog(`Blok I: ${name} memiliki usaha: ${done.join(", ") || "-"}`);
     }
   }
 
@@ -4924,6 +5049,7 @@
     await goSection("SE2026 - L BLOK II", onBlokII);
     const owners = new Map(known);
     const cats = new Set(Array.from(knownCats.values()).filter(Boolean));
+    const catsByOwner = new Map(); // pemilik (12.a) -> jenis usaha Blok P dari kartu yang dibuka
     let found = known.size;
     const total = usahaCards().length;
     for (let idx = 0; idx < total; idx++) {
@@ -4946,9 +5072,30 @@
       }
       const p = await waitBox("pengusaha_var", inst, 4000);
       owners.set(idx, p ? dropdownValue(p) : "");
+      if (p && dropdownValue(p) && kb && ["1", "2"].includes(radioValue(kb))) {
+        const kbliBox = box("kbli", inst);
+        const code = kbliBox
+          ? ((dropdownValue(kbliBox) || kbliBox.innerText).match(
+              /\b(\d{5})\b/,
+            ) || [])[1]
+          : "";
+        const cat = code
+          ? usahaProfile(code).blokP
+          : cardAgriCategory(inst, card.name);
+        const o = dropdownValue(p).toUpperCase();
+        if (cat) {
+          if (!catsByOwner.has(o)) catsByOwner.set(o, new Set());
+          catsByOwner.get(o).add(cat);
+        }
+      }
     }
     lastFoundCount = found;
-    return { owners: Array.from(owners.values()).filter(Boolean), found, cats };
+    return {
+      owners: Array.from(owners.values()).filter(Boolean),
+      found,
+      cats,
+      catsByOwner,
+    };
   }
 
   // Blok P: jenis pertanian yang aktif (Ya) tapi tidak punya usaha Ditemukan/Baru di Blok II -> Tidak.
@@ -5150,25 +5297,52 @@
     ],
   ];
 
+  // Potong teks agar tidak melebihi batas FASIH ("Panjang maksimal N"), di batas kata / koma
+  function clip(text, max) {
+    const t = String(text || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (t.length <= max) return t;
+    const cut = t.slice(0, max + 1);
+    const at = Math.max(cut.lastIndexOf(", "), cut.lastIndexOf(" "));
+    return (at > max * 0.6 ? cut.slice(0, at) : t.slice(0, max)).replace(
+      /[,\s]+$/,
+      "",
+    );
+  }
+  const MAX_INPUT_PROSES = 100; // 13.d & 13.e: panjang maksimal 100
+
   function inputProsesFor(item) {
     const text = normalize(`${item.produk} ${item.namaUsaha}`);
     const rule = INPUT_PROSES.find(([re]) => re.test(text));
     const produk = String(item.produk || "").toLowerCase();
-    return rule
+    const ip = rule
       ? { input: rule[1], proses: rule[2] }
       : {
           input: `bahan baku pembuatan ${produk}`,
-          proses: `mengolah bahan baku menjadi ${produk} menggunakan peralatan sederhana`,
+          proses: `mengolah bahan baku menjadi ${produk} dengan peralatan sederhana`,
         };
+    return {
+      input: clip(ip.input, MAX_INPUT_PROSES),
+      proses: clip(ip.proses, MAX_INPUT_PROSES),
+    };
   }
 
   async function fillInputProses(inst, item) {
     const ip = inputProsesFor(item);
-    await fillField("input", inst, ip.input, { onlyIfEmpty: true, wait: 1200 });
-    await fillField("proses", inst, ip.proses, {
-      onlyIfEmpty: true,
-      wait: 1200,
-    });
+    for (const id of ["input", "proses"]) {
+      const b = await waitBox(id, inst, 1200);
+      const t =
+        b &&
+        b.querySelector(
+          'input[type="text"]:not([disabled]), textarea:not([disabled])',
+        );
+      if (!t) continue;
+      const cur = t.value.trim();
+      if (!cur) await fillField(id, inst, ip[id], { container: b });
+      else if (cur.length > MAX_INPUT_PROSES)
+        await retypeField(t, clip(cur, MAX_INPUT_PROSES)); // isian lama kepanjangan
+    }
   }
 
   // ---------- Alamat minimal 10 huruf (9.b1 / 8.c) ----------
@@ -5207,27 +5381,46 @@
     String(item.ownerEff || item.pemilik || item.krt || "")
       .trim()
       .toUpperCase();
-  function withOwner(name, owner) {
+  const MAX_NAMA_USAHA = 50; // 8.b nama komersial: panjang maksimal 50
+  function withOwner(name, owner, max = MAX_NAMA_USAHA) {
     // "UTP TANAMAN PANGAN <nurhasanah>" -> buang bagian <...> lalu pakai format (PEMILIK)
-    const base = String(name || "")
+    let base = String(name || "")
       .replace(/\s*<[^>]*>\s*/g, " ")
+      .replace(/\s+/g, " ")
       .trim()
       .toUpperCase();
-    if (!base || !owner) return base;
-    if (/\([^)]+\)\s*$/.test(base)) return base; // sudah ada nama dalam kurung
-    return `${base} (${owner})`;
+    const bracket = base.match(/\s*\(([^)]+)\)\s*$/);
+    let who = String(owner || "")
+      .trim()
+      .toUpperCase();
+    if (bracket) {
+      who = bracket[1].trim();
+      base = base.slice(0, bracket.index).trim();
+    } // sudah ada nama dalam kurung
+    if (!base) return clip(who, max);
+    if (!who) return clip(base, max);
+    // Nama pemilik panjang: pakai 2 kata, lalu 1 kata, supaya nama usaha tetap terbaca
+    const words = who.split(" ");
+    const options = [who, words.slice(0, 2).join(" "), words[0]];
+    const fit =
+      options.find((w) => base.length + w.length + 3 <= max) ||
+      options.find((w) => w.length + 3 <= max / 2) ||
+      words[0].slice(0, 15);
+    return `${clip(base, max - fit.length - 3)} (${fit})`;
   }
 
   // Nama bawaan kartu yang dibuat FASIH setelah "memiliki usaha = Ya": "Usaha <NAMA ANGGOTA>"
+  // (bisa juga hanya "<NAMA ANGGOTA>" tanpa kata Usaha)
   const isPlaceholderName = (name) =>
-    /^USAHA\s+\S/i.test(String(name || "").trim()) &&
+    !!String(name || "").trim() &&
     memberNamesSeen.some(
       (n) =>
         nameSimilarity(
           String(name)
             .trim()
             .replace(/^USAHA\s+/i, "")
-            .replace(/\(.*\)\s*$/, ""),
+            .replace(/\(.*\)\s*$/, "")
+            .trim(),
           n,
         ) >= 0.85,
     );
@@ -5623,8 +5816,14 @@
       warn(`Blok I (keberadaan): ${e.message}`);
     }
     const excelOwners = Array.from(new Set(items.map(ownerOf)));
+    const catsByOwner = new Map();
+    items.forEach((i) => {
+      const o = ownerOf(i);
+      if (!catsByOwner.has(o)) catsByOwner.set(o, new Set());
+      catsByOwner.get(o).add(usahaProfile(i.kbli).blokP);
+    });
     try {
-      await setMembersUsaha(excelOwners, false);
+      await setMembersUsaha(excelOwners, false, catsByOwner);
     } catch (e) {
       warn(`Blok I: ${e.message}`);
     }
@@ -5650,14 +5849,16 @@
               .find(
                 (c) =>
                   !usedIdx.has(c.idx) &&
-                  /^USAHA\s+/.test(c.name) &&
                   cardPercent(c) < 100 &&
                   nameSimilarity(
-                    c.name.replace(/^USAHA\s+/, ""),
+                    c.name
+                      .replace(/^USAHA\s+/, "")
+                      .replace(/\(.*\)\s*$/, "")
+                      .trim(),
                     ownerOf(item),
                   ) >= 0.85,
               );
-          const auto = autoCard() || (await waitFor(autoCard, 3000));
+          const auto = autoCard() || (await waitFor(autoCard, 6000));
           if (auto) {
             runLog(`Usaha baru memakai kartu otomatis "${auto.name}"`);
             card = auto;
@@ -5753,11 +5954,23 @@
         owners: allOwners,
         found,
         cats,
+        catsByOwner: cardCats,
       } = await readAllOwners(ownerByCard, catByCard);
       await syncBlokPAgri(cats);
+      const allCats = new Map(
+        Array.from(catsByOwner, ([o, set]) => [o, new Set(set)]),
+      );
+      cardCats.forEach((set, o) => {
+        const key =
+          Array.from(allCats.keys()).find((k) => nameSimilarity(k, o) >= 0.8) ||
+          o;
+        if (!allCats.has(key)) allCats.set(key, new Set());
+        set.forEach((c) => allCats.get(key).add(c));
+      });
       await setMembersUsaha(
         Array.from(new Set(allOwners.concat(excelOwners))),
         true,
+        allCats,
       );
       // 6) Jumlah roster usaha di halaman P harus sama dengan usaha Ditemukan/Baru di Blok II
       await syncRoster(found);
@@ -6219,6 +6432,22 @@
       await ensureUmkmTidakAda(inst);
       if (/TIDAK ADA/i.test(dropdownValue(fresh(target))))
         runLog(`Galat diperbaiki: ${label} → Tidak Ada`);
+      return;
+    }
+
+    const maxLen =
+      Number(
+        (`${err.title} ${err.messages.join(" ")}`.match(
+          /panjang\s+maksimal\s*(\d+)/i,
+        ) || [])[1],
+      ) || 0;
+    if (maxLen && textInput && textInput.value.trim().length > maxLen) {
+      const cur = textInput.value.trim();
+      const fixed = /^nama_komersial|^nama_usaha_edit/.test(base)
+        ? withOwner(cur, item ? ownerOf(item) : "", maxLen)
+        : clip(cur, maxLen);
+      runLog(`Galat panjang: ${base} ${cur.length} → ${fixed.length} huruf`);
+      await retypeField(textInput, fixed);
       return;
     }
 
