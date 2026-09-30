@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Batch Otomatis - Tahap 1 + 2: Excel -> Cari -> Isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      3.17
+// @version      3.18
 // @description  Membaca Excel penyisiran (Tindak Lanjut Fasih = false), mencari & membuka dokumen dengan filter wilayah, lalu mengisi Blok P + Blok II (usaha lama / tambah baru) dan mengirim tanpa konfirmasi. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -4987,6 +4987,63 @@
     return hit ? hit[0] : "";
   }
 
+  // Buka anggota di Blok I; hasil: daftar pertanyaan, 'absent' (tidak tinggal di rumah), atau null
+  async function openMemberQuestions(name) {
+    let qs = artQuestions(name);
+    if (qs.length) return qs;
+    await goSection("SE2026 - L BLOK I", onBlokI, true);
+    const card = memberCards().find((c) => c.name === name);
+    if (!card) return null;
+    triggerClick(card.card);
+    const got = await waitFor(
+      () =>
+        (artQuestions(name).length ? "ok" : null) ||
+        (visibleKeberadaan() &&
+        radioValue(visibleKeberadaan()) &&
+        radioValue(visibleKeberadaan()) !== "1"
+          ? "absent"
+          : null),
+      15000,
+    );
+    if (got !== "ok") return got;
+    await sleep(800);
+    return artQuestions(name);
+  }
+
+  // Penanggung jawab tidak ada di pilihan 12.a -> Blok I: "Apakah <NAMA> memiliki usaha berikut?" = Ya
+  // (pertanyaan jenis usaha itu; kalau jenisnya tidak ketemu, pertanyaan pertama)
+  async function activateOwner(owner, cat) {
+    await goSection("SE2026 - L BLOK I", onBlokI, true);
+    const name = memberCards()
+      .map((c) => c.name)
+      .find((n) => nameSimilarity(n, owner) >= 0.8);
+    if (!name) {
+      warn(`penanggung jawab ${owner} tidak ada di anggota keluarga Blok I`);
+      return false;
+    }
+    const qs = await openMemberQuestions(name);
+    if (qs === "absent") {
+      warn(`penanggung jawab ${name} tidak tinggal di rumah (9.a)`);
+      return false;
+    }
+    if (!qs || !qs.length) {
+      warn(`anggota ${name}: pertanyaan "memiliki usaha" tidak muncul`);
+      return false;
+    }
+    const target =
+      qs.find((q) => questionCategory(q) === cat) ||
+      qs.find((q) => !questionCategory(q)) ||
+      qs[0];
+    if (radioValue(target) === "1") return true;
+    const ok =
+      (await fillField("", undefined, "1", { container: target })) === "ok";
+    runLog(
+      `Blok I: ${name} memiliki usaha ${questionCategory(target) || ""} = Ya (agar muncul di 12.a)`,
+    );
+    await sleep(1500);
+    return ok;
+  }
+
   // Jawab pertanyaan usaha anggota keluarga.
   // owners: penanggung jawab. catsByOwner: Map(nama -> Set jenis Blok P usahanya dari Excel).
   // Pemilik: Ya untuk jenis usahanya (FASIH lalu membuat kartu "Usaha <NAMA>"); jenis lain yang masih kosong -> Tidak.
@@ -5005,37 +5062,26 @@
     for (const name of names) {
       const owner = isOwnerName(owners, name);
       if (!owner && !decideAll) continue;
-      let qs = artQuestions(name);
-      if (!qs.length) {
-        await goSection("SE2026 - L BLOK I", onBlokI, true);
-        const card = memberCards().find((c) => c.name === name);
-        if (!card) continue;
-        triggerClick(card.card);
-        const got = await waitFor(
-          () =>
-            (artQuestions(name).length ? "ok" : null) ||
-            (visibleKeberadaan() &&
-            radioValue(visibleKeberadaan()) &&
-            radioValue(visibleKeberadaan()) !== "1"
-              ? "absent"
-              : null),
-          15000,
-        );
-        if (got === "absent") {
-          runLog(`Blok I: ${name} tidak tinggal di rumah, dilewati`);
-          continue;
-        }
-        if (!got) {
-          warn(`anggota ${name}: pertanyaan "memiliki usaha" tidak muncul`);
-          continue;
-        }
-        await sleep(800);
-        qs = artQuestions(name);
+      const qs = await openMemberQuestions(name);
+      if (qs === "absent") {
+        runLog(`Blok I: ${name} tidak tinggal di rumah, dilewati`);
+        continue;
+      }
+      if (!qs || !qs.length) {
+        warn(`anggota ${name}: pertanyaan "memiliki usaha" tidak muncul`);
+        continue;
       }
       const ownerKey = Array.from(catsByOwner.keys()).find(
         (k) => nameSimilarity(k, name) >= 0.8,
       );
       const cats = ownerKey ? catsByOwner.get(ownerKey) : null;
+      // Pemilik usaha baru tapi tidak ada pertanyaan dengan jenis usahanya -> pertanyaan pertama dijawab Ya
+      // (supaya dia tetap muncul di pilihan 12.a)
+      const noMatch =
+        owner &&
+        cats &&
+        cats.size &&
+        !qs.some((q) => cats.has(questionCategory(q)));
       const done = [];
       for (const q0 of qs) {
         const q = fresh(q0);
@@ -5043,6 +5089,7 @@
         const current = radioValue(q);
         let want;
         if (!owner) want = "2";
+        else if (noMatch && q0 === qs[0]) want = "1";
         else if (cats && cats.size) {
           if (!cat) {
             if (current) continue;
@@ -5649,6 +5696,35 @@
       let ok = await chooseFromDropdown(pengusaha, "", pick);
       if (!ok)
         ok = await chooseFromDropdown(pengusaha, owner.split(" ")[0], pick);
+      // Usaha baru & pemilik tidak ada di pilihan 12.a: Blok I "memiliki usaha" = Ya dulu, lalu kembali ke kartu ini
+      if (!ok && !item.existingCard && item.cardIdx !== undefined) {
+        runLog(
+          `12.a: ${owner} belum ada di pilihan → aktifkan "memiliki usaha" di Blok I`,
+        );
+        if (await activateOwner(owner, usahaProfile(code).blokP)) {
+          await goSection("SE2026 - L BLOK II", onBlokII, true);
+          const again = usahaCards()[item.cardIdx];
+          if (again && (await openUsahaPage(again)) === inst) {
+            const p2 = await waitBox("pengusaha_var", inst);
+            if (p2) {
+              const ta = p2.querySelector('textarea, input[type="text"]');
+              if (
+                ta &&
+                ta.value.trim() &&
+                nameSimilarity(ta.value, owner) < 0.75
+              )
+                setFieldValue(ta, ""); // sisa teks pencarian
+              ok =
+                (await chooseFromDropdown(p2, "", pick)) ||
+                (await chooseFromDropdown(p2, owner.split(" ")[0], pick));
+            }
+          } else {
+            warn(
+              `kartu usaha "${item.namaUsaha}" tidak bisa dibuka lagi setelah Blok I`,
+            );
+          }
+        }
+      }
       // Kartu lama & pemilik tidak ada di pilihan (tidak dijawab Ya): pakai anggota keluarga lain yang tersedia
       if (!ok && item.existingCard) {
         // sisa teks pencarian ("NURHASANAH") di kotak 12.a dihapus dulu, lalu pilih anggota pertama yang tersedia
@@ -5676,9 +5752,15 @@
           await ensureOwnerName("nama_komersial", inst, item);
         }
       }
+      const pNow = box("pengusaha_var", inst) || pengusaha;
       if (
         !ok ||
-        !(await waitFor(() => dropdownValue(fresh(pengusaha)), 3000))
+        !(await waitFor(
+          () =>
+            nameSimilarity(dropdownValue(fresh(pNow)), owner) >= 0.75 ||
+            (item.existingCard && dropdownValue(fresh(pNow))),
+          3000,
+        ))
       ) {
         warn(`pemilik "${owner}" tidak ada di pilihan 12.a (anggota keluarga)`);
       }
@@ -5861,13 +5943,7 @@
       }
       if (!left.length) continue;
       if (round === 0) {
-        // Beri kesempatan pengguna mengisi (mode uji: tunggu "Lanjut"; otomatis: lanjut sendiri 90 detik), lalu cek lagi
-        setUserPause(
-          true,
-          `Isian wajib (*) belum terisi di ${where}: ${left.join("; ")}`,
-          loadRun().testMode ? 0 : 90000,
-        );
-        await sleep(300); // tertahan di sini sampai "Lanjut"
+        await sleep(1500); // isian bersyarat kadang baru muncul/terisi; cek sekali lagi tanpa berhenti
       } else {
         warn(`isian wajib (*) masih kosong di ${where}: ${left.join("; ")}`);
       }
@@ -6013,6 +6089,7 @@
           }
         }
         usedIdx.add(card.idx);
+        item.cardIdx = card.idx;
         runLog(`Mengisi usaha "${card.name}" (${item.id})`);
         const inst = await openUsahaPage(card);
         const isNew = !box("keberadaan_usaha", inst).querySelector(
@@ -6664,22 +6741,10 @@
       }
       pressKey(document.activeElement || document.body, "Escape");
     }
-    // Tidak bisa ditebak: form sudah terbuka di isian itu -> jeda agar Anda bisa mengisi, lalu dicek ulang
-    const run = loadRun();
-    setUserPause(
-      true,
-      `Galat perlu dibantu: ${label} (${err.messages.join(", ")}). Isian sudah dibuka`,
-      run.testMode ? 0 : 90000,
+    // Tidak bisa ditebak: catat di laporan lalu lanjut (tidak menunggu tombol Lanjut)
+    warn(
+      `galat belum bisa diisi otomatis: ${label} (${err.messages.join(", ")})`,
     );
-    await sleep(300); // tertahan di sini sampai "Lanjut"
-    if (
-      containerByTitle(err.title) &&
-      emptyRequired(inst).some((el) => el.id === target.id)
-    ) {
-      warn(
-        `galat belum bisa diisi otomatis: ${label} (${err.messages.join(", ")})`,
-      );
-    }
   }
 
   // Switch "Tampilkan Anomali Usaha dan Keluarga" di halaman CATATAN
