@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Batch Otomatis - Tahap 1 + 2: Excel -> Cari -> Isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      3.16
+// @version      3.17
 // @description  Membaca Excel penyisiran (Tindak Lanjut Fasih = false), mencari & membuka dokumen dengan filter wilayah, lalu mengisi Blok P + Blok II (usaha lama / tambah baru) dan mengirim tanpa konfirmasi. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -3387,6 +3387,8 @@
     return true;
   }
 
+  const MAX_TAHUN_BERDIRI = "2025"; // tahun berdiri 2026 -> 2025
+
   // Angka rincian 24-28 + tahun berdiri dari satu baris Excel
   function excelValues(get) {
     const values = {};
@@ -3413,6 +3415,9 @@
     if (!tahun || tahun === "0") {
       tahun = Math.random() < 0.5 ? "2022" : "2023";
       notes.push(`tahun kosong, diisi ${tahun}`);
+    } else if (Number(tahun) === 2026) {
+      tahun = MAX_TAHUN_BERDIRI; // periode data SE2026 = 2025
+      notes.push("tahun berdiri 2026 diganti 2025");
     } else if (
       Number(tahun) < 1900 ||
       Number(tahun) > new Date().getFullYear()
@@ -5081,6 +5086,20 @@
     return (code && agriCategory(code)) || (byName ? byName[1] : "");
   }
 
+  // Tahun berdiri/operasi 2026 di kartu usaha yang terbuka -> 2025. Hasil: true jika diubah.
+  async function fixTahun2026(inst) {
+    const b = box("tahun_operasi", inst);
+    const t =
+      b &&
+      visible(b) &&
+      b.querySelector(
+        'input[type="text"]:not([disabled]), input[type="number"]:not([disabled]), textarea:not([disabled])',
+      );
+    if (!t || t.value.trim() !== "2026") return false;
+    await retypeField(t, MAX_TAHUN_BERDIRI);
+    return true;
+  }
+
   // Baca penanggung jawab (12.a) & keberadaan semua kartu usaha di Blok II
   // Hasil: { owners: [...], found: jumlah usaha Ditemukan/Baru, cats: jenis pertanian yang punya usaha }
   let lastFoundCount = null;
@@ -5104,6 +5123,8 @@
         const cat = cardAgriCategory(inst, card.name);
         if (cat) cats.add(cat);
       }
+      if (await fixTahun2026(inst))
+        runLog(`Usaha "${card.name}": tahun berdiri 2026 → 2025`);
       // Kartu mana pun (juga yang tidak ada di Excel): 'Pilih UMKM dalam satu SLS' kosong -> Tidak Ada
       const umkm = box("pilih_umkm_sls", inst);
       if (umkm && visible(umkm) && !dropdownValue(umkm)) {
@@ -5719,6 +5740,10 @@
     for (const [id, value] of fixed)
       await fillField(id, inst, value, { wait: 1200 });
 
+    if (String(v.tahun_operasi) === "2026") {
+      v.tahun_operasi = MAX_TAHUN_BERDIRI;
+      notes.push("tahun berdiri 2026 diganti 2025");
+    }
     const numbers = [
       "tk_laki",
       "tk_pr",
@@ -6540,6 +6565,10 @@
 
     if (/^(tk_|gaji)/.test(base) && inst) {
       await fixTkInForm(inst, item);
+      return;
+    }
+    if (base === "tahun_operasi" && inst && (await fixTahun2026(inst))) {
+      runLog(`Galat diperbaiki: ${label} → 2025`);
       return;
     }
     if (base === "pilih_umkm_sls") {
