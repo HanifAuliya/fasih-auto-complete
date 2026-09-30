@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Batch Otomatis - Tahap 1 + 2: Excel -> Cari -> Isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      3.18
+// @version      3.21
 // @description  Membaca Excel penyisiran (Tindak Lanjut Fasih = false), mencari & membuka dokumen dengan filter wilayah, lalu mengisi Blok P + Blok II (usaha lama / tambah baru) dan mengirim tanpa konfirmasi. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -2805,7 +2805,7 @@
   const WILAYAH_KEY = "fasih_t1_wilayah";
 
   const CHANGE_WAIT_MS = 6000; // tunggu tabel mulai berubah / loading setelah cari atau filter
-  const SETTLE_MS = 1500; // tabel dianggap selesai jika diam selama ini tanpa indikator loading
+  const SETTLE_MS = 1000; // tabel dianggap selesai jika diam selama ini tanpa indikator loading
   const SETTLE_MAX_MS = 30000; // batas maksimal menunggu loading FASIH
   const DEFAULT_DELAY_MS = 3000; // jeda tambahan setelah tabel selesai (bisa diubah di panel)
   const REVIEW_WAIT_MS = 8000; // tunggu tombol Review muncul setelah dokumen dipilih
@@ -2906,7 +2906,7 @@
   // naik lagi satu tingkat tiap 1 jam tanpa 429. Dipakai: max(base, penalty).
   const SPEED_KEY = "fasih_speed";
   const SPEEDS = [
-    { name: "Cepat", gap: [3000, 8000], perHour: 0, checkMs: 2000 },
+    { name: "Cepat", gap: [2000, 5000], perHour: 0, checkMs: 2000 },
     { name: "Normal", gap: [10000, 20000], perHour: 40, checkMs: 3000 },
     { name: "Aman", gap: [30000, 60000], perHour: 25, checkMs: 5000 },
   ];
@@ -3020,8 +3020,11 @@
   }, 3000);
 
   let pausedTotalMs = 0; // lama dijeda, supaya batas waktu tunggu tidak habis saat dijeda
+  const SLEEP_FACTOR = 0.6; // kejar target: jeda tetap dipercepat
   async function sleep(ms) {
-    await new Promise((resolve) => setTimeout(resolve, ms));
+    await new Promise((resolve) =>
+      setTimeout(resolve, ms >= 500 ? Math.round(ms * SLEEP_FACTOR) : ms),
+    );
     if (!userPaused() && !rateLimited()) return;
     const t = Date.now();
     while (userPaused() || rateLimited())
@@ -4350,7 +4353,7 @@
   // =========================================================================
   const RUN_KEY = "fasih_t2_run";
   const PHASE_TIMEOUT_MS = 4 * 60 * 1000; // satu fase lebih dari ini = macet, lanjut dokumen berikutnya
-  const FIELD_WAIT_MS = 2500; // tunggu isian bersyarat muncul
+  const FIELD_WAIT_MS = 1800; // tunggu isian bersyarat muncul
   const OPTION_SELECTOR =
     '[role="option"], [cmdk-item], [data-reka-collection-item], [role="listbox"] li, [role="dialog"] li';
 
@@ -5113,6 +5116,20 @@
         done.push(`${cat || "usaha"}=${want === "1" ? "Ya" : "Tidak"}`);
         await sleep(800); // FASIH membuat kartu "Usaha <NAMA>" setelah Ya
       }
+      if (
+        owner &&
+        cats &&
+        cats.size &&
+        !qs.some((q) => radioValue(fresh(q)) === "1")
+      ) {
+        const best = qs.find((q) => cats.has(questionCategory(q))) || qs[0];
+        if (
+          (await fillField("", undefined, "1", { container: fresh(best) })) ===
+          "ok"
+        )
+          done.push(`${questionCategory(best) || "usaha"}=Ya (dipastikan)`);
+        await sleep(800);
+      }
       const inst = qs[0] && qs[0].id.split("#")[1];
       const missingAk = inst ? requiredLabels(inst) : [];
       if (missingAk.length)
@@ -5618,6 +5635,158 @@
     return problems;
   }
 
+  // Buka dropdown sekali, baca semua pilihannya, tutup lagi
+  async function readDropdownOptions(container) {
+    triggerClick(
+      container.querySelector('button[aria-haspopup="dialog"]') ||
+        container.querySelector('textarea, input[type="text"]'),
+    );
+    const opts =
+      (await waitFor(() => {
+        const o = visibleOptions2();
+        return o.length ? o : null;
+      }, 3000)) || [];
+    const texts = opts.map((o) => o.innerText.trim());
+    pressKey(document.activeElement || document.body, "Escape");
+    await sleep(300);
+    return texts;
+  }
+
+  // 12.a penanggung jawab. Pilihan dibaca sekali: pemilik tidak ada -> langsung Blok I (Ya), tanpa coba-coba cari
+  async function fillPengusaha(inst, item, notes) {
+    const owner = ownerOf(item);
+    let peng = await waitBox("pengusaha_var", inst);
+    if (!peng || nameSimilarity(dropdownValue(peng), owner) >= 0.75) return;
+    const score = (t) =>
+      Math.max(nameSimilarity(t, owner), nameSimilarity(t, item.krt) - 0.2);
+    const pick = (opts) => {
+      const scored = opts
+        .map((o) => ({ o, s: score(o.innerText) }))
+        .sort((x, y) => y.s - x.s);
+      return scored[0] && scored[0].s >= 0.7 ? scored[0].o : null;
+    };
+    let inList = (await readDropdownOptions(peng)).some((t) => score(t) >= 0.7);
+
+    // Usaha baru & pemilik belum ada di pilihan: Blok I "memiliki usaha" = Ya, lalu kembali ke kartu ini
+    if (!inList && !item.existingCard && item.cardIdx !== undefined) {
+      runLog(
+        `12.a: ${owner} belum ada di pilihan → langsung aktifkan "memiliki usaha" di Blok I`,
+      );
+      if (await activateOwner(owner, usahaProfile(item.kbli).blokP)) {
+        await goSection("SE2026 - L BLOK II", onBlokII, true);
+        const again = usahaCards()[item.cardIdx];
+        if (again && (await openUsahaPage(again)) === inst) {
+          peng = await waitBox("pengusaha_var", inst);
+          inList = true;
+        } else {
+          warn(
+            `kartu usaha "${item.namaUsaha}" tidak bisa dibuka lagi setelah Blok I`,
+          );
+        }
+      }
+    }
+
+    let ok = !!(inList && peng && (await chooseFromDropdown(peng, "", pick)));
+    // Kartu lama & pemilik tidak ada di pilihan (sengaja tidak dijawab Ya): pakai anggota keluarga lain yang tersedia
+    if (!ok && item.existingCard && peng) {
+      ok = await chooseFromDropdown(
+        peng,
+        "",
+        (opts) => opts.find((o) => o.innerText.trim()) || null,
+      );
+      if (ok && dropdownValue(fresh(peng))) {
+        const other = dropdownValue(fresh(peng)).toUpperCase();
+        notes.push(
+          `12.a: ${owner} tidak ada di pilihan, dipakai anggota lain: ${other}`,
+        );
+        item.ownerEff = other;
+        await ensureOwnerName("nama_komersial", inst, item);
+      }
+    }
+    const pNow = box("pengusaha_var", inst) || peng;
+    if (
+      !ok ||
+      !pNow ||
+      !(await waitFor(
+        () =>
+          nameSimilarity(dropdownValue(fresh(pNow)), owner) >= 0.75 ||
+          (item.existingCard && dropdownValue(fresh(pNow))),
+        3000,
+      ))
+    ) {
+      warn(`pemilik "${owner}" tidak ada di pilihan 12.a (anggota keluarga)`);
+    }
+  }
+
+  // Galat di kartu usaha dari Excel: isi ulang HANYA isian itu (bukan seluruh kartu). Hasil: true jika tertangani.
+  async function fixUsahaField(base, inst, item, target) {
+    const p = usahaProfile(item.kbli);
+    if (base === "pengusaha_var") {
+      await fillPengusaha(inst, item, []);
+      return true;
+    }
+    if (base === "kbli") {
+      return chooseFromDropdown(target, item.kbli, (opts) =>
+        opts.find((o) => o.innerText.includes(item.kbli)),
+      );
+    }
+    if (base === "keberadaan_usaha") {
+      const isNew = !target.querySelector('input[type="radio"][value="1"]');
+      return (
+        (await fillField(base, inst, isNew ? "2" : "1", {
+          container: target,
+        })) === "ok"
+      );
+    }
+    if (base === "prov_usaha_utama") {
+      await fillWilayahDropdown(
+        base,
+        inst,
+        /\b63\b|KALIMANTAN SELATAN/i,
+        "KALIMANTAN SELATAN",
+      );
+      return true;
+    }
+    if (base === "kab_usaha_utama") {
+      await fillWilayahDropdown(
+        base,
+        inst,
+        /\b(63)?07\b|HULU SUNGAI TENGAH/i,
+        "HULU SUNGAI TENGAH",
+      );
+      return true;
+    }
+    const byRule = {
+      jenis_usaha: p.jenisUsaha,
+      produk: item.produk,
+      keg_utama: kegiatanFromKbli(item.kbli, item.produk),
+      kbli_genai: "999999",
+      rt: rtFromAlamat(item.alamat),
+      produk_sendiri: p.industry ? "1" : "2",
+      layanan_mamin: p.food ? "1" : "2",
+      keg_penjualan: p.trade ? "1" : "2",
+      keg_jasa: "1",
+      lokasi_usaha: "10",
+    };
+    const v = item.values || {};
+    const value = v[base] !== undefined ? String(v[base]) : byRule[base];
+    if (value === undefined || value === null || value === "") return false;
+    // Nilainya sudah benar tapi tetap galat (terisi tapi tidak terbaca): teks diketik ulang, radio diklik ulang di bawah
+    const t = target.querySelector(
+      'input[type="text"]:not([disabled]), textarea:not([disabled])',
+    );
+    if (t && t.value.trim() === value) {
+      await retypeField(t, value);
+      return true;
+    }
+    if (
+      target.querySelector('input[type="radio"]') &&
+      radioValue(target) === value
+    )
+      return false;
+    return (await fillField(base, inst, value, { container: target })) === "ok";
+  }
+
   // ---------- Isi satu usaha ----------
   async function fillUsaha(inst, item, ctx) {
     const notes = [];
@@ -5678,93 +5847,7 @@
     await must("lap_keuangan", "2");
 
     // 12.a Pengusaha: pilih anggota keluarga yang namanya paling mirip pemilik Excel
-    const owner = ownerOf(item);
-    const pengusaha = await waitBox("pengusaha_var", inst);
-    if (pengusaha && nameSimilarity(dropdownValue(pengusaha), owner) < 0.75) {
-      const pick = (opts) => {
-        const scored = opts
-          .map((o) => ({
-            o,
-            s: Math.max(
-              nameSimilarity(o.innerText, owner),
-              nameSimilarity(o.innerText, item.krt) - 0.2,
-            ),
-          }))
-          .sort((a, b) => b.s - a.s);
-        return scored[0] && scored[0].s >= 0.7 ? scored[0].o : null;
-      };
-      let ok = await chooseFromDropdown(pengusaha, "", pick);
-      if (!ok)
-        ok = await chooseFromDropdown(pengusaha, owner.split(" ")[0], pick);
-      // Usaha baru & pemilik tidak ada di pilihan 12.a: Blok I "memiliki usaha" = Ya dulu, lalu kembali ke kartu ini
-      if (!ok && !item.existingCard && item.cardIdx !== undefined) {
-        runLog(
-          `12.a: ${owner} belum ada di pilihan → aktifkan "memiliki usaha" di Blok I`,
-        );
-        if (await activateOwner(owner, usahaProfile(code).blokP)) {
-          await goSection("SE2026 - L BLOK II", onBlokII, true);
-          const again = usahaCards()[item.cardIdx];
-          if (again && (await openUsahaPage(again)) === inst) {
-            const p2 = await waitBox("pengusaha_var", inst);
-            if (p2) {
-              const ta = p2.querySelector('textarea, input[type="text"]');
-              if (
-                ta &&
-                ta.value.trim() &&
-                nameSimilarity(ta.value, owner) < 0.75
-              )
-                setFieldValue(ta, ""); // sisa teks pencarian
-              ok =
-                (await chooseFromDropdown(p2, "", pick)) ||
-                (await chooseFromDropdown(p2, owner.split(" ")[0], pick));
-            }
-          } else {
-            warn(
-              `kartu usaha "${item.namaUsaha}" tidak bisa dibuka lagi setelah Blok I`,
-            );
-          }
-        }
-      }
-      // Kartu lama & pemilik tidak ada di pilihan (tidak dijawab Ya): pakai anggota keluarga lain yang tersedia
-      if (!ok && item.existingCard) {
-        // sisa teks pencarian ("NURHASANAH") di kotak 12.a dihapus dulu, lalu pilih anggota pertama yang tersedia
-        const ta = fresh(pengusaha).querySelector(
-          'textarea, input[type="text"]',
-        );
-        if (
-          ta &&
-          ta.value.trim().toUpperCase() === owner.split(" ")[0].toUpperCase()
-        ) {
-          setFieldValue(ta, "");
-          await sleep(300);
-        }
-        ok = await chooseFromDropdown(
-          pengusaha,
-          "",
-          (opts) => opts.find((o) => o.innerText.trim()) || null,
-        );
-        if (ok && dropdownValue(fresh(pengusaha))) {
-          const other = dropdownValue(fresh(pengusaha)).toUpperCase();
-          notes.push(
-            `12.a: ${owner} tidak ada di pilihan, dipakai anggota lain: ${other}`,
-          );
-          item.ownerEff = other;
-          await ensureOwnerName("nama_komersial", inst, item);
-        }
-      }
-      const pNow = box("pengusaha_var", inst) || pengusaha;
-      if (
-        !ok ||
-        !(await waitFor(
-          () =>
-            nameSimilarity(dropdownValue(fresh(pNow)), owner) >= 0.75 ||
-            (item.existingCard && dropdownValue(fresh(pNow))),
-          3000,
-        ))
-      ) {
-        warn(`pemilik "${owner}" tidak ada di pilihan 12.a (anggota keluarga)`);
-      }
-    }
+    await fillPengusaha(inst, item, notes);
 
     await must("keg_utama", kegiatanFromKbli(code, item.produk));
 
@@ -5818,9 +5901,16 @@
       ["barang_non_pddk", "2"],
       ["jasa_non_pddk", "2"],
       ["beli_jasa_non_pddk", "2"],
-    ];
-    for (const [id, value] of fixed)
-      await fillField(id, inst, value, { wait: 1200 });
+      ["izin_edar", "3"],
+      ["belum_bpom", "1"],
+    ]; // 20.a izin edar = Tidak -> 20.c varian belum berizin BPOM = 1 (muncul untuk usaha industri)
+    for (const [id, value] of fixed) {
+      // rincian 20 (izin edar) hanya muncul untuk usaha industri: usaha lain tidak perlu ditunggu
+      const izin = id === "izin_edar" || id === "belum_bpom";
+      await fillField(id, inst, value, {
+        wait: izin && !p.industry ? 300 : 1200,
+      });
+    }
 
     if (String(v.tahun_operasi) === "2026") {
       v.tahun_operasi = MAX_TAHUN_BERDIRI;
@@ -6495,6 +6585,8 @@
     barang_non_pddk: "2",
     jasa_non_pddk: "2",
     beli_jasa_non_pddk: "2",
+    izin_edar: "3",
+    belum_bpom: "1",
     pribadi: "100",
     non_profit: "0",
     publik: "0",
@@ -6690,13 +6782,9 @@
       await retypeField(textInput, wanted);
       return;
     }
-    if (item) {
-      await fillUsaha(inst, item, ctx); // usaha dari Excel: isi ulang lengkap
-      // Isian yang tampak terisi tapi tetap galat -> ketik ulang supaya tercatat
-      const t = fresh(target).querySelector(
-        'input[type="text"]:not([disabled]), textarea:not([disabled])',
-      );
-      if (t && t.value.trim()) await retypeField(t, t.value.trim());
+    // Usaha dari Excel: perbaiki isian yang galat saja (tidak mengisi ulang seluruh kartu)
+    if (item && (await fixUsahaField(base, inst, item, target))) {
+      runLog(`Galat diperbaiki: ${label}`);
       return;
     }
     if (FIXED_ANSWERS[base] !== undefined) {
