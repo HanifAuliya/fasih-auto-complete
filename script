@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Batch Otomatis - Tahap 1 + 2: Excel -> Cari -> Isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      3.14
+// @version      3.16
 // @description  Membaca Excel penyisiran (Tindak Lanjut Fasih = false), mencari & membuka dokumen dengan filter wilayah, lalu mengisi Blok P + Blok II (usaha lama / tambah baru) dan mengirim tanpa konfirmasi. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -3324,16 +3324,40 @@
   // TK: total = laki + perempuan, dan dibayar/tidak dibayar harus cocok dengan upah/gaji:
   // upah 0 -> dibayar 0, semua tidak dibayar; upah > 0 -> dibayar minimal 1 (angka Excel dipakai
   // kalau masuk akal), sisanya tidak dibayar. Upah tetap diisi apa adanya. Hasil: true jika diubah.
-  function fixTenagaKerja(values, notes) {
+  // ownerGender: 'L' / 'P' dari Blok I (12. Jenis Kelamin pemilik), '' jika belum diketahui (saat muat Excel).
+  // Satu-satunya pekerja = pemilik sendiri -> jenis kelaminnya ikut pemilik & tidak dibayar.
+  function fixTenagaKerja(values, notes, ownerGender = "") {
     const n = (k) => Number(values[k]) || 0;
     let changed = false;
-    // Hanya 1 perempuan tanpa laki-laki -> tambah 1 laki-laki (dibayar/tidak dibayar diatur di bawah sesuai upah)
-    if (n("tk_pr") === 1 && n("tk_laki") === 0) {
+    // Dulu ditambah 1 laki-laki karena hanya 1 perempuan; ternyata pemiliknya perempuan -> batalkan
+    if (values._addedLaki && ownerGender === "P") {
+      values.tk_laki = String(Math.max(0, n("tk_laki") - 1));
+      delete values._addedLaki;
+      notes.push("TK: pemilik perempuan, tambahan 1 laki-laki dibatalkan");
+      changed = true;
+    }
+    // Hanya 1 perempuan tanpa laki-laki & pemilik bukan perempuan -> tambah 1 laki-laki (pemiliknya)
+    if (n("tk_pr") === 1 && n("tk_laki") === 0 && ownerGender !== "P") {
       values.tk_laki = "1";
+      values._addedLaki = true;
       notes.push("TK hanya 1 perempuan → ditambah 1 laki-laki");
       changed = true;
     }
     let total = n("tk_laki") + n("tk_pr");
+    // Satu-satunya pekerja: jenis kelaminnya harus sama dengan pemilik
+    if (total === 1 && ownerGender) {
+      const want =
+        ownerGender === "P"
+          ? { tk_laki: "0", tk_pr: "1" }
+          : { tk_laki: "1", tk_pr: "0" };
+      if (values.tk_laki !== want.tk_laki || values.tk_pr !== want.tk_pr) {
+        Object.assign(values, want);
+        notes.push(
+          `TK: satu-satunya pekerja = pemilik (${ownerGender === "P" ? "perempuan" : "laki-laki"})`,
+        );
+        changed = true;
+      }
+    }
     if (total <= 0) {
       // laki/perempuan kosong tapi ada TK dibayar/tidak dibayar -> anggap laki-laki
       total = n("tk_dibayar") + n("tk_tdk_dibayar");
@@ -3344,14 +3368,21 @@
       changed = true;
     }
     const upah = n("gaji") > 0;
-    const dibayar = upah ? Math.min(total, Math.max(1, n("tk_dibayar"))) : 0;
+    // Pekerja hanya 1 orang = pemilik sendiri -> tidak dibayar (walau ada upah di Excel)
+    const dibayar =
+      total === 1
+        ? 0
+        : upah
+          ? Math.min(total, Math.max(1, n("tk_dibayar")))
+          : 0;
     if (dibayar === n("tk_dibayar") && total - dibayar === n("tk_tdk_dibayar"))
       return changed;
     const before = `dibayar ${n("tk_dibayar")} + tidak dibayar ${n("tk_tdk_dibayar")}`;
     values.tk_dibayar = String(dibayar);
     values.tk_tdk_dibayar = String(total - dibayar);
     notes.push(
-      `TK disesuaikan: total ${total} (${before} → dibayar ${dibayar} + tidak dibayar ${total - dibayar}, upah ${upah ? values.gaji : "0"})`,
+      `TK disesuaikan: total ${total} (${before} → dibayar ${dibayar} + tidak dibayar ${total - dibayar}` +
+        `${total === 1 ? ", satu-satunya pekerja = pemilik" : `, upah ${upah ? values.gaji : "0"}`})`,
     );
     return true;
   }
@@ -4848,11 +4879,14 @@
     const names = memberCards().map((c) => c.name);
     memberNamesSeen = names.slice();
     const cache = new Map();
+    const genders = new Map();
     const statusOf = async (name) => {
       if (!cache.has(name)) {
         const inst = await openMember(name);
         const kb = inst && box("keberadaan_dtsen", inst);
         cache.set(name, kb ? radioValue(kb) : "");
+        const jk = inst && box("jk_dtsen", inst);
+        genders.set(name, jk ? { 1: "L", 2: "P" }[radioValue(jk)] || "" : "");
       }
       return cache.get(name);
     };
@@ -4888,7 +4922,13 @@
           }
         }
       }
-      updateItem(item.id, { ownerEff: item.ownerEff });
+      if (!genders.has(item.ownerEff) && names.includes(item.ownerEff))
+        await statusOf(item.ownerEff); // pengganti: baca jenis kelaminnya
+      item.ownerGender = genders.get(item.ownerEff) || "";
+      updateItem(item.id, {
+        ownerEff: item.ownerEff,
+        ownerGender: item.ownerGender,
+      });
     }
   }
 
@@ -5516,7 +5556,9 @@
     const code = item.kbli;
     const p = usahaProfile(code);
     const v = item.values;
-    fixTenagaKerja(v, notes);
+    if ((item.notes || []).some((x) => /ditambah 1 laki-laki/.test(x)))
+      v._addedLaki = true;
+    fixTenagaKerja(v, notes, item.ownerGender || "");
     const must = async (id, value, opts) => {
       const r = await fillField(id, inst, value, opts);
       if (r === "fail") warn(`gagal mengisi ${id}`);
@@ -5533,6 +5575,11 @@
       await must("keberadaan_usaha", "2");
       await ensureUmkmTidakAda(inst);
     }
+
+    // Kartu lama: penanggung jawab 12.a yang sudah terisi dipakai (nama usaha ikut pemilik itu)
+    const peng0 = item.existingCard && box("pengusaha_var", inst);
+    if (peng0 && dropdownValue(peng0))
+      item.ownerEff = dropdownValue(peng0).toUpperCase();
 
     // Nama usaha selalu diakhiri (NAMA PEMILIK), contoh: UTP HORTIKULTURA (ABDUL BASIT)
     await ensureOwnerName("nama_usaha_edit", inst, item, 800);
@@ -5581,6 +5628,33 @@
       let ok = await chooseFromDropdown(pengusaha, "", pick);
       if (!ok)
         ok = await chooseFromDropdown(pengusaha, owner.split(" ")[0], pick);
+      // Kartu lama & pemilik tidak ada di pilihan (tidak dijawab Ya): pakai anggota keluarga lain yang tersedia
+      if (!ok && item.existingCard) {
+        // sisa teks pencarian ("NURHASANAH") di kotak 12.a dihapus dulu, lalu pilih anggota pertama yang tersedia
+        const ta = fresh(pengusaha).querySelector(
+          'textarea, input[type="text"]',
+        );
+        if (
+          ta &&
+          ta.value.trim().toUpperCase() === owner.split(" ")[0].toUpperCase()
+        ) {
+          setFieldValue(ta, "");
+          await sleep(300);
+        }
+        ok = await chooseFromDropdown(
+          pengusaha,
+          "",
+          (opts) => opts.find((o) => o.innerText.trim()) || null,
+        );
+        if (ok && dropdownValue(fresh(pengusaha))) {
+          const other = dropdownValue(fresh(pengusaha)).toUpperCase();
+          notes.push(
+            `12.a: ${owner} tidak ada di pilihan, dipakai anggota lain: ${other}`,
+          );
+          item.ownerEff = other;
+          await ensureOwnerName("nama_komersial", inst, item);
+        }
+      }
       if (
         !ok ||
         !(await waitFor(() => dropdownValue(fresh(pengusaha)), 3000))
@@ -5815,9 +5889,34 @@
     } catch (e) {
       warn(`Blok I (keberadaan): ${e.message}`);
     }
-    const excelOwners = Array.from(new Set(items.map(ownerOf)));
+    // Usaha yang sudah punya kartu di Blok II (prelist, mis. "UTP PERTANIAN <yuni>"): pemiliknya TIDAK dijawab Ya
+    // di Blok I, karena FASIH akan menambah kartu baru "Usaha YUNI". Kartu lama itu yang diisi (Ditemukan).
+    try {
+      await goSection("SE2026 - L BLOK II", onBlokII);
+      const taken = new Set();
+      items.forEach((item) => {
+        const profile = usahaProfile(item.kbli);
+        const best = usahaCards()
+          .map((c, idx) => ({ ...c, idx, score: cardScore(c, item, profile) }))
+          .filter((c) => !taken.has(c.idx) && !isPlaceholderName(c.name))
+          .sort((a, b) => b.score - a.score)[0];
+        item.existingCard = !!(best && best.score >= 0.6);
+        item.plannedIdx = item.existingCard ? best.idx : undefined;
+        if (item.existingCard) {
+          taken.add(best.idx);
+          runLog(
+            `Usaha "${item.namaUsaha}" sudah ada di kartu "${best.name}" → diisi di situ, tanpa Ya di Blok I`,
+          );
+        }
+      });
+    } catch (e) {
+      warn(`Blok II (cek kartu lama): ${e.message}`);
+    }
+    // Ya di Blok I hanya untuk pemilik usaha yang benar-benar baru
+    const newItems = items.filter((i) => !i.existingCard);
+    const excelOwners = Array.from(new Set(newItems.map(ownerOf)));
     const catsByOwner = new Map();
-    items.forEach((i) => {
+    newItems.forEach((i) => {
       const o = ownerOf(i);
       if (!catsByOwner.has(o)) catsByOwner.set(o, new Set());
       catsByOwner.get(o).add(usahaProfile(i.kbli).blokP);
@@ -5837,10 +5936,27 @@
       try {
         await goSection("SE2026 - L BLOK II", onBlokII);
         const profile = usahaProfile(item.kbli);
-        let card = usahaCards()
-          .map((c, idx) => ({ ...c, idx, score: cardScore(c, item, profile) }))
-          .filter((c) => !usedIdx.has(c.idx))
-          .sort((a, b) => b.score - a.score)[0];
+        const planned =
+          item.plannedIdx !== undefined &&
+          !usedIdx.has(item.plannedIdx) &&
+          usahaCards()[item.plannedIdx];
+        let card =
+          planned && cardScore(planned, item, profile) >= 0.6
+            ? {
+                ...planned,
+                idx: item.plannedIdx,
+                score: cardScore(planned, item, profile),
+              }
+            : usahaCards()
+                .map((c, idx) => ({
+                  ...c,
+                  idx,
+                  score: cardScore(c, item, profile),
+                }))
+                .filter(
+                  (c) => !usedIdx.has(c.idx) && !isPlaceholderName(c.name),
+                )
+                .sort((a, b) => b.score - a.score)[0];
         if (!card || card.score < 0.6) {
           // Usaha baru: FASIH biasanya sudah membuat kartu "Usaha <PEMILIK>" (tertaut ke roster & jawaban Blok I)
           const autoCard = () =>
@@ -5957,20 +6073,12 @@
         catsByOwner: cardCats,
       } = await readAllOwners(ownerByCard, catByCard);
       await syncBlokPAgri(cats);
-      const allCats = new Map(
-        Array.from(catsByOwner, ([o, set]) => [o, new Set(set)]),
-      );
-      cardCats.forEach((set, o) => {
-        const key =
-          Array.from(allCats.keys()).find((k) => nameSimilarity(k, o) >= 0.8) ||
-          o;
-        if (!allCats.has(key)) allCats.set(key, new Set());
-        set.forEach((c) => allCats.get(key).add(c));
-      });
+      // Jenis usaha dari kartu lama tidak dijadikan Ya (FASIH akan menambah kartu "Usaha <NAMA>" lagi)
+      void cardCats;
       await setMembersUsaha(
         Array.from(new Set(allOwners.concat(excelOwners))),
         true,
-        allCats,
+        catsByOwner,
       );
       // 6) Jumlah roster usaha di halaman P harus sama dengan usaha Ditemukan/Baru di Blok II
       await syncRoster(found);
@@ -6343,8 +6451,14 @@
       TK_FIELDS.forEach((id) => {
         if (item.values[id] !== undefined) values[id] = String(item.values[id]);
       });
+    if (
+      item &&
+      (item.values._addedLaki ||
+        (item.notes || []).some((x) => /ditambah 1 laki-laki/.test(x)))
+    )
+      values._addedLaki = true;
     const notes = [];
-    fixTenagaKerja(values, notes);
+    fixTenagaKerja(values, notes, (item && item.ownerGender) || "");
     notes.forEach((x) => runLog(x));
     for (const id of TK_FIELDS) {
       const i = box(id, inst) && box(id, inst).querySelector("input");
