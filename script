@@ -2939,7 +2939,30 @@
     }
     return Math.max(s.base || 0, s.penalty || 0);
   }
-  const currentSpeed = () => SPEEDS[speedLevel()];
+  // Turbo: lapisan tambahan di atas "Cepat" saja (bukan tingkat tersendiri), supaya penalti 429 tetap bisa
+  // menaikkan ke Normal/Aman seperti biasa. Mati otomatis selama ada penalti aktif / masih masa tunggu 429.
+  const TURBO_KEY = "fasih_turbo";
+  const TURBO_SPEED = { name: "Turbo", gap: [600, 1500], perHour: 0, checkMs: 800 };
+  const loadTurbo = () => {
+    try {
+      return !!JSON.parse(localStorage.getItem(TURBO_KEY));
+    } catch (e) {
+      return false;
+    }
+  };
+  const saveTurbo = (on) => {
+    try {
+      localStorage.setItem(TURBO_KEY, JSON.stringify(!!on));
+    } catch (e) {
+      /* abaikan */
+    }
+  };
+  function currentSpeed() {
+    const s = loadSpeed();
+    if (loadTurbo() && (s.base || 0) === 0 && !(s.penalty > 0) && !rateLimited())
+      return TURBO_SPEED;
+    return SPEEDS[speedLevel()];
+  }
 
   function noteRateLimit(url) {
     const prev = rateInfo();
@@ -5658,35 +5681,11 @@
     return problems;
   }
 
-  // Buka dropdown sekali, baca semua pilihannya, tutup lagi. searchText: filter dulu (daftar panjang -> tidak semua termuat)
-  async function readDropdownOptions(container, searchText) {
-    triggerClick(
-      container.querySelector('button[aria-haspopup="dialog"]') ||
-        container.querySelector('textarea, input[type="text"]'),
-    );
-    if (searchText) {
-      const search =
-        document.querySelector(
-          '[role="dialog"] input:not([type="radio"]):not([type="checkbox"])',
-        ) || container.querySelector('textarea, input[type="text"]');
-      if (search) setFieldValue(search, searchText);
-    }
-    const opts =
-      (await waitFor(() => {
-        const o = visibleOptions2();
-        return o.length ? o : null;
-      }, 3000)) || [];
-    const texts = opts.map((o) => o.innerText.trim());
-    pressKey(document.activeElement || document.body, "Escape");
-    await sleep(300);
-    return texts;
-  }
-
   // Kartu lama (existingCard): aktifkan "memiliki usaha" di Blok I untuk `name`, tapi batalkan lagi kalau itu
   // malah membuat kartu usaha baru terpisah (kartu lama yang sedang diisi tidak boleh tertukar).
   // Hasil: { ok, peng } jika berhasil dipilih tanpa kartu baru; { stop: true } jika kartu ini sudah tidak bisa dibuka lagi.
   async function tryActivateOwnerForCard(name, cat, inst, item) {
-    await goSection("SE2026 - L BLOK II", onBlokII, true);
+    await goSection("SE2026 - L BLOK II", onBlokII);
     const before = usahaCards().length;
     if (!(await activateOwner(name, cat))) return { ok: false };
     await goSection("SE2026 - L BLOK II", onBlokII, true);
@@ -5715,8 +5714,8 @@
     return { ok, peng };
   }
 
-  // 12.a penanggung jawab. Daftar tanpa kata kunci kadang tidak memuat semua anggota (daftar panjang) ->
-  // kalau belum ketemu, ulangi dengan kata kunci nama sebelum menyimpulkan pemilik benar-benar belum ada.
+  // 12.a penanggung jawab. Blok I biasanya sudah disiapkan lebih dulu di fillDocument (langkah 2), jadi
+  // di sini langsung dicoba pilih dari dropdown; blok-blok di bawah ini jaring pengaman kalau itu belum cukup.
   async function fillPengusaha(inst, item, notes) {
     const owner = ownerOf(item);
     let peng = await waitBox("pengusaha_var", inst);
@@ -5729,14 +5728,15 @@
         .sort((x, y) => y.s - x.s);
       return scored[0] && scored[0].s >= 0.7 ? scored[0].o : null;
     };
-    let inList = (await readDropdownOptions(peng)).some((t) => score(t) >= 0.7);
-    if (!inList)
-      inList = (
-        await readDropdownOptions(fresh(peng), owner.split(" ")[0])
-      ).some((t) => score(t) >= 0.7);
+    // Dropdown panjang kadang tidak memuat semua tanpa filter -> coba kosong dulu, lalu kata kunci nama
+    const trySelect = async () =>
+      (await chooseFromDropdown(peng, "", pick)) ||
+      (await chooseFromDropdown(fresh(peng), owner.split(" ")[0], pick));
 
-    // Usaha baru & pemilik belum ada di pilihan: Blok I "memiliki usaha" = Ya, lalu kembali ke kartu ini
-    if (!inList && !item.existingCard && item.cardIdx !== undefined) {
+    let ok = await trySelect();
+    // Belum ketemu: Blok I belum "Ya" untuk pemilik ini. Usaha baru -> aktifkan langsung (FASIH membuat
+    // kartunya). Usaha lama -> lewat tryActivateOwnerForCard (ada pengecekan supaya tidak bikin kartu baru).
+    if (!ok && item.cardIdx !== undefined && !item.existingCard) {
       runLog(
         `12.a: ${owner} belum ada di pilihan → langsung aktifkan "memiliki usaha" di Blok I`,
       );
@@ -5745,7 +5745,7 @@
         const again = usahaCards()[item.cardIdx];
         if (again && (await openUsahaPage(again)) === inst) {
           peng = await waitBox("pengusaha_var", inst);
-          inList = true;
+          ok = await trySelect();
         } else {
           warn(
             `kartu usaha "${item.namaUsaha}" tidak bisa dibuka lagi setelah Blok I`,
@@ -5753,14 +5753,7 @@
         }
       }
     }
-
-    let ok = !!(inList && peng && (await chooseFromDropdown(peng, "", pick)));
-    // Daftar tanpa kata kunci tidak memuat pilihannya (daftar panjang) -> ulangi dengan kata kunci nama
-    if (!ok && inList && peng)
-      ok = await chooseFromDropdown(fresh(peng), owner.split(" ")[0], pick);
-    // Kartu lama & pemilik tidak ada di pilihan: aktifkan DIA DULUAN di Blok I (bukan langsung cari
-    // anggota lain), tapi batalkan kalau itu malah membuat kartu usaha baru terpisah.
-    if (!ok && item.existingCard && peng && item.cardIdx !== undefined) {
+    if (!ok && item.existingCard && item.cardIdx !== undefined) {
       const cat = usahaProfile(item.kbli).blokP;
       const res = await tryActivateOwnerForCard(owner, cat, inst, item);
       if (res.ok) {
@@ -6232,11 +6225,16 @@
     }
     // Usaha lama: coba juga aktifkan pemiliknya SEBELUM kartunya dibuka (supaya 12.a sudah terisi begitu
     // kartu dibuka), tapi batalkan lagi kalau itu malah membuat kartu usaha baru terpisah dari kartu lama.
+    // Dedup pemilik+jenis usaha yang sama (keluarga bisa punya beberapa usaha lama sejenis).
+    const triedOwnerCat = new Set();
     for (const item of items.filter((i) => i.existingCard)) {
       const owner = ownerOf(item);
       const cat = usahaProfile(item.kbli).blokP;
+      const key = `${owner}|${cat}`;
+      if (triedOwnerCat.has(key)) continue;
+      triedOwnerCat.add(key);
       try {
-        await goSection("SE2026 - L BLOK II", onBlokII, true);
+        await goSection("SE2026 - L BLOK II", onBlokII);
         const before = usahaCards().length;
         if (!(await activateOwner(owner, cat))) continue;
         await goSection("SE2026 - L BLOK II", onBlokII, true);
@@ -7808,7 +7806,8 @@
                 <div class="fo-seg">
                   ${SPEEDS.map((sp, i) => `<label><input type="radio" name="t2speed" value="${i}" ${(loadSpeed().base || 0) === i ? "checked" : ""}><span>${sp.name}</span></label>`).join("")}
                 </div>
-                <span class="fo-hint" style="margin:0;">${speedLevel() > (loadSpeed().base || 0) ? `sedang diturunkan otomatis ke ${currentSpeed().name} (setelah 429)` : "turun sendiri kalau server membatasi (429)"}</span>
+                <label class="fo-switch" title="Jeda antar-dokumen dipangkas lagi. Hanya aktif saat Cepat dipilih, dan mati otomatis kalau server membalas 429."><input type="checkbox" data-turbo ${loadTurbo() ? "checked" : ""}><i></i>⚡ Turbo</label>
+                <span class="fo-hint" style="margin:0;">${speedLevel() > (loadSpeed().base || 0) ? `sedang diturunkan otomatis ke ${currentSpeed().name} (setelah 429)` : currentSpeed().name === "Turbo" ? "Turbo aktif · mati sendiri kalau kena 429" : "turun sendiri kalau server membatasi (429)"}</span>
               </div>
               <div class="fo-divider"></div>
               <div class="fo-rowflex">
@@ -7895,6 +7894,8 @@
           saveSpeed(sp);
         }),
     );
+    const turboBox = overlay.querySelector("[data-turbo]");
+    if (turboBox) turboBox.onchange = () => saveTurbo(turboBox.checked);
 
     overlay.querySelector("[data-delay]").onchange = (e) => {
       const s = loadState();
