@@ -6288,8 +6288,6 @@
     // 3) Blok II: buka / tambah usaha sesuai Excel lalu isi sampai 100%
     // Kartu diingat lewat urutannya: namanya bisa berubah setelah ditambah (PEMILIK)
     const usedIdx = new Set();
-    const ownerByCard = new Map();
-    const catByCard = new Map();
     for (const item of items) {
       try {
         await goSection("SE2026 - L BLOK II", onBlokII);
@@ -6375,18 +6373,12 @@
           missing = requiredLabels(inst);
           wrong = checkUsaha(inst, item, isNew);
         }
-        const pengusaha = box("pengusaha_var", inst);
         const nameNow =
           (
             (box("nama_komersial", inst) || document).querySelector(
               "input, textarea",
             ) || {}
           ).value || card.name;
-        ownerByCard.set(
-          card.idx,
-          pengusaha ? dropdownValue(pengusaha) : ownerOf(item),
-        );
-        catByCard.set(card.idx, usahaProfile(item.kbli).agri || "");
         updateItem(item.id, {
           usahaCard: nameNow || card.name,
           kbli: item.kbli,
@@ -6452,14 +6444,19 @@
         `kartu usaha belum 100%: ${unfinished.map((c) => `${c.name} (${cardPercent(c)}%)`).join("; ")}`,
       );
 
-    // 5) Blok I lagi: Ya untuk semua penanggung jawab usaha (termasuk usaha lain), Tidak untuk anggota lain
+    // 5) Blok I lagi: Ya untuk semua penanggung jawab usaha (termasuk usaha lain), Tidak untuk anggota lain.
+    // Baca ulang SEMUA kartu dari nol di sini (tidak pakai ownerByCard/catByCard hasil langkah 3) --
+    // setMembersUsaha(decideAll=true) di bawah akan mengubah SIAPA PUN yang tidak ada di daftar "owners"
+    // menjadi Tidak, walau sebelumnya sudah benar Ya. Kalau ownerByCard sempat basi (mis. 12.a kartu itu
+    // berubah lagi setelah step 3 mencatatnya), pemilik yang sebenarnya sudah benar bisa ikut "dibalik"
+    // jadi Tidak di sini -> itu yang bikin terlihat bolak-balik lalu galat.
     try {
       const {
         owners: allOwners,
         found,
         cats,
         catsByOwner: cardCats,
-      } = await readAllOwners(ownerByCard, catByCard);
+      } = await readAllOwners(new Map(), new Map());
       await syncBlokPTypes(cats);
       // Jenis usaha dari kartu lama tidak dijadikan Ya (FASIH akan menambah kartu "Usaha <NAMA>" lagi)
       void cardCats;
@@ -7667,6 +7664,56 @@
     document.head.appendChild(style);
   }
 
+  // Pindah kerja ke laptop lain: satu file berisi antrean + daftar wilayah + kamus KBLI + preferensi panel,
+  // supaya tidak perlu baca Excel & daftar wilayah dari awal lagi di laptop baru. Run/jeda Tahap 2 SENGAJA
+  // tidak ikut dibawa (itu status proses yang sedang berjalan di browser tertentu, bukan data untuk dipindah).
+  const EXPORT_KEYS = {
+    queue: QUEUE_KEY,
+    state: STATE_KEY,
+    wilayah: WILAYAH_KEY,
+    kamusKbli: "fasih_kbli_kamus_v1",
+  };
+  function exportAllData() {
+    const data = { version: 1, exportedAt: new Date().toISOString() };
+    Object.entries(EXPORT_KEYS).forEach(([key, storageKey]) => {
+      data[key] = loadJson(storageKey, key === "queue" ? [] : {});
+    });
+    const blob = new Blob([JSON.stringify(data)], {
+      type: "application/json;charset=utf-8",
+    });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `fasih-data-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}.json`;
+    a.click();
+  }
+
+  async function importAllData(file) {
+    let data;
+    try {
+      data = JSON.parse(await file.text());
+    } catch (e) {
+      alert(`File tidak valid: ${e.message}`);
+      return;
+    }
+    if (!data || typeof data !== "object") {
+      alert("File tidak valid.");
+      return;
+    }
+    const qLen = Array.isArray(data.queue) ? data.queue.length : 0;
+    const wLen = Array.isArray(data.wilayah) ? data.wilayah.length : 0;
+    if (
+      !confirm(
+        `Muat data ini?\n\n${qLen} baris antrean, ${wLen} desa.\n\nData yang ada di laptop/browser ini sekarang akan DITIMPA.`,
+      )
+    )
+      return;
+    Object.entries(EXPORT_KEYS).forEach(([key, storageKey]) => {
+      if (data[key] !== undefined) saveJson(storageKey, data[key]);
+    });
+    alert(`Data dimuat: ${qLen} baris antrean, ${wLen} desa.`);
+    openPanel();
+  }
+
   function downloadReport() {
     const esc = (v) =>
       `"${String(v === undefined || v === null ? "" : v).replace(/"/g, '""')}"`;
@@ -7821,6 +7868,8 @@
             <div class="fo-title">FASIH Otomatis</div>
             <div class="fo-subtitle">Excel → cari dokumen → isi → kirim · ${queue.length} baris antrean</div>
           </div>
+          ${queue.length || wilayahCount ? `<button class="fo-btn sm" data-act="export-data" title="Simpan antrean + daftar wilayah + kamus KBLI jadi satu file, untuk dibawa ke laptop lain">💾 Export data</button>` : ""}
+          <button class="fo-btn sm" data-act="import-data" title="Muat file export dari laptop lain (data di laptop ini akan ditimpa)">📂 Import data</button>
           ${queue.length ? `<button class="fo-btn sm" data-act="report">⬇ Laporan CSV</button>` : ""}
           <button class="fo-btn icon" data-act="close" title="Tutup">✕</button>
         </div>
@@ -7923,6 +7972,7 @@
           }
         </div>
         <input data-file type="file" accept=".xlsx,.xls" style="display:none">
+        <input data-import-file type="file" accept=".json" style="display:none">
       </div>`;
 
     document.body.appendChild(overlay);
@@ -8023,6 +8073,13 @@
         `File dimuat.\n\n${summary.join("\n")}\n\nTotal antrean: ${items.length}`,
       );
       openPanel("pending");
+    };
+
+    const importInput = overlay.querySelector("[data-import-file]");
+    importInput.onchange = async () => {
+      const file = importInput.files[0];
+      importInput.value = "";
+      if (file) await importAllData(file);
     };
 
     overlay.addEventListener("click", async (e) => {
@@ -8291,6 +8348,8 @@
       if (act === "close") overlay.remove();
       if (act === "load") fileInput.click();
       if (act === "report") downloadReport();
+      if (act === "export-data") exportAllData();
+      if (act === "import-data") importInput.click();
       if (act === "newtab") {
         const s = loadState();
         s.newTab = el.checked;
