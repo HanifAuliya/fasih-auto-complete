@@ -3203,6 +3203,21 @@
     return best;
   }
 
+  // Skor keseluruhan bisa tinggi hanya karena berbagi marga/nama belakang yang sama
+  // (mis. "TAUFIK RAHMAN" vs "ARIF RAHMAN" = 69% padahal nama depannya beda total) -> dipakai
+  // sebagai pengaman tambahan di pencarian dokumen sebelum menerima "satu-satunya nama mirip".
+  function firstNameOk(item, fasihName) {
+    const parts = [fasihName, ...fasihName.split("/")]
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const firstOf = (s) => normName(s).split(" ")[0] || "";
+    return [item.krt, item.pemilik]
+      .filter(Boolean)
+      .some((n) =>
+        parts.some((p) => levenshteinRatio(firstOf(n), firstOf(p)) >= 0.5),
+      );
+  }
+
   // Kata kunci pencarian: nama lengkap, lalu kata terpanjang (jika nama lengkap salah ketik)
   function buildQueries(name) {
     const clean = normalize(name);
@@ -4157,8 +4172,11 @@
           candidates: sure.slice(0, 5),
         };
       }
-      // Di SLS itu hanya ada satu nama yang cukup mirip -> pilih itu
-      const similar = scored.filter((s) => s.score >= 0.6);
+      // Di SLS itu hanya ada satu nama yang cukup mirip -> pilih itu (nama depan juga harus agak mirip,
+      // supaya tidak tertukar hanya karena berbagi marga/nama belakang, mis. "TAUFIK RAHMAN" vs "ARIF RAHMAN")
+      const similar = scored.filter(
+        (s) => s.score >= 0.6 && firstNameOk(item, s.nama),
+      );
       if (slsOn && similar.length === 1) {
         return {
           status: "green",
@@ -5228,9 +5246,17 @@
       if (!card) continue;
       const inst = await openUsahaPage(card);
       const kb = box("keberadaan_usaha", inst);
+      const kbliBox = box("kbli", inst);
+      const code = kbliBox
+        ? ((dropdownValue(kbliBox) || kbliBox.innerText).match(
+            /\b(\d{5})\b/,
+          ) || [])[1]
+        : "";
+      // Jenis usaha Blok P kartu ini (semua jenis, bukan cuma pertanian): dari KBLI-nya,
+      // atau dari nama kartu kalau KBLI belum terisi.
+      const cat = code ? usahaProfile(code).blokP : cardAgriCategory(inst, card.name);
       if (kb && ["1", "2"].includes(radioValue(kb))) {
         found++;
-        const cat = cardAgriCategory(inst, card.name);
         if (cat) cats.add(cat);
       }
       if (await fixTahun2026(inst))
@@ -5244,15 +5270,6 @@
       const p = await waitBox("pengusaha_var", inst, 4000);
       owners.set(idx, p ? dropdownValue(p) : "");
       if (p && dropdownValue(p) && kb && ["1", "2"].includes(radioValue(kb))) {
-        const kbliBox = box("kbli", inst);
-        const code = kbliBox
-          ? ((dropdownValue(kbliBox) || kbliBox.innerText).match(
-              /\b(\d{5})\b/,
-            ) || [])[1]
-          : "";
-        const cat = code
-          ? usahaProfile(code).blokP
-          : cardAgriCategory(inst, card.name);
         const o = dropdownValue(p).toUpperCase();
         if (cat) {
           if (!catsByOwner.has(o)) catsByOwner.set(o, new Set());
@@ -5269,9 +5286,10 @@
     };
   }
 
-  // Blok P: jenis pertanian yang aktif (Ya) tapi tidak punya usaha Ditemukan/Baru di Blok II -> Tidak.
+  // Blok P: jenis usaha (apa saja, bukan cuma pertanian) yang aktif (Ya) tapi tidak punya usaha
+  // Ditemukan/Baru di Blok II -> Tidak. Supaya jumlah kartu usaha selalu sesuai jenis usaha yang aktif di P.
   // Contoh: HORTIKULTURA & PERKEBUNAN sama-sama Ya padahal usahanya hanya hortikultura -> galat jumlah roster.
-  const AGRI_P = [
+  const BLOK_P_TYPES = [
     "tanaman_pangan",
     "hortikultura",
     "perkebunan",
@@ -5279,20 +5297,24 @@
     "kehutanan",
     "perikanan",
     "jasa_pertanian",
+    "usaha_keliling",
+    "usaha_konstruksi",
+    "usaha_kos",
+    "usaha_lain",
   ];
-  async function syncBlokPAgri(cats) {
+  async function syncBlokPTypes(cats) {
     await goSection("SE2026 - P", onBlokP, true);
     await sleep(800);
     const changed = [];
-    for (const id of AGRI_P) {
+    for (const id of BLOK_P_TYPES) {
       const b = box(id);
       if (!b || !visible(b) || cats.has(id) || radioValue(b) !== "1") continue;
       if ((await fillField(id, undefined, "2", { container: b })) === "ok")
         changed.push(id);
-      await sleep(1000); // FASIH menghapus kartu UTP jenis itu
+      await sleep(1000); // FASIH menghapus kartu UTP/usaha jenis itu
     }
     const msg = changed.length
-      ? `Blok P: ${changed.join(", ")} diubah ke Tidak (tidak ada usahanya di Blok II; usaha pertanian yang ada: ${Array.from(cats).join(", ") || "-"})`
+      ? `Blok P: ${changed.join(", ")} diubah ke Tidak (tidak ada usahanya di Blok II; jenis usaha yang ada: ${Array.from(cats).join(", ") || "-"})`
       : "";
     if (msg) {
       runLog(msg);
@@ -6395,7 +6417,7 @@
         cats,
         catsByOwner: cardCats,
       } = await readAllOwners(ownerByCard, catByCard);
-      await syncBlokPAgri(cats);
+      await syncBlokPTypes(cats);
       // Jenis usaha dari kartu lama tidak dijadikan Ya (FASIH akan menambah kartu "Usaha <NAMA>" lagi)
       void cardCats;
       await setMembersUsaha(
@@ -6810,7 +6832,7 @@
     ) {
       runLog(`Perbaiki galat roster: ${label}`);
       const { found, cats } = await readAllOwners(new Map()); // buka semua kartu, hitung Ditemukan/Baru
-      await syncBlokPAgri(cats); // jenis pertanian di P yang tidak punya usaha -> Tidak
+      await syncBlokPTypes(cats); // jenis usaha di P yang tidak punya usaha -> Tidak
       await syncRoster(found);
       return;
     }
@@ -7725,7 +7747,13 @@
         <div class="fo-actions">
           <button class="fo-btn sm" data-act="open" data-id="${q.id}">Cari & buka</button>
           <button class="fo-btn sm" data-act="setdesa" data-id="${q.id}">Set desa</button>
-          ${q.assignmentUrl ? `<a href="${escapeHtml(q.assignmentUrl)}">Buka dokumen ↗</a>` : ""}
+          <button class="fo-btn sm" data-act="seturl" data-id="${q.id}" title="Dokumen tidak ketemu otomatis? Tempel link dokumennya di sini (buka manual dulu di FASIH, salin link-nya)">📎 Set link</button>
+          ${
+            q.assignmentUrl
+              ? `<a href="${escapeHtml(q.assignmentUrl)}">Buka dokumen ↗</a>
+          <button class="fo-btn sm primary" data-act="fillurl" data-id="${q.id}" title="Langsung buka link ini lalu isi & kirim otomatis">▶ Isi</button>`
+              : ""
+          }
         </div>
       </div>`;
       })
@@ -8048,6 +8076,75 @@
           candidates: [],
         });
         openPanel();
+        return;
+      }
+      if (act === "seturl" && item) {
+        const url = prompt(
+          `Tempel link dokumen FASIH untuk ${item.krt}\n(buka dokumennya manual dulu di FASIH, lalu salin link dari address bar)`,
+          item.assignmentUrl || "",
+        );
+        if (!url) return;
+        if (!/\/app\/assignment\/[^/]+\/[^/]+/.test(url.trim())) {
+          alert(
+            'Link itu kelihatannya bukan link dokumen FASIH (harus mengandung "/app/assignment/...").',
+          );
+          return;
+        }
+        const q = loadQueue();
+        const group = q.filter(
+          (i) => groupKey(i) === groupKey(item) && i.status !== "done",
+        );
+        group.forEach((i) => {
+          i.assignmentUrl = url.trim();
+          i.status = "green";
+          i.reason = "link dokumen diatur manual";
+          i.candidates = [];
+        });
+        saveQueue(q);
+        openPanel();
+        return;
+      }
+      if (act === "fillurl" && item && item.assignmentUrl) {
+        if (loadRun().running) {
+          alert("Proses otomatis sedang berjalan. Stop dulu, lalu klik lagi.");
+          return;
+        }
+        const group = loadQueue().filter(
+          (i) => groupKey(i) === groupKey(item) && i.status !== "done",
+        );
+        if (!group.length) {
+          alert("Tidak ada baris yang bisa diisi (semua sudah terkirim).");
+          return;
+        }
+        if (group.some((i) => !i.values)) {
+          alert(
+            '"📥 Muat Excel" ulang dengan file yang sama dulu (angka Excel baris ini belum terbaca), baru coba lagi.',
+          );
+          return;
+        }
+        const modeEl = overlay.querySelector('input[name="t2mode"]:checked');
+        const approveEl = overlay.querySelector("[data-approve]");
+        saveJson(PAUSE_KEY, { on: false });
+        saveRun({
+          running: true,
+          limit: 0,
+          processed: 0,
+          testMode: modeEl ? modeEl.value === "test" : true,
+          approve: approveEl ? approveEl.checked : true,
+          approveOff: !(approveEl ? approveEl.checked : true),
+          onlyIds: group.map((i) => i.id),
+          phase: "review",
+          phaseAt: Date.now(),
+          itemIds: group.map((i) => i.id),
+          docKode: item.kode || "(link manual)",
+          submitClicked: false,
+          listUrl: isListPage() ? location.href : loadRun().listUrl || "",
+          navAt: 0,
+          docStartedAt: Date.now(),
+        });
+        document.getElementById("fasih-t1-panel")?.remove();
+        runLog(`Mulai dari link manual: ${item.assignmentUrl}`);
+        location.href = item.assignmentUrl;
         return;
       }
 
