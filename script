@@ -5047,6 +5047,29 @@
     return ok;
   }
 
+  // Batalkan activateOwner: dipakai kalau ternyata malah membuat kartu usaha baru (bukan menempel ke kartu lama)
+  async function deactivateOwner(owner, cat) {
+    await goSection("SE2026 - L BLOK I", onBlokI, true);
+    const name = memberCards()
+      .map((c) => c.name)
+      .find((n) => nameSimilarity(n, owner) >= 0.8);
+    if (!name) return false;
+    const qs = await openMemberQuestions(name);
+    if (qs === "absent" || !qs || !qs.length) return false;
+    const target =
+      qs.find((q) => questionCategory(q) === cat) ||
+      qs.find((q) => !questionCategory(q)) ||
+      qs[0];
+    if (radioValue(target) !== "1") return true;
+    const ok =
+      (await fillField("", undefined, "2", { container: target })) === "ok";
+    runLog(
+      `Blok I: ${name} memiliki usaha ${questionCategory(target) || ""} = Tidak (dibatalkan, membuat kartu baru)`,
+    );
+    await sleep(1500);
+    return ok;
+  }
+
   // Jawab pertanyaan usaha anggota keluarga.
   // owners: penanggung jawab. catsByOwner: Map(nama -> Set jenis Blok P usahanya dari Excel).
   // Pemilik: Ya untuk jenis usahanya (FASIH lalu membuat kartu "Usaha <NAMA>"); jenis lain yang masih kosong -> Tidak.
@@ -5635,12 +5658,19 @@
     return problems;
   }
 
-  // Buka dropdown sekali, baca semua pilihannya, tutup lagi
-  async function readDropdownOptions(container) {
+  // Buka dropdown sekali, baca semua pilihannya, tutup lagi. searchText: filter dulu (daftar panjang -> tidak semua termuat)
+  async function readDropdownOptions(container, searchText) {
     triggerClick(
       container.querySelector('button[aria-haspopup="dialog"]') ||
         container.querySelector('textarea, input[type="text"]'),
     );
+    if (searchText) {
+      const search =
+        document.querySelector(
+          '[role="dialog"] input:not([type="radio"]):not([type="checkbox"])',
+        ) || container.querySelector('textarea, input[type="text"]');
+      if (search) setFieldValue(search, searchText);
+    }
     const opts =
       (await waitFor(() => {
         const o = visibleOptions2();
@@ -5652,11 +5682,12 @@
     return texts;
   }
 
-  // 12.a penanggung jawab. Pilihan dibaca sekali: pemilik tidak ada -> langsung Blok I (Ya), tanpa coba-coba cari
+  // 12.a penanggung jawab. Daftar tanpa kata kunci kadang tidak memuat semua anggota (daftar panjang) ->
+  // kalau belum ketemu, ulangi dengan kata kunci nama sebelum menyimpulkan pemilik benar-benar belum ada.
   async function fillPengusaha(inst, item, notes) {
     const owner = ownerOf(item);
     let peng = await waitBox("pengusaha_var", inst);
-    if (!peng || nameSimilarity(dropdownValue(peng), owner) >= 0.75) return;
+    if (!peng || nameSimilarity(dropdownValue(peng), owner) >= 0.75) return true;
     const score = (t) =>
       Math.max(nameSimilarity(t, owner), nameSimilarity(t, item.krt) - 0.2);
     const pick = (opts) => {
@@ -5666,6 +5697,10 @@
       return scored[0] && scored[0].s >= 0.7 ? scored[0].o : null;
     };
     let inList = (await readDropdownOptions(peng)).some((t) => score(t) >= 0.7);
+    if (!inList)
+      inList = (
+        await readDropdownOptions(fresh(peng), owner.split(" ")[0])
+      ).some((t) => score(t) >= 0.7);
 
     // Usaha baru & pemilik belum ada di pilihan: Blok I "memiliki usaha" = Ya, lalu kembali ke kartu ini
     if (!inList && !item.existingCard && item.cardIdx !== undefined) {
@@ -5687,10 +5722,13 @@
     }
 
     let ok = !!(inList && peng && (await chooseFromDropdown(peng, "", pick)));
+    // Daftar tanpa kata kunci tidak memuat pilihannya (daftar panjang) -> ulangi dengan kata kunci nama
+    if (!ok && inList && peng)
+      ok = await chooseFromDropdown(fresh(peng), owner.split(" ")[0], pick);
     // Kartu lama & pemilik tidak ada di pilihan (sengaja tidak dijawab Ya): pakai anggota keluarga lain yang tersedia
     if (!ok && item.existingCard && peng) {
       ok = await chooseFromDropdown(
-        peng,
+        fresh(peng),
         "",
         (opts) => opts.find((o) => o.innerText.trim()) || null,
       );
@@ -5703,32 +5741,75 @@
         await ensureOwnerName("nama_komersial", inst, item);
       }
     }
+    // Kartu lama & pilihan 12.a benar-benar kosong (belum ada anggota yang "Ya" untuk usaha apa pun):
+    // coba aktifkan anggota lain satu per satu, tapi batalkan kalau itu malah membuat kartu usaha baru
+    // (kartu lama yang sedang diisi tidak boleh tertukar dengan kartu baru buatan FASIH).
+    if (!ok && item.existingCard && peng && item.cardIdx !== undefined) {
+      const cat = usahaProfile(item.kbli).blokP;
+      const candidates = memberCards()
+        .map((c) => c.name)
+        .filter((n) => nameSimilarity(n, owner) < 0.8);
+      for (const name of candidates) {
+        await goSection("SE2026 - L BLOK II", onBlokII, true);
+        const before = usahaCards().length;
+        if (!(await activateOwner(name, cat))) continue;
+        await goSection("SE2026 - L BLOK II", onBlokII, true);
+        if (usahaCards().length > before) {
+          runLog(`12.a: ${name} malah membuat kartu usaha baru → dibatalkan`);
+          await deactivateOwner(name, cat);
+          continue;
+        }
+        const again = usahaCards()[item.cardIdx];
+        if (!again || (await openUsahaPage(again)) !== inst) {
+          warn(
+            `kartu usaha "${item.namaUsaha}" tidak bisa dibuka lagi setelah coba ${name}`,
+          );
+          break;
+        }
+        peng = await waitBox("pengusaha_var", inst);
+        ok = !!(
+          peng &&
+          (await chooseFromDropdown(
+            peng,
+            "",
+            (opts) =>
+              opts.find((o) => nameSimilarity(o.innerText, name) >= 0.8) ||
+              null,
+          ))
+        );
+        if (ok) {
+          notes.push(
+            `12.a: ${owner} tidak ada di pilihan, dipakai anggota lain: ${name} (diaktifkan tanpa kartu baru)`,
+          );
+          item.ownerEff = name;
+          await ensureOwnerName("nama_komersial", inst, item);
+          break;
+        }
+      }
+    }
     const pNow = box("pengusaha_var", inst) || peng;
-    if (
-      !ok ||
-      !pNow ||
-      !(await waitFor(
+    const settled =
+      ok &&
+      pNow &&
+      (await waitFor(
         () =>
           nameSimilarity(dropdownValue(fresh(pNow)), owner) >= 0.75 ||
           (item.existingCard && dropdownValue(fresh(pNow))),
         3000,
-      ))
-    ) {
+      ));
+    if (!settled)
       warn(`pemilik "${owner}" tidak ada di pilihan 12.a (anggota keluarga)`);
-    }
+    return !!settled;
   }
 
   // Galat di kartu usaha dari Excel: isi ulang HANYA isian itu (bukan seluruh kartu). Hasil: true jika tertangani.
   async function fixUsahaField(base, inst, item, target) {
     const p = usahaProfile(item.kbli);
     if (base === "pengusaha_var") {
-      await fillPengusaha(inst, item, []);
-      return true;
+      return fillPengusaha(inst, item, []);
     }
     if (base === "kbli") {
-      return chooseFromDropdown(target, item.kbli, (opts) =>
-        opts.find((o) => o.innerText.includes(item.kbli)),
-      );
+      return selectKbli(target, item.kbli);
     }
     if (base === "keberadaan_usaha") {
       const isNew = !target.querySelector('input[type="radio"][value="1"]');
@@ -5785,6 +5866,27 @@
     )
       return false;
     return (await fillField(base, inst, value, { container: target })) === "ok";
+  }
+
+  // Pilih kode dari Master KBLI. Modal ini berat (±1.559 kode) & pencariannya kadang belum siap saat
+  // baru dibuka -> kalau gagal atau nilainya tidak lengket, ulangi sekali lagi sebelum menyerah.
+  async function selectKbli(kbliBox, code) {
+    const pick = (opts) => opts.find((o) => o.innerText.includes(code));
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt) await sleep(800);
+      const ok = await chooseFromDropdown(fresh(kbliBox), code, pick);
+      if (
+        ok &&
+        (await waitFor(
+          () =>
+            dropdownValue(fresh(kbliBox)).includes(code) ||
+            fresh(kbliBox).innerText.includes(code),
+          3000,
+        ))
+      )
+        return true;
+    }
+    return false;
   }
 
   // ---------- Isi satu usaha ----------
@@ -5869,21 +5971,11 @@
     await must("kbli_genai", "999999");
     const kbliBox = await waitBox("kbli", inst, 6000);
     if (!kbliBox) warn("isian KBLI (Master KBLI) tidak muncul");
-    else if (!dropdownValue(kbliBox).includes(code)) {
-      const ok = await chooseFromDropdown(kbliBox, code, (opts) =>
-        opts.find((o) => o.innerText.includes(code)),
-      );
-      if (
-        !ok ||
-        !(await waitFor(
-          () =>
-            dropdownValue(fresh(kbliBox)).includes(code) ||
-            fresh(kbliBox).innerText.includes(code),
-          3000,
-        ))
-      ) {
-        warn(`KBLI ${code} tidak bisa dipilih dari Master KBLI`);
-      }
+    else if (
+      !dropdownValue(kbliBox).includes(code) &&
+      !(await selectKbli(kbliBox, code))
+    ) {
+      warn(`KBLI ${code} tidak bisa dipilih dari Master KBLI`);
     }
     // 9.a kadang direset setelah KBLI dipilih
     await must("jenis_usaha", p.jenisUsaha);
