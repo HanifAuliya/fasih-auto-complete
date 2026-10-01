@@ -5682,6 +5682,39 @@
     return texts;
   }
 
+  // Kartu lama (existingCard): aktifkan "memiliki usaha" di Blok I untuk `name`, tapi batalkan lagi kalau itu
+  // malah membuat kartu usaha baru terpisah (kartu lama yang sedang diisi tidak boleh tertukar).
+  // Hasil: { ok, peng } jika berhasil dipilih tanpa kartu baru; { stop: true } jika kartu ini sudah tidak bisa dibuka lagi.
+  async function tryActivateOwnerForCard(name, cat, inst, item) {
+    await goSection("SE2026 - L BLOK II", onBlokII, true);
+    const before = usahaCards().length;
+    if (!(await activateOwner(name, cat))) return { ok: false };
+    await goSection("SE2026 - L BLOK II", onBlokII, true);
+    if (usahaCards().length > before) {
+      runLog(`12.a: ${name} malah membuat kartu usaha baru → dibatalkan`);
+      await deactivateOwner(name, cat);
+      return { ok: false };
+    }
+    const again = usahaCards()[item.cardIdx];
+    if (!again || (await openUsahaPage(again)) !== inst) {
+      warn(
+        `kartu usaha "${item.namaUsaha}" tidak bisa dibuka lagi setelah coba ${name}`,
+      );
+      return { ok: false, stop: true };
+    }
+    const peng = await waitBox("pengusaha_var", inst);
+    const ok = !!(
+      peng &&
+      (await chooseFromDropdown(
+        peng,
+        "",
+        (opts) =>
+          opts.find((o) => nameSimilarity(o.innerText, name) >= 0.8) || null,
+      ))
+    );
+    return { ok, peng };
+  }
+
   // 12.a penanggung jawab. Daftar tanpa kata kunci kadang tidak memuat semua anggota (daftar panjang) ->
   // kalau belum ketemu, ulangi dengan kata kunci nama sebelum menyimpulkan pemilik benar-benar belum ada.
   async function fillPengusaha(inst, item, notes) {
@@ -5725,7 +5758,20 @@
     // Daftar tanpa kata kunci tidak memuat pilihannya (daftar panjang) -> ulangi dengan kata kunci nama
     if (!ok && inList && peng)
       ok = await chooseFromDropdown(fresh(peng), owner.split(" ")[0], pick);
-    // Kartu lama & pemilik tidak ada di pilihan (sengaja tidak dijawab Ya): pakai anggota keluarga lain yang tersedia
+    // Kartu lama & pemilik tidak ada di pilihan: aktifkan DIA DULUAN di Blok I (bukan langsung cari
+    // anggota lain), tapi batalkan kalau itu malah membuat kartu usaha baru terpisah.
+    if (!ok && item.existingCard && peng && item.cardIdx !== undefined) {
+      const cat = usahaProfile(item.kbli).blokP;
+      const res = await tryActivateOwnerForCard(owner, cat, inst, item);
+      if (res.ok) {
+        ok = true;
+        peng = res.peng;
+        notes.push(`12.a: ${owner} diaktifkan di Blok I (tanpa kartu baru)`);
+      } else if (res.stop) {
+        return false;
+      }
+    }
+    // Masih belum dapat: pakai anggota keluarga lain yang SUDAH tersedia di pilihan (tanpa ubah Blok I)
     if (!ok && item.existingCard && peng) {
       ok = await chooseFromDropdown(
         fresh(peng),
@@ -5741,43 +5787,19 @@
         await ensureOwnerName("nama_komersial", inst, item);
       }
     }
-    // Kartu lama & pilihan 12.a benar-benar kosong (belum ada anggota yang "Ya" untuk usaha apa pun):
-    // coba aktifkan anggota lain satu per satu, tapi batalkan kalau itu malah membuat kartu usaha baru
-    // (kartu lama yang sedang diisi tidak boleh tertukar dengan kartu baru buatan FASIH).
+    // Pilihan 12.a benar-benar kosong & pemilik asli tidak bisa dipakai: coba anggota lain satu per satu,
+    // tetap dengan pengecekan kartu baru yang sama.
     if (!ok && item.existingCard && peng && item.cardIdx !== undefined) {
       const cat = usahaProfile(item.kbli).blokP;
       const candidates = memberCards()
         .map((c) => c.name)
         .filter((n) => nameSimilarity(n, owner) < 0.8);
       for (const name of candidates) {
-        await goSection("SE2026 - L BLOK II", onBlokII, true);
-        const before = usahaCards().length;
-        if (!(await activateOwner(name, cat))) continue;
-        await goSection("SE2026 - L BLOK II", onBlokII, true);
-        if (usahaCards().length > before) {
-          runLog(`12.a: ${name} malah membuat kartu usaha baru → dibatalkan`);
-          await deactivateOwner(name, cat);
-          continue;
-        }
-        const again = usahaCards()[item.cardIdx];
-        if (!again || (await openUsahaPage(again)) !== inst) {
-          warn(
-            `kartu usaha "${item.namaUsaha}" tidak bisa dibuka lagi setelah coba ${name}`,
-          );
-          break;
-        }
-        peng = await waitBox("pengusaha_var", inst);
-        ok = !!(
-          peng &&
-          (await chooseFromDropdown(
-            peng,
-            "",
-            (opts) =>
-              opts.find((o) => nameSimilarity(o.innerText, name) >= 0.8) ||
-              null,
-          ))
-        );
-        if (ok) {
+        const res = await tryActivateOwnerForCard(name, cat, inst, item);
+        if (res.stop) break;
+        if (res.ok) {
+          ok = true;
+          peng = res.peng;
           notes.push(
             `12.a: ${owner} tidak ada di pilihan, dipakai anggota lain: ${name} (diaktifkan tanpa kartu baru)`,
           );
@@ -6172,8 +6194,9 @@
     } catch (e) {
       warn(`Blok I (keberadaan): ${e.message}`);
     }
-    // Usaha yang sudah punya kartu di Blok II (prelist, mis. "UTP PERTANIAN <yuni>"): pemiliknya TIDAK dijawab Ya
-    // di Blok I, karena FASIH akan menambah kartu baru "Usaha YUNI". Kartu lama itu yang diisi (Ditemukan).
+    // Usaha yang sudah punya kartu di Blok II (prelist, mis. "UTP PERTANIAN <yuni>"): kartu lama itu yang
+    // diisi (Ditemukan), bukan kartu baru. Blok I pemiliknya tetap dicoba di bawah, tapi dengan pengecekan
+    // supaya tidak sampai membuat kartu "Usaha YUNI" baru yang terpisah.
     try {
       await goSection("SE2026 - L BLOK II", onBlokII);
       const taken = new Set();
@@ -6187,15 +6210,13 @@
         item.plannedIdx = item.existingCard ? best.idx : undefined;
         if (item.existingCard) {
           taken.add(best.idx);
-          runLog(
-            `Usaha "${item.namaUsaha}" sudah ada di kartu "${best.name}" → diisi di situ, tanpa Ya di Blok I`,
-          );
+          runLog(`Usaha "${item.namaUsaha}" sudah ada di kartu "${best.name}" → diisi di situ`);
         }
       });
     } catch (e) {
       warn(`Blok II (cek kartu lama): ${e.message}`);
     }
-    // Ya di Blok I hanya untuk pemilik usaha yang benar-benar baru
+    // Ya di Blok I untuk pemilik usaha yang benar-benar baru (FASIH langsung membuat kartunya)
     const newItems = items.filter((i) => !i.existingCard);
     const excelOwners = Array.from(new Set(newItems.map(ownerOf)));
     const catsByOwner = new Map();
@@ -6208,6 +6229,26 @@
       await setMembersUsaha(excelOwners, false, catsByOwner);
     } catch (e) {
       warn(`Blok I: ${e.message}`);
+    }
+    // Usaha lama: coba juga aktifkan pemiliknya SEBELUM kartunya dibuka (supaya 12.a sudah terisi begitu
+    // kartu dibuka), tapi batalkan lagi kalau itu malah membuat kartu usaha baru terpisah dari kartu lama.
+    for (const item of items.filter((i) => i.existingCard)) {
+      const owner = ownerOf(item);
+      const cat = usahaProfile(item.kbli).blokP;
+      try {
+        await goSection("SE2026 - L BLOK II", onBlokII, true);
+        const before = usahaCards().length;
+        if (!(await activateOwner(owner, cat))) continue;
+        await goSection("SE2026 - L BLOK II", onBlokII, true);
+        if (usahaCards().length > before) {
+          runLog(
+            `12.a: ${owner} malah membuat kartu usaha baru untuk "${item.namaUsaha}" → dibatalkan`,
+          );
+          await deactivateOwner(owner, cat);
+        }
+      } catch (e) {
+        warn(`Blok I (usaha lama "${item.namaUsaha}"): ${e.message}`);
+      }
     }
 
     // 3) Blok II: buka / tambah usaha sesuai Excel lalu isi sampai 100%
