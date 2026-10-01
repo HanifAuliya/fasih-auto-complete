@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH OSS -> Keluarga: Pindah + Tautkan
 // @namespace    hanif-bps-hst
-// @version      2.16
+// @version      2.17
 // @description  OSS dipindah ke SLS keluarga (⋮ > Ganti Wilayah), lalu dokumen keluarga dibuka: salin Blok P (alamat, no bangunan, geotag) dan pilih OSS di "Pilih UMKM dalam satu SLS". Ada -> OSS Ditemukan + alamat & geotag keluarga; tidak ada / keluarga tanpa usaha -> OSS Tutup. Keduanya dikirim & di-approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -55,6 +55,7 @@
     tested: "#0891b2",
     red: "#dc2626",
     yellow: "#b45309",
+    ganda: "#c2410c", // sub-kategori closed: OSS Ganda
   };
 
   // =========================================================================
@@ -2038,7 +2039,7 @@
         ${steps}
         <div class="s now">${esc(rate || run.lastLog || "")}${run.cur && run.phaseAt ? ` <span class="s">(${Math.round((Date.now() - run.phaseAt) / 1000)} dtk)</span>` : ""}</div>
         ${run.lastStep ? `<div class="s">⏱ langkah sebelumnya — ${esc(run.lastStep)}</div>` : ""}
-        <div class="s">✓ ${c.linked} ditautkan · ${c.closed} OSS tutup · ${c.moved} dipindah · ${c.yellow} perlu cek · ${c.red} gagal · ${c.pending} belum dipindah</div>
+        <div class="s">✓ ${c.linked} ditautkan · ${c.closed} OSS tutup (${c.ganda} ganda) · ${c.moved} dipindah · ${c.yellow} perlu cek · ${c.red} gagal · ${c.pending} belum dipindah</div>
       </div>
       ${run.paused ? `<button class="fgw-btn go" data-bar="go">✓ Kirim sekarang</button><button class="fgw-btn" data-bar="pass">Lewati</button>` : ""}
       ${run.waiting ? `<button class="fgw-btn go" data-bar="send">✓ Kirim sekarang</button><button class="fgw-btn" data-bar="skip">Lewati</button>` : ""}
@@ -2046,8 +2047,11 @@
   }
 
   function counts() {
-    const c = { pending: 0, moved: 0, linked: 0, closed: 0, tested: 0, red: 0, yellow: 0 };
-    loadQueue().forEach((q) => (c[q.status] = (c[q.status] || 0) + 1));
+    const c = { pending: 0, moved: 0, linked: 0, closed: 0, tested: 0, red: 0, yellow: 0, ganda: 0 };
+    loadQueue().forEach((q) => {
+      c[q.status] = (c[q.status] || 0) + 1;
+      if (q.linkResult === "ganda") c.ganda++; // sub-kategori closed: OSS Ganda (bukan status tersendiri)
+    });
     return c;
   }
 
@@ -2077,15 +2081,20 @@
     const queue = loadQueue();
     const conf = loadConf();
     const c = counts();
-    const shown = queue.filter((q) => panelFilter === "all" || q.status === panelFilter).slice(0, 150);
+    // "ganda" bukan status tersendiri (statusnya tetap "closed"), jadi filternya khusus baca linkResult
+    const shown = queue
+      .filter((q) => panelFilter === "all" || (panelFilter === "ganda" ? q.linkResult === "ganda" : q.status === panelFilter))
+      .slice(0, 150);
     const stat = (key, label, color) =>
       `<button class="fgw-stat${panelFilter === key ? " active" : ""}" style="--c:${color}" data-act="filter" data-f="${key}"><div class="n">${key === "all" ? queue.length : c[key] || 0}</div><div class="l">${label}</div></button>`;
     const rows = shown
       .map((q) => {
-        const color = STATUS_COLOR[q.status] || "#64748b";
+        const isGanda = q.linkResult === "ganda";
+        const color = isGanda ? STATUS_COLOR.ganda : STATUS_COLOR[q.status] || "#64748b";
+        const label = isGanda ? "OSS Ganda" : STATUS_LABEL[q.status];
         return `<div class="fgw-item" data-text="${esc(normalize(`${q.namaUsaha} ${q.desa.name} ${q.kec.name} ${q.id}`))}">
           <input type="checkbox" data-sel="${q.id}" ${selected.has(q.id) ? "checked" : ""}>
-          <div><b>${esc(q.namaUsaha)}</b> <span class="fgw-badge" style="--c:${color}">${STATUS_LABEL[q.status]}</span> <span class="fgw-hint">${esc(q.yakin)}</span>
+          <div><b>${esc(q.namaUsaha)}</b> <span class="fgw-badge" style="--c:${color}">${label}</span> <span class="fgw-hint">${esc(q.yakin)}</span>
             <div class="fgw-meta">${esc(q.kec.name)} › ${esc(q.desa.name)} · SLS ${q.slsAsal}/${q.subslsAsal} → <b>${q.slsTujuan}/${q.subslsTujuan}</b> ${esc(q.slsTujuanNama)} · keluarga: ${esc(q.kelAnggota)} · baris ${q.row}</div>
             ${q.reason ? `<div class="fgw-reason" style="--c:${color}">${esc(q.reason)}</div>` : ""}
             <div class="fgw-meta"><a href="${esc(q.linkOss)}" target="_blank">OSS ↗</a> · <a href="${esc(q.linkKel)}" target="_blank">Keluarga ↗</a></div>
@@ -2115,7 +2124,7 @@
           <label class="fgw-hint" style="display:block;margin-top:8px;"><input type="checkbox" data-strict ${conf.strictId ? "checked" : ""}> Wajib cocok assignment_id (lebih aman, bisa lebih banyak "perlu cek")</label>
         </div>
         ${queue.length ? `
-        <div class="fgw-stats" style="grid-template-columns:repeat(4,1fr);">${stat("pending", "Belum dipindah", STATUS_COLOR.pending)}${stat("moved", "Dipindah, belum ditautkan", STATUS_COLOR.moved)}${stat("linked", "Ditautkan", STATUS_COLOR.linked)}${stat("closed", "OSS tutup", STATUS_COLOR.closed)}${stat("yellow", "Perlu cek", STATUS_COLOR.yellow)}${stat("red", "Gagal", STATUS_COLOR.red)}${stat("tested", "Uji", STATUS_COLOR.tested)}${stat("all", "Semua", "#0f172a")}</div>
+        <div class="fgw-stats" style="grid-template-columns:repeat(4,1fr);">${stat("pending", "Belum dipindah", STATUS_COLOR.pending)}${stat("moved", "Dipindah, belum ditautkan", STATUS_COLOR.moved)}${stat("linked", "Ditautkan", STATUS_COLOR.linked)}${stat("closed", "OSS tutup", STATUS_COLOR.closed)}${stat("ganda", "OSS Ganda", STATUS_COLOR.ganda)}${stat("yellow", "Perlu cek", STATUS_COLOR.yellow)}${stat("red", "Gagal", STATUS_COLOR.red)}${stat("tested", "Uji", STATUS_COLOR.tested)}${stat("all", "Semua", "#0f172a")}</div>
         <div class="fgw-card"><div class="fgw-sec">Jalankan</div>
           <div class="fgw-row">
             <button class="fgw-btn primary" data-act="test">🧪 Uji 1 (berhenti sebelum tiap kirim)</button>
@@ -2324,5 +2333,5 @@
     refreshPanelLive();
   }, 700);
 
-  console.log("[OSS → Keluarga v2.16] Aktif. Tombol di kiri bawah (Alt+8).");
+  console.log("[OSS → Keluarga v2.17] Aktif. Tombol di kiri bawah (Alt+8).");
 })();

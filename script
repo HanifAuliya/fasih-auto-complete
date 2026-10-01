@@ -6246,9 +6246,12 @@
       warn(`Blok I: ${e.message}`);
     }
     // Usaha lama: coba juga aktifkan pemiliknya SEBELUM kartunya dibuka (supaya 12.a sudah terisi begitu
-    // kartu dibuka), tapi batalkan lagi kalau itu malah membuat kartu usaha baru terpisah dari kartu lama.
+    // kartu dibuka). Kalau itu malah membuat kartu usaha baru terpisah (tidak nempel ke kartu lama) -> daripada
+    // dibatalkan dan kartu lama tetap tanpa pemilik (macet), terima saja kartu barunya untuk data Excel yang
+    // sebenarnya; kartu lama yang jadi nganggur ditandai untuk ditutup (keberadaan_usaha = Tutup) nanti.
     // Dedup pemilik+jenis usaha yang sama (keluarga bisa punya beberapa usaha lama sejenis).
     const triedOwnerCat = new Set();
+    const staleCards = [];
     for (const item of items.filter((i) => i.existingCard)) {
       const owner = ownerOf(item);
       const cat = usahaProfile(item.kbli).blokP;
@@ -6261,10 +6264,21 @@
         if (!(await activateOwner(owner, cat))) continue;
         await goSection("SE2026 - L BLOK II", onBlokII, true);
         if (usahaCards().length > before) {
-          runLog(
-            `12.a: ${owner} malah membuat kartu usaha baru untuk "${item.namaUsaha}" → dibatalkan`,
+          const affected = items.filter(
+            (i) =>
+              i.existingCard &&
+              ownerOf(i) === owner &&
+              usahaProfile(i.kbli).blokP === cat,
           );
-          await deactivateOwner(owner, cat);
+          affected.forEach((i) => {
+            const stale = i.plannedIdx !== undefined && usahaCards()[i.plannedIdx];
+            if (stale) staleCards.push({ name: stale.name });
+            i.existingCard = false;
+            i.plannedIdx = undefined;
+          });
+          runLog(
+            `12.a: ${owner} membuat kartu usaha baru (tidak nempel ke kartu lama) → dipakai kartu barunya; kartu lama ditutup nanti`,
+          );
         }
       } catch (e) {
         warn(`Blok I (usaha lama "${item.namaUsaha}"): ${e.message}`);
@@ -6298,7 +6312,12 @@
                   score: cardScore(c, item, profile),
                 }))
                 .filter(
-                  (c) => !usedIdx.has(c.idx) && !isPlaceholderName(c.name),
+                  (c) =>
+                    !usedIdx.has(c.idx) &&
+                    !isPlaceholderName(c.name) &&
+                    // Kartu lama yang baru saja ditinggalkan (lihat langkah 2) tidak boleh dipakai lagi di
+                    // sini, supaya tidak tertukar balik ke kartu lama alih-alih kartu baru pemiliknya.
+                    !staleCards.some((s) => normalize(s.name) === normalize(c.name)),
                 )
                 .sort((a, b) => b.score - a.score)[0];
         if (!card || card.score < 0.6) {
@@ -6397,6 +6416,30 @@
         }
       } catch (e) {
         warn(`usaha "${item.namaUsaha}": ${e.message}`);
+      }
+    }
+
+    // 3.5) Kartu lama yang pemiliknya dipindah ke kartu baru (langkah 2): tutup (bukan diisi data karangan)
+    for (const stale of staleCards) {
+      try {
+        await goSection("SE2026 - L BLOK II", onBlokII);
+        const card = usahaCards().find(
+          (c) => normalize(c.name) === normalize(stale.name),
+        );
+        if (!card) {
+          warn(`kartu lama "${stale.name}" tidak ketemu lagi untuk ditutup`);
+          continue;
+        }
+        if (cardPercent(card) >= 100) continue;
+        const inst = await openUsahaPage(card);
+        await fillField("keberadaan_usaha", inst, "3", {
+          container: box("keberadaan_usaha", inst),
+        });
+        await sleep(1200);
+        await ensureRequired(inst, null, `kartu lama "${stale.name}" (ditutup)`);
+        runLog(`Usaha lama "${stale.name}": ditutup (keberadaan_usaha = Tutup)`);
+      } catch (e) {
+        warn(`menutup kartu lama "${stale.name}": ${e.message}`);
       }
     }
 
@@ -8363,6 +8406,37 @@
     document.body.appendChild(btn);
   }
 
+  // Simpan HTML section form yang sedang aktif jadi file .html (untuk dikirim/dibaca sebagai referensi,
+  // tidak lewat clipboard/chat supaya tidak kepotong). Dipasang di semua halaman FASIH termasuk /edit,
+  // karena justru di situ letak section-section yang perlu diambil.
+  function downloadCurrentFormHtml() {
+    const container =
+      document.querySelector('[class*="container/form"]') ||
+      document.querySelector(".fasih-form-sidebar")?.parentElement ||
+      document.body;
+    const html = `<!doctype html>\n<html><head><meta charset="utf-8"><title>${escapeHtml(location.pathname)}</title></head><body>\n${container.outerHTML}\n</body></html>`;
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    a.download = `fasih-form-${stamp}.html`;
+    a.click();
+  }
+
+  function ensureHtmlDumpButton() {
+    if (!document.body || document.getElementById("fasih-html-dump")) return;
+    ensureStyles();
+    const btn = document.createElement("button");
+    btn.id = "fasih-html-dump";
+    btn.className = "fo-launch";
+    btn.style.cssText = "left:auto;right:16px;bottom:16px;background:#0f172a;";
+    btn.innerHTML = `📋 Simpan HTML form`;
+    btn.title =
+      "Download HTML section yang sedang terlihat sebagai file .html (untuk dikirim sebagai referensi)";
+    btn.onclick = downloadCurrentFormHtml;
+    document.body.appendChild(btn);
+  }
+
   window.addEventListener("keydown", (e) => {
     if (e.altKey && e.key === "7") {
       e.preventDefault();
@@ -8373,6 +8447,7 @@
   // Halaman FASIH berupa SPA: pasang tombol saat tabel muncul & lanjutkan cek jika sedang berjalan
   setInterval(() => {
     ensureLauncher();
+    ensureHtmlDumpButton();
     if (loadState().checking && !checkingNow && isListPage()) runCheckAll();
   }, 1000);
 
