@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH OSS -> Keluarga: Pindah + Tautkan
 // @namespace    hanif-bps-hst
-// @version      2.17
+// @version      2.19
 // @description  OSS dipindah ke SLS keluarga (⋮ > Ganti Wilayah), lalu dokumen keluarga dibuka: salin Blok P (alamat, no bangunan, geotag) dan pilih OSS di "Pilih UMKM dalam satu SLS". Ada -> OSS Ditemukan + alamat & geotag keluarga; tidak ada / keluarga tanpa usaha -> OSS Tutup. Keduanya dikirim & di-approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -2070,6 +2070,19 @@
     a.click();
   }
 
+  // Ekspor/impor ANTREAN APA ADANYA (semua field mentah, bukan laporan untuk dibaca orang) supaya
+  // bisa lanjut kerja persis dari titik yang sama di laptop lain -- status, alasan, hasil tautan,
+  // Blok P yang sudah disalin, dll ikut semua. Laporan CSV di atas cuma buat dibaca, bukan buat dimuat balik.
+  function downloadQueueJson() {
+    const blob = new Blob([JSON.stringify({ queue: loadQueue(), conf: loadConf(), exportedAt: new Date().toISOString() }, null, 2)], {
+      type: "application/json;charset=utf-8",
+    });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `antrean-oss-keluarga-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}.json`;
+    a.click();
+  }
+
   let panelFilter = "pending";
   let panelSearch = "";
   let lastPanelRefresh = 0;
@@ -2107,7 +2120,8 @@
     overlay.className = "fgw fgw-overlay";
     overlay.innerHTML = `<div class="fgw-sheet">
       <div class="fgw-head"><div class="fgw-title">🔀 OSS → Keluarga: Pindah + Tautkan</div>
-        ${queue.length ? `<button class="fgw-btn sm" data-act="report">⬇ Laporan CSV</button>` : ""}
+        ${queue.length ? `<button class="fgw-btn sm" data-act="report">⬇ Laporan CSV</button><button class="fgw-btn sm" data-act="export" title="Ekspor antrean apa adanya (semua status/progres) buat dilanjutkan di laptop lain">⬇ Ekspor Antrean</button>` : ""}
+        <button class="fgw-btn sm" data-act="import" title="Muat file Ekspor Antrean dari laptop lain, lanjutkan persis dari situ">📤 Impor Antrean</button>
         <button class="fgw-btn sm" data-act="close">✕</button></div>
       <div class="fgw-body">
         <div class="fgw-card"><div class="fgw-sec">Persiapan</div>
@@ -2139,12 +2153,16 @@
           <div class="fgw-hint" style="margin-top:4px;">🔎 Cek ulang Ganda: cek ulang baris "OSS tutup" yang alasannya "tidak ada di pilihan UMKM" (kartu usaha tanpa isian Pilih UMKM, atau isiannya terkunci, dulu salah dibaca Tutup, seharusnya Ganda). Dibaca dulu dari halaman <b>Review keluarga tanpa revoke</b> — kalau memang tetap Tutup, baris tidak disentuh sama sekali; kalau Ganda, cuma OSS-nya yang direvoke & diperbaiki (keluarga tidak disentuh); keluarga baru direvoke kalau ternyata ada kecocokan UMKM baru.</div>
         </div>
         <div class="fgw-row"><input class="fgw-input" data-search placeholder="Cari nama / desa / id…" style="flex:1;" value="${esc(panelSearch)}">
+          <button class="fgw-btn sm" data-act="selall">☑ Centang semua tampil (${shown.length})</button>
+          <button class="fgw-btn sm" data-act="selnone">☐ Kosongkan centang</button>
           <button class="fgw-btn sm" data-act="reset">↻ Gagal/perlu cek → belum</button>
           <button class="fgw-btn sm danger" data-act="clear">🗑 Hapus antrean</button></div>
+        <div class="fgw-hint" style="margin-top:-6px;">Klik salah satu kotak statistik di atas dulu buat filter per status/Ganda, baru "Centang semua tampil" — lalu jalankan lewat "▶ Yang dicentang".</div>
         <div style="display:flex;flex-direction:column;gap:6px;">${rows || '<div class="fgw-hint">Tidak ada baris.</div>'}</div>
         ${shown.length >= 150 ? '<div class="fgw-hint">Menampilkan 150 baris pertama · lengkapnya di Laporan CSV</div>' : ""}` : '<div class="fgw-hint">Belum ada antrean. Klik <b>Muat Excel target</b>.</div>'}
       </div>
-      <input data-file type="file" accept=".xlsx" style="display:none"></div>`;
+      <input data-file type="file" accept=".xlsx" style="display:none">
+      <input data-file-json type="file" accept=".json" style="display:none"></div>`;
     document.body.appendChild(overlay);
     overlay.addEventListener("keydown", (e) => e.stopPropagation());
     overlay.addEventListener("mousedown", (e) => {
@@ -2223,6 +2241,27 @@
       openPanel();
     };
 
+    const fileInputJson = overlay.querySelector("[data-file-json]");
+    fileInputJson.onchange = async () => {
+      const file = fileInputJson.files[0];
+      if (!file) return;
+      try {
+        const data = JSON.parse(await file.text());
+        const items = Array.isArray(data) ? data : data.queue; // dukung file lama yang cuma array
+        if (!Array.isArray(items)) throw new Error("file bukan hasil Ekspor Antrean yang valid");
+        const n = loadQueue().length;
+        if (n && !confirm(`Antrean saat ini (${n} baris) akan diganti dengan isi file ini (${items.length} baris, diekspor ${data.exportedAt ? new Date(data.exportedAt).toLocaleString() : "?"}). Lanjutkan?`))
+          return;
+        saveQueue(items);
+        if (data.conf && confirm("File ini juga menyimpan pengaturan (Pengawas/Pencacah/dll). Pakai pengaturan itu juga?"))
+          saveConf({ ...loadConf(), ...data.conf });
+        alert(`Antrean dimuat: ${items.length} baris.`);
+      } catch (err) {
+        alert(`Gagal memuat file: ${err.message}`);
+      }
+      openPanel();
+    };
+
     overlay.addEventListener("click", (e) => {
       const el = e.target.closest("[data-act]");
       if (!el) return;
@@ -2230,6 +2269,8 @@
       if (act === "close") overlay.remove();
       if (act === "load") fileInput.click();
       if (act === "report") downloadReport();
+      if (act === "export") downloadQueueJson();
+      if (act === "import") fileInputJson.click();
       if (act === "filter") {
         panelFilter = el.dataset.f;
         openPanel();
@@ -2256,6 +2297,23 @@
         const n = Number(el.dataset.n);
         if (confirm(`Pindahkan ${n || "SEMUA (" + counts().pending + ")"} assignment OSS ke SLS keluarga TANPA berhenti?\nPengawas: ${loadConf().pengawas}\nPencacah: ${loadConf().pencacah}`))
           startRun({ limit: n });
+      }
+      if (act === "selall") {
+        overlay.querySelectorAll(".fgw-item").forEach((row) => {
+          if (row.style.display === "none") return; // hormati pencarian yang sedang aktif juga
+          const cb = row.querySelector("[data-sel]");
+          if (!cb) return;
+          selected.add(cb.dataset.sel);
+          cb.checked = true;
+        });
+        const l = overlay.querySelector("[data-selcount]");
+        if (l) l.textContent = selected.size;
+      }
+      if (act === "selnone") {
+        selected.clear();
+        overlay.querySelectorAll("[data-sel]").forEach((cb) => (cb.checked = false));
+        const l = overlay.querySelector("[data-selcount]");
+        if (l) l.textContent = selected.size;
       }
       if (act === "sel") {
         const ids = loadQueue().filter((q) => selected.has(q.id) && !["linked", "closed"].includes(q.status)).map((q) => q.id);
@@ -2333,5 +2391,5 @@
     refreshPanelLive();
   }, 700);
 
-  console.log("[OSS → Keluarga v2.17] Aktif. Tombol di kiri bawah (Alt+8).");
+  console.log("[OSS → Keluarga v2.19] Aktif. Tombol di kiri bawah (Alt+8).");
 })();
