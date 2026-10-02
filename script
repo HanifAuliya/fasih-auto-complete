@@ -6933,6 +6933,13 @@
         runLog(`Galat diperbaiki: ${label} → Tidak Ada`);
       return;
     }
+    // No. telepon tetap (kode area / no telp / ekstensi): tidak ada datanya dari Excel, tidak boleh
+    // diisi asal-asalan -> pastikan benar-benar dikosongkan ulang supaya FASIH tidak menganggap masih terisi
+    if (/^(kode_area|no_telp|eks)$/.test(base) && textInput) {
+      await retypeField(textInput, "");
+      runLog(`Galat dikosongkan: ${label}`);
+      return;
+    }
 
     const maxLen =
       Number(
@@ -7753,6 +7760,10 @@
     Object.entries(EXPORT_KEYS).forEach(([key, storageKey]) => {
       if (data[key] !== undefined) saveJson(storageKey, data[key]);
     });
+    const s = loadState();
+    s.importedFileName = file.name;
+    s.importedAt = new Date().toISOString();
+    saveState(s);
     alert(`Data dimuat: ${qLen} baris antrean, ${wLen} desa.`);
     openPanel();
   }
@@ -7941,6 +7952,15 @@
               ${wilayahCount ? `✓ ${wilayahCount} desa tersimpan` : '<span style="color:#dc2626;">Daftar wilayah belum dibaca (cukup sekali)</span>'}
               · Jeda setelah loading <input class="fo-input fo-num" data-delay type="number" min="2" max="30" step="0.5" value="${delaySec}"> detik
             </div>
+            ${
+              state.excelFileName || state.importedFileName
+                ? `<div class="fo-hint" style="margin-top:4px;">
+              ${state.excelFileName ? `📄 Excel aktif: <b>${escapeHtml(state.excelFileName)}</b> (dimuat ${new Date(state.excelLoadedAt).toLocaleString()})` : ""}
+              ${state.excelFileName && state.importedFileName ? " · " : ""}
+              ${state.importedFileName ? `📂 Data terakhir di-import: <b>${escapeHtml(state.importedFileName)}</b> (${new Date(state.importedAt).toLocaleString()})` : ""}
+            </div>`
+                : ""
+            }
             ${unresolved.length ? `<div class="fo-warn" style="margin-top:10px;">${unresolved.length} produk belum punya KBLI. Barisnya akan jadi kuning sampai KBLI ditentukan.</div>` : ""}
           </div>
 
@@ -8110,7 +8130,11 @@
         checking: false,
         newTab: loadState().newTab,
         delayMs: loadState().delayMs,
+        importedFileName: loadState().importedFileName,
+        importedAt: loadState().importedAt,
         filter: "pending",
+        excelFileName: file.name,
+        excelLoadedAt: new Date().toISOString(),
       });
       alert(
         `File dimuat.\n\n${summary.join("\n")}\n\nTotal antrean: ${items.length}`,
@@ -8508,37 +8532,6 @@
     document.body.appendChild(btn);
   }
 
-  // Simpan HTML section form yang sedang aktif jadi file .html (untuk dikirim/dibaca sebagai referensi,
-  // tidak lewat clipboard/chat supaya tidak kepotong). Dipasang di semua halaman FASIH termasuk /edit,
-  // karena justru di situ letak section-section yang perlu diambil.
-  function downloadCurrentFormHtml() {
-    const container =
-      document.querySelector('[class*="container/form"]') ||
-      document.querySelector(".fasih-form-sidebar")?.parentElement ||
-      document.body;
-    const html = `<!doctype html>\n<html><head><meta charset="utf-8"><title>${escapeHtml(location.pathname)}</title></head><body>\n${container.outerHTML}\n</body></html>`;
-    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-    a.download = `fasih-form-${stamp}.html`;
-    a.click();
-  }
-
-  function ensureHtmlDumpButton() {
-    if (!document.body || document.getElementById("fasih-html-dump")) return;
-    ensureStyles();
-    const btn = document.createElement("button");
-    btn.id = "fasih-html-dump";
-    btn.className = "fo-launch";
-    btn.style.cssText = "left:auto;right:16px;bottom:16px;background:#0f172a;";
-    btn.innerHTML = `📋 Simpan HTML form`;
-    btn.title =
-      "Download HTML section yang sedang terlihat sebagai file .html (untuk dikirim sebagai referensi)";
-    btn.onclick = downloadCurrentFormHtml;
-    document.body.appendChild(btn);
-  }
-
   window.addEventListener("keydown", (e) => {
     if (e.altKey && e.key === "7") {
       e.preventDefault();
@@ -8549,7 +8542,6 @@
   // Halaman FASIH berupa SPA: pasang tombol saat tabel muncul & lanjutkan cek jika sedang berjalan
   setInterval(() => {
     ensureLauncher();
-    ensureHtmlDumpButton();
     if (loadState().checking && !checkingNow && isListPage()) runCheckAll();
   }, 1000);
 
