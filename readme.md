@@ -7,9 +7,10 @@ Ada dua skrip di folder ini, untuk dua tahap pekerjaan yang berbeda:
 | File | Nama di Tampermonkey | Buat apa |
 |---|---|---|
 | [`script`](script) | FASIH Batch Otomatis - Tahap 1 + 2 | Transkripsi hasil penyisiran Excel ke dokumen FASIH: cari dokumen rumah tangga yang cocok, isi Blok P + Blok II (usaha lama/baru), tentukan KBLI, kirim & approve. |
+| [`fasih-koreksi-r27.user.js`](fasih-koreksi-r27.user.js) | FASIH Koreksi R.27 - Pendapatan (27.a / 27.b) | Ganti isian 27.a (`nilai_pendapatan`) = R.27a dan 27.b (`pendapatan_lain`) = R.27b di kartu usaha yang tepat, lalu kirim & approve. |
 | [`fasih-ganti-wilayah-oss.user.js`](fasih-ganti-wilayah-oss.user.js) | FASIH OSS -> Keluarga: Pindah + Tautkan | Pindahkan assignment OSS ke SLS keluarganya (Ganti Wilayah), lalu tautkan ke usaha keluarga lewat "Pilih UMKM dalam satu SLS" — atau tutup/gandakan kalau memang tidak ada yang cocok. |
 
-Keduanya independen — bisa dipasang salah satu atau dua-duanya sekaligus.
+Semuanya independen — bisa dipasang salah satu atau dua-duanya sekaligus.
 
 ## Instalasi
 
@@ -155,6 +156,19 @@ Cara kerjanya **dirancang hemat revoke**: dicek dulu dari halaman **Review kelua
 Sama seperti skrip Batch Otomatis — memakai key `localStorage` yang sama (`fasih_rate_limit`), jadi kalau salah satu skrip kena 429, jeda berlaku untuk keduanya sekaligus. Level kecepatan juga otomatis turun satu tingkat tiap kena 429.
 
 ---
+
+## 3. `fasih-koreksi-r27.user.js` — Koreksi Pendapatan R.27
+
+Panel: tombol **"27 Koreksi Pendapatan"** di kiri bawah, atau **Alt+9**. Bisa mulai dari halaman FASIH mana saja, karena tiap dokumen dibuka lewat kolom `link` di Excel.
+
+**Kolom Excel**: `link`, `nilai_pendapatan`, `pendapatan_lain` (nilai lama), `R.27a`, `R.27b` (nilai baru). Kolom opsional yang ikut ditampilkan: `nama_usaha`, `idsbr`, `kec`, `desa`, `nm_sls`, `assignment_status_alias`. Baris dengan link yang sama digabung jadi satu dokumen (keluarga dengan beberapa usaha).
+
+**Alur per dokumen**: Buka → (opsional) cek di Review → Edit/Revoke → ganti 27.a & 27.b → Kirim → Approve.
+- **Dokumen keluarga**: masuk Blok II, kartu usaha dicek satu per satu. **Dokumen usaha tunggal**: langsung ke satu-satunya kartu.
+- Kartu yang benar dikenali dari **nilai lamanya** (27.a & 27.b sama persis dengan Excel). Kalau nilainya sudah sama dengan nilai baru, kartu itu dianggap sudah sesuai. Kalau tidak ada yang persis sama, dipakai jumlah 27.a+27.b yang sama ditambah nama yang mirip (atau memang cuma ada satu kartu). Kalau tetap tidak cocok, kartu **tidak diubah** dan dokumennya ditandai "Perlu cek".
+- **Cek dulu di Review** (default aktif): dokumen yang nilainya sudah benar tidak di-revoke sama sekali.
+- **Galat**: default-nya berhenti dan ditandai "Perlu cek". Aktifkan "Submit Paksa kalau ada galat" kalau galatnya memang boleh diabaikan.
+- **Mode uji** (🧪 Uji 1 dokumen): berhenti tepat sebelum Kirim, lalu pilih "✓ Kirim sekarang" atau "Lewati".
 
 ## Catatan
 
