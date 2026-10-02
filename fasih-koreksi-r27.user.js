@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi R.27 - Pendapatan (27.a / 27.b)
 // @namespace    hanif-bps-hst
-// @version      1.0
+// @version      1.1
 // @description  Baca Excel koreksi, buka tiap dokumen, ganti 27.a (nilai_pendapatan) = R.27a dan 27.b (pendapatan_lain) = R.27b di kartu usaha yang tepat, lalu Kirim & Approve. Dokumen keluarga: kartu dicari di Blok II; dokumen usaha tunggal: langsung ke kartunya.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -194,6 +194,8 @@
   function parseNum(text) {
     let s = String(text ?? "").trim();
     if (!s) return null;
+    // "400.000" = empat ratus ribu (titik ribuan), bukan 400 desimal
+    if (/^-?\d{1,3}(\.\d{3})+$/.test(s)) return Number(s.replace(/\./g, ""));
     if (/^-?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(s)) return Math.round(Number(s)); // angka mentah dari Excel
     s = s.replace(/[.,]\d{1,2}$/, ""); // buang desimal ",00"
     const d = s.replace(/[^\d-]/g, "");
@@ -1596,5 +1598,5 @@
     }
   }, 700);
 
-  console.log("[Koreksi R.27 v1.0] Aktif. Tombol di kiri bawah (Alt+9).");
+  console.log("[Koreksi R.27 v1.1] Aktif. Tombol di kiri bawah (Alt+9).");
 })();
