@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH OSS -> Keluarga: Pindah + Tautkan
 // @namespace    hanif-bps-hst
-// @version      2.20
+// @version      2.21
 // @description  OSS dipindah ke SLS keluarga (⋮ > Ganti Wilayah), lalu dokumen keluarga dibuka: salin Blok P (alamat, no bangunan, geotag) dan pilih OSS di "Pilih UMKM dalam satu SLS". Ada -> OSS Ditemukan + alamat & geotag keluarga; tidak ada / keluarga tanpa usaha -> OSS Tutup. Keduanya dikirim & di-approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -1487,6 +1487,7 @@
     console.log(`[OSS→Keluarga] ${msg}`);
     const r = loadRun();
     r.lastLog = msg;
+    r.logs = [...(r.logs || []), `${new Date().toLocaleTimeString("id-ID")} ${msg}`].slice(-5);
     saveRun(r);
     updateBar();
   }
@@ -1927,44 +1928,132 @@
     const style = document.createElement("style");
     style.id = "fgw-style";
     style.textContent = `
-      .fgw, .fgw * { box-sizing:border-box; font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
-      .fgw-overlay { position:fixed; inset:0; z-index:1000001; background:rgba(15,23,42,.35); display:flex; justify-content:flex-end; }
-      .fgw-sheet { background:#fff; color:#0f172a; width:min(760px,100vw); height:100vh; display:flex; flex-direction:column; box-shadow:-12px 0 40px rgba(15,23,42,.18); }
-      .fgw-head { padding:16px 20px; border-bottom:1px solid #e5e7eb; display:flex; align-items:center; gap:10px; }
-      .fgw-title { font-size:16px; font-weight:700; flex:1; }
-      .fgw-body { flex:1; overflow:auto; padding:16px 20px; display:flex; flex-direction:column; gap:14px; }
-      .fgw-card { border:1px solid #e5e7eb; border-radius:12px; padding:12px; }
-      .fgw-sec { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#64748b; margin-bottom:8px; }
+      .fgw, .fgw * { box-sizing:border-box; font-family:"Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+      .fgw { --ink:#0f1222; --muted:#6b7186; --line:#e7e8ef; --soft:#f6f7fb; --accent:#0d9488; --accent2:#0891b2; --accent-soft:#e6f7f5; color:var(--ink); }
+      .fgw button { font:inherit; }
+      .fgw-overlay { position:fixed; inset:0; z-index:1000001; background:rgba(15,18,34,.38); backdrop-filter:blur(3px); display:flex; justify-content:flex-end; }
+      .fgw-overlay.anim { animation:fgw-fade .18s ease; }
+      .fgw-overlay.anim .fgw-sheet { animation:fgw-in .22s ease; }
+      @keyframes fgw-fade { from { opacity:0; } to { opacity:1; } }
+      @keyframes fgw-in { from { transform:translateX(24px); opacity:.4; } to { transform:none; opacity:1; } }
+      @keyframes fgw-spin { to { transform:rotate(360deg); } }
+      @keyframes fgw-pulse { 0%,100% { opacity:1; } 50% { opacity:.5; } }
+      @keyframes fgw-up { from { transform:translate(-50%,12px); opacity:0; } to { transform:translate(-50%,0); opacity:1; } }
+      .fgw-sheet { background:var(--soft); width:min(860px,100vw); height:100vh; display:flex; flex-direction:column; box-shadow:-20px 0 60px rgba(15,18,34,.25); }
+      .fgw-head { position:relative; padding:20px 24px 18px; color:#fff; background:linear-gradient(120deg,#0f766e,#0891b2 55%,#4f46e5); overflow:hidden; }
+      .fgw-head:after { content:""; position:absolute; right:-60px; top:-80px; width:240px; height:240px; border-radius:50%; background:rgba(255,255,255,.09); pointer-events:none; }
+      .fgw-head > * { position:relative; z-index:1; }
+      .fgw-head-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+      .fgw-logo { width:44px; height:44px; border-radius:12px; background:rgba(255,255,255,.18); display:grid; place-items:center; font-size:20px; box-shadow:inset 0 0 0 1px rgba(255,255,255,.25); flex:none; }
+      .fgw-title { font-size:17px; font-weight:750; letter-spacing:-.2px; }
+      .fgw-subtitle { font-size:12.5px; opacity:.85; margin-top:2px; }
+      .fgw-head .fgw-btn { background:rgba(255,255,255,.14); border-color:rgba(255,255,255,.22); color:#fff; }
+      .fgw-head .fgw-btn:hover { background:rgba(255,255,255,.26); }
+      .fgw-prog { margin-top:16px; }
+      .fgw-prog .track { height:8px; border-radius:99px; background:rgba(255,255,255,.2); overflow:hidden; display:flex; }
+      .fgw-prog .seg { height:100%; transition:width .4s ease; }
+      .fgw-prog .lbl { display:flex; justify-content:space-between; gap:10px; font-size:12px; margin-top:7px; opacity:.92; flex-wrap:wrap; }
+      .fgw-prog .lbl i { font-style:normal; display:inline-flex; align-items:center; gap:5px; margin-right:10px; }
+      .fgw-prog .lbl i::before { content:""; width:8px; height:8px; border-radius:50%; background:var(--c); }
+      .fgw-body { flex:1; overflow:auto; padding:18px 22px 26px; display:flex; flex-direction:column; gap:16px; }
+      .fgw-card { background:#fff; border:1px solid var(--line); border-radius:16px; padding:16px; box-shadow:0 1px 2px rgba(15,18,34,.04); }
+      .fgw-card.run { background:linear-gradient(180deg,#f3fbfa,#fff); border-color:#99e3da; }
+      .fgw-sec { font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin-bottom:12px; }
+      .fgw-sub { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:14px 0 8px; }
+      .fgw-grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px 14px; }
       .fgw-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-      .fgw-btn { border:1px solid #e5e7eb; background:#fff; color:#0f172a; border-radius:8px; padding:7px 11px; font-size:12.5px; font-weight:600; cursor:pointer; }
-      .fgw-btn:hover { background:#f8fafc; }
-      .fgw-btn.primary { background:#0d9488; border-color:#0d9488; color:#fff; }
+      .fgw-field { display:flex; flex-direction:column; gap:4px; font-size:11.5px; font-weight:600; color:var(--muted); }
+      .fgw-btn { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); background:#fff; color:var(--ink); border-radius:10px; padding:8px 13px;
+        font-size:13px; font-weight:600; cursor:pointer; transition:all .15s; line-height:1.2; }
+      .fgw-btn:hover { background:#fafcfc; border-color:#c7cfd2; transform:translateY(-1px); }
+      .fgw-btn:disabled { opacity:.45; cursor:not-allowed; transform:none; }
+      .fgw-btn.primary { background:linear-gradient(120deg,var(--accent),var(--accent2)); border-color:transparent; color:#fff; box-shadow:0 6px 16px rgba(13,148,136,.3); }
+      .fgw-btn.primary:hover { box-shadow:0 8px 22px rgba(13,148,136,.4); }
+      .fgw-btn.soft { background:var(--accent-soft); border-color:#c6ece7; color:#0f766e; }
+      .fgw-btn.warn { color:#b45309; border-color:#fcd9a5; background:#fffbf3; }
+      .fgw-btn.ok { color:#4d7c0f; border-color:#cfe5a9; }
       .fgw-btn.danger { color:#dc2626; }
-      .fgw-btn.sm { padding:4px 8px; font-size:12px; }
-      .fgw-input { border:1px solid #e5e7eb; border-radius:8px; padding:6px 9px; font-size:12.5px; min-width:220px; }
-      .fgw-hint { font-size:12px; color:#64748b; }
-      .fgw-stats { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; }
-      .fgw-stat { border:1px solid #e5e7eb; border-radius:10px; padding:8px 10px; cursor:pointer; background:#fff; text-align:left; }
-      .fgw-stat.active { border-color:var(--c); box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 18%,transparent); }
-      .fgw-stat .n { font-size:18px; font-weight:700; color:var(--c); }
-      .fgw-stat .l { font-size:11px; color:#64748b; }
-      .fgw-item { display:grid; grid-template-columns:20px 1fr; gap:10px; border:1px solid #e5e7eb; border-radius:10px; padding:10px; font-size:12.5px; }
-      .fgw-item b { font-size:13px; }
-      .fgw-badge { font-size:11px; font-weight:600; padding:1px 7px; border-radius:999px; color:var(--c); background:color-mix(in srgb,var(--c) 12%,#fff); }
-      .fgw-meta { color:#64748b; margin-top:2px; }
-      .fgw-reason { margin-top:4px; color:var(--c); }
-      .fgw-launch { position:fixed; left:16px; bottom:64px; z-index:999999; border:none; border-radius:999px; padding:9px 14px; background:#0d9488; color:#fff; font:600 13px ui-sans-serif,system-ui,sans-serif; cursor:pointer; box-shadow:0 8px 24px rgba(13,148,136,.35); }
-      .fgw-bar { position:fixed; top:12px; right:12px; z-index:1000002; width:min(460px,94vw); background:#0f172a; color:#f8fafc; border-radius:14px; padding:12px 14px; display:flex; flex-wrap:wrap; gap:10px; align-items:center; box-shadow:0 16px 40px rgba(15,23,42,.35); font:13px ui-sans-serif,system-ui,sans-serif; }
-      .fgw-bar .s { color:#cbd5e1; font-size:12px; }
-      .fgw-bar .s.now { color:#fde68a; margin-top:4px; }
-      .fgw-bar .item { margin-top:6px; font-weight:600; }
-      .fgw-bar .steps { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
-      .fgw-bar .st { font-size:11px; padding:2px 7px; border-radius:999px; background:#1e293b; color:#94a3b8; }
-      .fgw-bar .st.done { color:#86efac; }
-      .fgw-bar .st.now { background:#16a34a; color:#fff; font-weight:600; }
-      .fgw-bar .fgw-btn { background:#1e293b; border-color:#334155; color:#f8fafc; }
+      .fgw-btn.ghost { border-color:transparent; background:transparent; color:var(--muted); }
+      .fgw-btn.sm { padding:5px 10px; font-size:12px; border-radius:8px; }
+      .fgw-btn.icon { width:34px; height:34px; justify-content:center; padding:0; font-size:16px; }
+      .fgw-btn .n { background:rgba(15,18,34,.08); border-radius:6px; padding:0 6px; font-size:11.5px; }
+      .fgw-btn.primary .n { background:rgba(255,255,255,.25); }
+      .fgw-input { border:1px solid var(--line); border-radius:9px; padding:8px 10px; font-size:13px; outline:none; background:#fff; color:var(--ink); min-width:0; width:100%; }
+      .fgw-input:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+      .fgw-hint { font-size:12px; color:var(--muted); line-height:1.5; }
+      .fgw-seg { display:inline-flex; background:#eef1f3; border-radius:10px; padding:3px; gap:2px; }
+      .fgw-seg label { position:relative; cursor:pointer; }
+      .fgw-seg input { position:absolute; opacity:0; pointer-events:none; }
+      .fgw-seg span { display:block; padding:6px 12px; border-radius:8px; font-size:12.5px; font-weight:600; color:var(--muted); }
+      .fgw-seg input:checked + span { background:#fff; color:var(--accent); box-shadow:0 1px 3px rgba(15,18,34,.12); }
+      .fgw-switch { display:flex; align-items:flex-start; gap:10px; padding:6px 0; font-size:13px; cursor:pointer; }
+      .fgw-switch input { display:none; }
+      .fgw-switch i { flex:none; width:36px; height:21px; border-radius:99px; background:#d5d7e3; position:relative; transition:background .15s; margin-top:1px; }
+      .fgw-switch i::after { content:""; position:absolute; top:2.5px; left:2.5px; width:16px; height:16px; border-radius:50%; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.2); transition:transform .15s; }
+      .fgw-switch input:checked + i { background:var(--accent); }
+      .fgw-switch input:checked + i::after { transform:translateX(15px); }
+      .fgw-switch small { display:block; color:var(--muted); font-size:11.5px; margin-top:1px; }
+      .fgw-details summary { cursor:pointer; font-size:12.5px; font-weight:600; color:var(--muted); list-style:none; margin-top:12px; }
+      .fgw-details summary::-webkit-details-marker { display:none; }
+      .fgw-details[open] summary { margin-bottom:6px; }
+      .fgw-stats { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; }
+      .fgw-stat { border:1px solid var(--line); border-radius:12px; padding:10px 12px; cursor:pointer; background:#fff; text-align:left; transition:all .15s; }
+      .fgw-stat:hover { border-color:#c7cfd2; transform:translateY(-1px); }
+      .fgw-stat.active { border-color:var(--c); box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 16%,transparent); }
+      .fgw-stat .n { font-size:21px; font-weight:780; color:var(--c); line-height:1.1; letter-spacing:-.5px; }
+      .fgw-stat .l { font-size:11.5px; color:var(--muted); margin-top:2px; display:flex; align-items:center; gap:5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .fgw-stat .l::before { content:""; flex:none; width:7px; height:7px; border-radius:50%; background:var(--c); }
+      .fgw-list { display:flex; flex-direction:column; gap:8px; }
+      .fgw-item { display:grid; grid-template-columns:22px 1fr; gap:12px; align-items:start; background:#fff; border:1px solid var(--line); border-left:3px solid var(--c,var(--line));
+        border-radius:12px; padding:12px 14px; font-size:12.5px; transition:all .15s; }
+      .fgw-item:hover { border-color:#c7cfd2; border-left-color:var(--c); box-shadow:0 2px 8px rgba(15,18,34,.06); }
+      .fgw-item input[type=checkbox] { width:17px; height:17px; margin-top:2px; accent-color:var(--accent); cursor:pointer; }
+      .fgw-name { font-weight:650; font-size:13.5px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+      .fgw-badge { font-size:11px; font-weight:650; padding:2px 8px; border-radius:999px; color:var(--c); background:color-mix(in srgb,var(--c) 11%,#fff); }
+      .fgw-yakin { font-size:11px; color:var(--muted); background:var(--soft); border:1px solid var(--line); border-radius:6px; padding:1px 6px; font-weight:500; }
+      .fgw-meta { color:var(--muted); margin-top:4px; line-height:1.5; }
+      .fgw-route { display:inline-flex; align-items:center; gap:6px; margin-top:7px; background:var(--soft); border:1px solid var(--line); border-radius:8px; padding:3px 8px; font-variant-numeric:tabular-nums; }
+      .fgw-route .from { color:var(--muted); }
+      .fgw-route .to { font-weight:700; color:var(--accent); }
+      .fgw-reason { margin-top:7px; padding:6px 9px; border-radius:8px; color:var(--c); background:color-mix(in srgb,var(--c) 8%,#fff); line-height:1.45; }
+      .fgw-links { margin-top:7px; display:flex; gap:6px; }
+      .fgw-links a { font-size:11.5px; font-weight:600; color:var(--accent); text-decoration:none; border:1px solid var(--line); border-radius:7px; padding:2px 8px; background:#fff; }
+      .fgw-links a:hover { border-color:var(--accent); }
+      .fgw-empty { text-align:center; color:var(--muted); font-size:13px; padding:30px 0; }
+      .fgw-launch { position:fixed; left:16px; bottom:64px; z-index:999999; display:flex; align-items:center; gap:8px; border:none; border-radius:999px; padding:10px 16px 10px 12px;
+        background:linear-gradient(120deg,#0d9488,#0891b2); color:#fff; font:650 13px "Inter",ui-sans-serif,system-ui,sans-serif; cursor:pointer;
+        box-shadow:0 10px 28px rgba(13,148,136,.4); transition:transform .15s; }
+      .fgw-launch:hover { transform:translateY(-2px); }
+      .fgw-launch b { background:rgba(255,255,255,.22); border-radius:7px; padding:2px 7px; font-size:11.5px; font-weight:800; }
+      .fgw-bar { position:fixed; left:50%; bottom:16px; transform:translateX(-50%); z-index:1000002; width:min(720px,94vw); background:rgba(17,19,36,.93); backdrop-filter:blur(12px);
+        color:#eef0ff; border-radius:18px; padding:14px 16px; box-shadow:0 20px 50px rgba(10,10,30,.45), inset 0 0 0 1px rgba(255,255,255,.07); font-size:13px; animation:fgw-up .25s ease; }
+      .fgw-bar .top { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+      .fgw-bar .dot { width:16px; height:16px; border-radius:50%; border:2.5px solid rgba(255,255,255,.2); border-top-color:#5eead4; flex:none; animation:fgw-spin .8s linear infinite; }
+      .fgw-bar .dot.paused { animation:none; border-color:rgba(251,191,36,.3); border-top-color:#fbbf24; }
+      .fgw-bar .t { font-weight:700; color:#fff; }
+      .fgw-bar .m { color:#9aa0c3; font-size:12px; }
+      .fgw-bar .notice { margin-top:10px; padding:8px 11px; border-radius:10px; background:rgba(251,191,36,.12); color:#fcd34d; font-size:12.5px; line-height:1.45; box-shadow:inset 0 0 0 1px rgba(251,191,36,.25); }
+      .fgw-bar .doc { margin-top:10px; font-weight:650; font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .fgw-bar .steps { display:flex; gap:4px; margin-top:10px; }
+      .fgw-bar .st { flex:1; min-width:0; text-align:center; font-size:10.5px; padding:5px 2px; border-radius:8px; background:rgba(255,255,255,.06); color:#7d83a8;
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:all .2s; }
+      .fgw-bar .st.done { color:#86efac; background:rgba(34,197,94,.1); }
+      .fgw-bar .st.now { color:#fff; background:linear-gradient(120deg,#0d9488,#0891b2); font-weight:650; box-shadow:0 4px 14px rgba(8,145,178,.35); }
+      .fgw-bar .st.wait { color:#1f1300; background:#fbbf24; font-weight:650; animation:fgw-pulse 1.6s infinite; }
+      .fgw-bar .log { margin-top:10px; color:#c7cbf0; font-size:11.5px; font-family:ui-monospace,Consolas,monospace; background:rgba(0,0,0,.28); border-radius:9px; padding:7px 10px; line-height:1.55; }
+      .fgw-bar .log div { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:.65; }
+      .fgw-bar .log div.last { opacity:1; color:#fde68a; }
+      .fgw-bar .log .tm { color:#9aa0c3; }
+      .fgw-bar .foot { display:flex; align-items:center; gap:6px; margin-top:11px; flex-wrap:wrap; }
+      .fgw-bar .prog { flex:1; min-width:120px; height:5px; border-radius:99px; background:rgba(255,255,255,.1); overflow:hidden; display:flex; }
+      .fgw-bar .prog i { display:block; height:100%; transition:width .4s; }
+      .fgw-bar .chip { font-size:11px; font-weight:650; padding:2px 7px; border-radius:99px; background:rgba(255,255,255,.07); color:var(--c); }
+      .fgw-bar .pct { font-size:12px; font-weight:700; color:#fff; min-width:34px; text-align:right; }
+      .fgw-bar .fgw-btn { background:rgba(255,255,255,.08); border-color:rgba(255,255,255,.12); color:#eef0ff; padding:6px 11px; font-size:12.5px; }
+      .fgw-bar .fgw-btn:hover { background:rgba(255,255,255,.16); }
       .fgw-bar .fgw-btn.go { background:#16a34a; border-color:#16a34a; }
-      .fgw-bar .fgw-btn.stop { background:transparent; border-color:#7f1d1d; color:#fca5a5; }
+      .fgw-bar .fgw-btn.stop { background:transparent; border-color:rgba(248,113,113,.45); color:#fca5a5; }
+      @media (max-width:720px) { .fgw-grid2 { grid-template-columns:1fr; } .fgw-stats { grid-template-columns:repeat(3,1fr); } }
     `;
     document.head.appendChild(style);
   }
@@ -1972,13 +2061,30 @@
   const esc = (s) =>
     String(s || "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]);
 
+  // Label pendek untuk langkah di bar status
+  const STEP_SHORT = {
+    move: "Pindah wilayah",
+    kel_open: "Buka keluarga",
+    kel_fill: "Blok P + UMKM",
+    kel_submit: "Kirim keluarga",
+    kel_approve: "Approve kel.",
+    oss_open: "Buka OSS",
+    oss_fill: "Isi OSS",
+    oss_submit: "Kirim OSS",
+    oss_approve: "Approve OSS",
+  };
+  const DONE_STATUSES = ["linked", "closed", "manual"];
+
+  let barSig = "";
   function updateBar() {
     const run = loadRun();
     let bar = document.getElementById("fgw-bar");
     if (!run.running) {
       if (bar) bar.remove();
+      barSig = "";
       return;
     }
+    if (!document.body) return;
     if (!bar) {
       ensureStyles();
       bar = document.createElement("div");
@@ -1987,6 +2093,7 @@
       bar.addEventListener("click", (e) => {
         const act = e.target.closest("[data-bar]")?.dataset.bar;
         if (act === "stop") stopRun();
+        if (act === "panel") openPanel();
         if (act === "send") userDecision = "send";
         if (act === "skip") userDecision = "skip";
         if (act === "go") {
@@ -2004,10 +2111,11 @@
         }
       });
       document.body.appendChild(bar);
+      barSig = "";
     }
     const c = counts();
     const rate = rateLimited()
-      ? `⛔ Server membatasi (429), lanjut sendiri ${new Date(rateInfo().until).toLocaleTimeString()}`
+      ? `⛔ Server membatasi (429) — lanjut sendiri ${new Date(rateInfo().until).toLocaleTimeString()}. Jangan refresh berulang-ulang.`
       : "";
     // Baris yang sedang dikerjakan & langkahnya
     const curId = (run.cur && run.cur.id) || (run.moving && run.moving.id);
@@ -2019,33 +2127,64 @@
     const sisaPindah = scope.filter((q) => q.status === "pending").length;
     const sisaTaut = scope.filter((q) => q.status === "moved").length;
     const fase = run.recheckGanda
-      ? `Cek ulang Ganda dari OSS Tutup · sisa ${scope.filter(needsGandaCheck).length}`
+      ? `Cek ulang Ganda · sisa ${scope.filter(needsGandaCheck).length}`
       : run.forceRedo
-        ? `Force submit ulang OSS ditemukan · sisa ${scope.filter(needsForce).length}`
+        ? `Force submit ulang OSS · sisa ${scope.filter(needsForce).length}`
         : run.onlyLink || (!sisaPindah && run.doLink)
           ? `Fase 2/2 · Tautkan · sisa ${sisaTaut}`
           : `Fase 1/2 · Pindah wilayah · sisa ${sisaPindah}${run.doLink ? ` (lalu tautkan ${sisaTaut + sisaPindah})` : ""}`;
+    const waiting = !!(run.paused || run.waiting);
     const steps = it
       ? `<div class="steps">${STEPS.filter(([k]) => (stepNow === "move" ? k === "move" : k !== "move"))
           .map(([k, label]) => {
             const i = STEPS.findIndex(([x]) => x === k);
-            const cls = i < iNow ? "done" : i === iNow ? "now" : "";
-            return `<span class="st ${cls}">${i < iNow ? "✓" : i === iNow ? "●" : "○"} ${label}</span>`;
+            const cls = i < iNow ? "done" : i === iNow ? (waiting ? "wait" : "now") : "";
+            return `<div class="st ${cls}" title="${esc(label)}">${i < iNow ? "✓ " : ""}${STEP_SHORT[k] || label}</div>`;
           })
           .join("")}</div>`
       : "";
-    bar.innerHTML = `<div style="flex:1;min-width:0;">
-        <div><b>OSS → Keluarga</b> · ${T().name}${run.testMode ? " · Mode uji" : ""}</div>
-        <div class="s">${esc(fase)}</div>
-        ${it ? `<div class="item">▶ ${esc(it.namaUsaha)} <span class="s">· ${esc(it.desa.name)} · SLS ${it.slsAsal} → ${it.slsTujuan}</span></div>` : ""}
-        ${steps}
-        <div class="s now">${esc(rate || run.lastLog || "")}${run.cur && run.phaseAt ? ` <span class="s">(${Math.round((Date.now() - run.phaseAt) / 1000)} dtk)</span>` : ""}</div>
-        ${run.lastStep ? `<div class="s">⏱ langkah sebelumnya — ${esc(run.lastStep)}</div>` : ""}
-        <div class="s">✓ ${c.linked} ditautkan · ${c.closed} OSS tutup (${c.ganda} ganda) · ${c.moved} dipindah · ${c.yellow} perlu cek · ${c.red} gagal · ${c.pending} belum dipindah</div>
+    // Progres: selesai (tertaut/tutup/manual) + sudah dipindah (setengah jalan)
+    const total = scope.length;
+    const nDone = scope.filter((q) => DONE_STATUSES.includes(q.status)).length;
+    const nMoved = scope.filter((q) => q.status === "moved").length;
+    const pct = (n) => (total ? (100 * n) / total : 0);
+    const logs = (run.logs || []).length ? run.logs : run.lastLog ? [run.lastLog] : [];
+    const timer = run.cur && run.phaseAt ? `${Math.round((Date.now() - run.phaseAt) / 1000)} dtk` : "";
+    // Digambar ulang hanya kalau isinya berubah (penghitung detik diperbarui di tempat) supaya tombol tidak berkedip
+    const sig = JSON.stringify([run.cur && run.cur.stage, curId, run.paused, run.waiting, logs, rate, run.lastStep, fase, c, nDone, nMoved, T().name, run.testMode]);
+    if (sig === barSig) {
+      const tm = bar.querySelector("[data-timer]");
+      if (tm) tm.textContent = timer;
+      return;
+    }
+    barSig = sig;
+    bar.innerHTML = `
+      <div class="top">
+        <span class="dot${waiting || rate ? " paused" : ""}"></span>
+        <div class="t">OSS → Keluarga</div>
+        <div class="m">${esc(fase)} · ${T().name}${run.testMode ? " · Mode uji" : ""}</div>
+        <span style="flex:1"></span>
+        ${run.paused ? `<button class="fgw-btn go" data-bar="go">✓ Kirim sekarang</button><button class="fgw-btn" data-bar="pass">Lewati</button>` : ""}
+        ${run.waiting ? `<button class="fgw-btn go" data-bar="send">✓ Kirim sekarang</button><button class="fgw-btn" data-bar="skip">Lewati</button>` : ""}
+        <button class="fgw-btn" data-bar="panel" title="Buka panel (Alt+8)">☰</button>
+        <button class="fgw-btn stop" data-bar="stop">■ Stop</button>
       </div>
-      ${run.paused ? `<button class="fgw-btn go" data-bar="go">✓ Kirim sekarang</button><button class="fgw-btn" data-bar="pass">Lewati</button>` : ""}
-      ${run.waiting ? `<button class="fgw-btn go" data-bar="send">✓ Kirim sekarang</button><button class="fgw-btn" data-bar="skip">Lewati</button>` : ""}
-      <button class="fgw-btn stop" data-bar="stop">Stop</button>`;
+      ${rate ? `<div class="notice">${esc(rate)}</div>` : ""}
+      ${it ? `<div class="doc">▶ ${esc(it.namaUsaha)} <span class="m">· ${esc(it.desa.name)} · SLS ${it.slsAsal} → ${it.slsTujuan}/${it.subslsTujuan}</span></div>` : ""}
+      ${steps}
+      <div class="log">
+        ${logs.map((l, i) => `<div class="${i === logs.length - 1 ? "last" : ""}">${esc(l)}${i === logs.length - 1 && timer ? ` <span class="tm">(<span data-timer>${timer}</span>)</span>` : ""}</div>`).join("") || "<div>…</div>"}
+        ${run.lastStep ? `<div class="tm">⏱ langkah sebelumnya — ${esc(run.lastStep)}</div>` : ""}
+      </div>
+      <div class="foot">
+        <div class="prog"><i style="width:${pct(nDone)}%;background:linear-gradient(90deg,#34d399,#5eead4)"></i><i style="width:${pct(nMoved)}%;background:#a78bfa"></i></div>
+        <span class="chip" style="--c:#86efac">✓ ${c.linked} tertaut</span>
+        <span class="chip" style="--c:#5eead4">${c.closed} tutup${c.ganda ? ` (${c.ganda} ganda)` : ""}</span>
+        <span class="chip" style="--c:#c4b5fd">${c.moved} dipindah</span>
+        ${c.yellow ? `<span class="chip" style="--c:#fcd34d">${c.yellow} cek</span>` : ""}
+        ${c.red ? `<span class="chip" style="--c:#fca5a5">${c.red} gagal</span>` : ""}
+        <span class="pct">${Math.round(pct(nDone))}%</span>
+      </div>`;
   }
 
   function counts() {
@@ -2091,6 +2230,7 @@
   const selected = new Set();
 
   function openPanel() {
+    const wasOpen = !!document.getElementById("fgw-panel"); // disegarkan ulang: tanpa animasi masuk
     document.getElementById("fgw-panel")?.remove();
     ensureStyles();
     const queue = loadQueue();
@@ -2107,62 +2247,119 @@
         const isGanda = q.linkResult === "ganda";
         const color = isGanda ? STATUS_COLOR.ganda : STATUS_COLOR[q.status] || "#64748b";
         const label = isGanda ? "OSS Ganda" : STATUS_LABEL[q.status];
-        return `<div class="fgw-item" data-text="${esc(normalize(`${q.namaUsaha} ${q.desa.name} ${q.kec.name} ${q.id}`))}">
+        return `<div class="fgw-item" style="--c:${color}" data-text="${esc(normalize(`${q.namaUsaha} ${q.desa.name} ${q.kec.name} ${q.id}`))}">
           <input type="checkbox" data-sel="${q.id}" ${selected.has(q.id) ? "checked" : ""}>
-          <div><b>${esc(q.namaUsaha)}</b> <span class="fgw-badge" style="--c:${color}">${label}</span> <span class="fgw-hint">${esc(q.yakin)}</span>
-            <div class="fgw-meta">${esc(q.kec.name)} › ${esc(q.desa.name)} · SLS ${q.slsAsal}/${q.subslsAsal} → <b>${q.slsTujuan}/${q.subslsTujuan}</b> ${esc(q.slsTujuanNama)} · keluarga: ${esc(q.kelAnggota)} · baris ${q.row}</div>
-            ${q.reason ? `<div class="fgw-reason" style="--c:${color}">${esc(q.reason)}</div>` : ""}
-            <div class="fgw-meta"><a href="${esc(q.linkOss)}" target="_blank">OSS ↗</a> · <a href="${esc(q.linkKel)}" target="_blank">Keluarga ↗</a></div>
+          <div style="min-width:0;">
+            <div class="fgw-name">${esc(q.namaUsaha)} <span class="fgw-badge">${label}</span>${q.yakin ? `<span class="fgw-yakin">${esc(q.yakin)}</span>` : ""}</div>
+            <div class="fgw-meta">📍 ${esc(q.kec.name)} › ${esc(q.desa.name)} · keluarga: ${esc(q.kelAnggota || "-")} · baris ${q.row}</div>
+            <div class="fgw-route"><span class="from">SLS ${q.slsAsal}/${q.subslsAsal}</span>→<span class="to">${q.slsTujuan}/${q.subslsTujuan}</span>${q.slsTujuanNama ? `<span class="from">${esc(q.slsTujuanNama)}</span>` : ""}</div>
+            ${q.reason ? `<div class="fgw-reason">${esc(q.reason)}</div>` : ""}
+            <div class="fgw-links">${q.linkOss ? `<a href="${esc(q.linkOss)}" target="_blank">OSS ↗</a>` : ""}${q.linkKel ? `<a href="${esc(q.linkKel)}" target="_blank">Keluarga ↗</a>` : ""}</div>
           </div></div>`;
       })
       .join("");
 
+    const total = queue.length;
+    const pct = (n) => (total ? (100 * (n || 0)) / total : 0);
+    const nDone = (c.linked || 0) + (c.closed || 0) + (c.manual || 0);
+    const nIssue = (c.yellow || 0) + (c.red || 0);
+    const progHtml = total
+      ? `<div class="fgw-prog">
+          <div class="track">
+            <div class="seg" style="width:${pct(c.linked)}%;background:#86efac"></div>
+            <div class="seg" style="width:${pct((c.closed || 0) + (c.manual || 0))}%;background:#5eead4"></div>
+            <div class="seg" style="width:${pct(c.moved)}%;background:#c4b5fd"></div>
+            <div class="seg" style="width:${pct(nIssue)}%;background:#fcd34d"></div>
+          </div>
+          <div class="lbl">
+            <span><i style="--c:#86efac">${c.linked} tertaut</i><i style="--c:#5eead4">${(c.closed || 0) + (c.manual || 0)} tutup/manual</i><i style="--c:#c4b5fd">${c.moved} dipindah</i><i style="--c:#fcd34d">${nIssue} perlu cek</i></span>
+            <b>${nDone} / ${total} selesai · ${Math.round(pct(nDone))}%</b>
+          </div>
+        </div>`
+      : "";
+
     const overlay = document.createElement("div");
     overlay.id = "fgw-panel";
-    overlay.className = "fgw fgw-overlay";
+    overlay.className = `fgw fgw-overlay${wasOpen ? "" : " anim"}`;
     overlay.innerHTML = `<div class="fgw-sheet">
-      <div class="fgw-head"><div class="fgw-title">🔀 OSS → Keluarga: Pindah + Tautkan</div>
-        ${queue.length ? `<button class="fgw-btn sm" data-act="report">⬇ Laporan CSV</button><button class="fgw-btn sm" data-act="export" title="Ekspor antrean apa adanya (semua status/progres) buat dilanjutkan di laptop lain">⬇ Ekspor Antrean</button>` : ""}
-        <button class="fgw-btn sm" data-act="import" title="Muat file Ekspor Antrean dari laptop lain, lanjutkan persis dari situ">📤 Impor Antrean</button>
-        <button class="fgw-btn sm" data-act="close">✕</button></div>
-      <div class="fgw-body">
-        <div class="fgw-card"><div class="fgw-sec">Persiapan</div>
-          <div class="fgw-row"><button class="fgw-btn ${queue.length ? "" : "primary"}" data-act="load">📥 Muat Excel target</button>
-            <span class="fgw-hint">sheet "Pindah" · kolom proses = 1</span></div>
-          <div class="fgw-row" style="margin-top:8px;"><span class="fgw-hint" style="width:70px;">Pengawas</span><input class="fgw-input" data-conf="pengawas" value="${esc(conf.pengawas)}"></div>
-          <div class="fgw-row" style="margin-top:6px;"><span class="fgw-hint" style="width:70px;">Pencacah</span><input class="fgw-input" data-conf="pencacah" value="${esc(conf.pencacah)}"></div>
-          <div class="fgw-row" style="margin-top:8px;"><span class="fgw-hint" style="width:70px;">Kecepatan</span>
-            ${SPEEDS.map((sp, i) => `<label class="fgw-hint"><input type="radio" name="fgw-speed" value="${i}" ${Number(conf.speed) === i ? "checked" : ""}> ${sp.name}</label>`).join(" ")}
-            <span class="fgw-hint">(turun sendiri kalau server membalas 429)</span></div>
-          <label class="fgw-hint" style="display:block;margin-top:8px;"><input type="checkbox" data-flag="doLink" ${conf.doLink ? "checked" : ""}> Setelah dipindah: buka keluarga, pilih UMKM, isi OSS (Ditemukan/Tutup), kirim</label>
-          <label class="fgw-hint" style="display:block;margin-top:4px;"><input type="checkbox" data-flag="approve" ${conf.approve ? "checked" : ""}> Approve keluarga & OSS setelah kirim</label>
-          <div class="fgw-row" style="margin-top:6px;"><span class="fgw-hint" style="width:70px;">ID survei</span><input class="fgw-input" data-conf="surveyPrefix" value="${esc(conf.surveyPrefix)}" style="min-width:300px;"></div>
-          <label class="fgw-hint" style="display:block;margin-top:8px;"><input type="checkbox" data-strict ${conf.strictId ? "checked" : ""}> Wajib cocok assignment_id (lebih aman, bisa lebih banyak "perlu cek")</label>
-        </div>
-        ${queue.length ? `
-        <div class="fgw-stats" style="grid-template-columns:repeat(4,1fr);">${stat("pending", "Belum dipindah", STATUS_COLOR.pending)}${stat("moved", "Dipindah, belum ditautkan", STATUS_COLOR.moved)}${stat("linked", "Ditautkan", STATUS_COLOR.linked)}${stat("closed", "OSS tutup", STATUS_COLOR.closed)}${stat("ganda", "OSS Ganda", STATUS_COLOR.ganda)}${stat("yellow", "Perlu cek", STATUS_COLOR.yellow)}${stat("red", "Gagal", STATUS_COLOR.red)}${stat("manual", "Selesai manual", STATUS_COLOR.manual)}${stat("tested", "Uji", STATUS_COLOR.tested)}${stat("all", "Semua", "#0f172a")}</div>
-        <div class="fgw-card"><div class="fgw-sec">Jalankan</div>
-          <div class="fgw-row">
-            <button class="fgw-btn primary" data-act="test">🧪 Uji 1 (berhenti sebelum tiap kirim)</button>
-            <button class="fgw-btn" data-act="link">🔗 Tautkan yang sudah dipindah (${c.moved})</button>
-            <button class="fgw-btn" data-act="force" style="border-color:#f59e0b;color:#b45309;">⚡ Force submit ulang OSS ditemukan (${queue.filter(needsForce).length})</button>
-            <button class="fgw-btn" data-act="gandaCheck" style="border-color:#b45309;color:#b45309;">🔎 Cek ulang Ganda dari OSS Tutup (${queue.filter(needsGandaCheck).length})</button>
-            <button class="fgw-btn" data-act="sel">▶ Yang dicentang (<span data-selcount>${selected.size}</span>)</button>
-            ${[5, 20].map((n) => `<button class="fgw-btn" data-act="run" data-n="${n}">▶ ${n}</button>`).join("")}
-            <button class="fgw-btn" data-act="run" data-n="0">▶ Semua (${c.pending + (conf.doLink ? c.moved : 0)})</button>
+      <div class="fgw-head">
+        <div class="fgw-head-row">
+          <div class="fgw-logo">🔀</div>
+          <div style="flex:1;min-width:180px;">
+            <div class="fgw-title">OSS → Keluarga</div>
+            <div class="fgw-subtitle">Pindah wilayah → tautkan UMKM → kirim & approve · ${total} baris antrean</div>
           </div>
-          <div class="fgw-hint" style="margin-top:6px;">Mulai dari halaman daftar assignment. Tombol ▶ dan 🔗 berjalan tanpa berhenti: pindah → keluarga (revoke, pilih UMKM, kirim, approve) → OSS (isi, kirim, approve). Urutan: SEMUA pindah wilayah dulu, baru ditautkan satu per satu.</div>
-          <div class="fgw-hint" style="margin-top:4px;">🔎 Cek ulang Ganda: cek ulang baris "OSS tutup" yang alasannya "tidak ada di pilihan UMKM" (kartu usaha tanpa isian Pilih UMKM, atau isiannya terkunci, dulu salah dibaca Tutup, seharusnya Ganda). Dibaca dulu dari halaman <b>Review keluarga tanpa revoke</b> — kalau memang tetap Tutup, baris tidak disentuh sama sekali; kalau Ganda, cuma OSS-nya yang direvoke & diperbaiki (keluarga tidak disentuh); keluarga baru direvoke kalau ternyata ada kecocokan UMKM baru.</div>
+          ${total ? `<button class="fgw-btn sm" data-act="report">⬇ Laporan CSV</button><button class="fgw-btn sm" data-act="export" title="Ekspor antrean apa adanya (semua status/progres) buat dilanjutkan di laptop lain">💾 Ekspor</button>` : ""}
+          <button class="fgw-btn sm" data-act="import" title="Muat file Ekspor Antrean dari laptop lain, lanjutkan persis dari situ">📂 Impor</button>
+          <button class="fgw-btn icon" data-act="close" title="Tutup">✕</button>
         </div>
-        <div class="fgw-row"><input class="fgw-input" data-search placeholder="Cari nama / desa / id…" style="flex:1;" value="${esc(panelSearch)}">
-          <button class="fgw-btn sm" data-act="selall">☑ Centang semua tampil (${shown.length})</button>
-          <button class="fgw-btn sm" data-act="selnone">☐ Kosongkan centang</button>
-          <button class="fgw-btn sm" data-act="reset">↻ Gagal/perlu cek → belum</button>
-          <button class="fgw-btn sm" style="border-color:#4d7c0f;color:#4d7c0f;" data-act="markdone">✓ Tandai selesai (dicentang, <span data-selcount2>${selected.size}</span>)</button>
-          <button class="fgw-btn sm danger" data-act="clear">🗑 Hapus antrean</button></div>
-        <div class="fgw-hint" style="margin-top:-6px;">Klik salah satu kotak statistik di atas dulu buat filter per status/Ganda, baru "Centang semua tampil" — lalu jalankan lewat "▶ Yang dicentang", atau kalau baris Gagal/Perlu cek itu sudah kamu perbaiki sendiri manual di FASIH, klik "✓ Tandai selesai" supaya tidak dihitung lagi sebagai perlu dikerjakan.</div>
-        <div style="display:flex;flex-direction:column;gap:6px;">${rows || '<div class="fgw-hint">Tidak ada baris.</div>'}</div>
-        ${shown.length >= 150 ? '<div class="fgw-hint">Menampilkan 150 baris pertama · lengkapnya di Laporan CSV</div>' : ""}` : '<div class="fgw-hint">Belum ada antrean. Klik <b>Muat Excel target</b>.</div>'}
+        ${progHtml}
+      </div>
+      <div class="fgw-body">
+        ${total ? `<div class="fgw-stats">${stat("pending", "Belum dipindah", STATUS_COLOR.pending)}${stat("moved", "Dipindah", STATUS_COLOR.moved)}${stat("linked", "Ditautkan", STATUS_COLOR.linked)}${stat("closed", "OSS tutup", STATUS_COLOR.closed)}${stat("ganda", "OSS Ganda", STATUS_COLOR.ganda)}${stat("yellow", "Perlu cek", STATUS_COLOR.yellow)}${stat("red", "Gagal", STATUS_COLOR.red)}${stat("manual", "Selesai manual", STATUS_COLOR.manual)}${stat("tested", "Uji", STATUS_COLOR.tested)}${stat("all", "Semua", "#0f172a")}</div>` : ""}
+
+        <div class="fgw-card">
+          <div class="fgw-sec">Persiapan</div>
+          <div class="fgw-row">
+            <button class="fgw-btn ${total ? "" : "primary"}" data-act="load">📥 Muat Excel target</button>
+            <span class="fgw-hint">sheet "Pindah" · kolom proses = 1</span>
+          </div>
+          <div class="fgw-grid2" style="margin-top:14px;">
+            <label class="fgw-field">Pengawas<input class="fgw-input" data-conf="pengawas" value="${esc(conf.pengawas)}"></label>
+            <label class="fgw-field">Pencacah<input class="fgw-input" data-conf="pencacah" value="${esc(conf.pencacah)}"></label>
+          </div>
+          <div class="fgw-sub">Kecepatan</div>
+          <div class="fgw-row">
+            <div class="fgw-seg">${SPEEDS.map((sp, i) => `<label><input type="radio" name="fgw-speed" value="${i}" ${Number(conf.speed) === i ? "checked" : ""}><span>${sp.name}</span></label>`).join("")}</div>
+            <span class="fgw-hint">turun sendiri kalau server membalas 429</span>
+          </div>
+          <div class="fgw-sub">Opsi</div>
+          <label class="fgw-switch"><input type="checkbox" data-flag="doLink" ${conf.doLink ? "checked" : ""}><i></i><span>Setelah dipindah: tautkan & kirim<small>Buka keluarga, pilih UMKM, isi OSS (Ditemukan/Tutup/Ganda), kirim</small></span></label>
+          <label class="fgw-switch"><input type="checkbox" data-flag="approve" ${conf.approve ? "checked" : ""}><i></i><span>Approve keluarga & OSS setelah kirim</span></label>
+          <label class="fgw-switch"><input type="checkbox" data-strict ${conf.strictId ? "checked" : ""}><i></i><span>Wajib cocok assignment_id<small>Lebih aman, tapi bisa lebih banyak "perlu cek"</small></span></label>
+          <details class="fgw-details">
+            <summary>⚙ Lanjutan</summary>
+            <label class="fgw-field">ID survei (awalan URL /app/assignment/…)<input class="fgw-input" data-conf="surveyPrefix" value="${esc(conf.surveyPrefix)}"></label>
+          </details>
+        </div>
+
+        ${total ? `
+        <div class="fgw-card run">
+          <div class="fgw-sec">Jalankan</div>
+          <div class="fgw-row">
+            <button class="fgw-btn soft" data-act="test">🧪 Uji 1</button>
+            <button class="fgw-btn" data-act="sel">▶ Yang dicentang <span class="n" data-selcount>${selected.size}</span></button>
+            ${[5, 20].map((n) => `<button class="fgw-btn" data-act="run" data-n="${n}">▶ ${n}</button>`).join("")}
+            <button class="fgw-btn primary" data-act="run" data-n="0">⚡ Semua <span class="n">${c.pending + (conf.doLink ? c.moved : 0)}</span></button>
+          </div>
+          <div class="fgw-hint" style="margin-top:8px;">Mulai dari halaman daftar assignment. Semua pindah wilayah dulu, baru ditautkan satu per satu: keluarga (revoke, pilih UMKM, kirim, approve) → OSS (isi, kirim, approve). Uji 1 berhenti sebelum tiap Kirim.</div>
+          <div class="fgw-sub">Lanjutan & perbaikan</div>
+          <div class="fgw-row">
+            <button class="fgw-btn" data-act="link">🔗 Tautkan yang sudah dipindah <span class="n">${c.moved}</span></button>
+            <button class="fgw-btn warn" data-act="force">⚡ Force submit ulang OSS ditemukan <span class="n">${queue.filter(needsForce).length}</span></button>
+            <button class="fgw-btn warn" data-act="gandaCheck">🔎 Cek ulang Ganda dari OSS Tutup <span class="n">${queue.filter(needsGandaCheck).length}</span></button>
+          </div>
+          <details class="fgw-details">
+            <summary>ⓘ Cara kerja "Cek ulang Ganda"</summary>
+            <div class="fgw-hint">Mengecek ulang baris "OSS tutup" yang alasannya "tidak ada di pilihan UMKM" (kartu usaha tanpa isian Pilih UMKM, atau isiannya terkunci — dulu salah dibaca Tutup, seharusnya Ganda). Dibaca dulu dari halaman <b>Review keluarga tanpa revoke</b>: kalau tetap Tutup, baris tidak disentuh; kalau Ganda, cuma OSS-nya yang direvoke & diperbaiki; keluarga baru direvoke kalau ternyata ada kecocokan UMKM baru.</div>
+          </details>
+        </div>
+
+        <div>
+          <div class="fgw-row" style="margin-bottom:8px;">
+            <input class="fgw-input" data-search placeholder="Cari nama / desa / id…" style="flex:1;min-width:200px;width:auto;" value="${esc(panelSearch)}">
+            <button class="fgw-btn sm" data-act="selall">☑ Centang yang tampil (${shown.length})</button>
+            <button class="fgw-btn sm ghost" data-act="selnone">Kosongkan</button>
+          </div>
+          <div class="fgw-row" style="margin-bottom:10px;">
+            <button class="fgw-btn sm ok" data-act="markdone" title="Baris Gagal/Perlu cek yang sudah kamu perbaiki sendiri di FASIH">✓ Tandai selesai manual <span class="n" data-selcount2>${selected.size}</span></button>
+            <button class="fgw-btn sm" data-act="reset">↻ Gagal/perlu cek → belum</button>
+            <span style="flex:1"></span>
+            <button class="fgw-btn sm ghost danger" data-act="clear">🗑 Hapus antrean</button>
+          </div>
+          <div class="fgw-list">${rows || '<div class="fgw-empty">Tidak ada baris di kategori ini.</div>'}</div>
+          ${shown.length >= 150 ? '<div class="fgw-hint" style="text-align:center;margin-top:8px;">Menampilkan 150 baris pertama · lengkapnya di Laporan CSV</div>' : ""}
+        </div>` : '<div class="fgw-empty">Belum ada antrean.<br>Mulai dengan <b>📥 Muat Excel target</b>.</div>'}
       </div>
       <input data-file type="file" accept=".xlsx" style="display:none">
       <input data-file-json type="file" accept=".json" style="display:none"></div>`;
@@ -2364,7 +2561,8 @@
     const btn = document.createElement("button");
     btn.id = "fgw-launch";
     btn.className = "fgw-launch";
-    btn.textContent = "🔀 OSS → Keluarga";
+    const left = loadQueue().filter((q) => q.status === "pending" || q.status === "moved").length;
+    btn.innerHTML = `🔀 OSS → Keluarga${left ? ` <b>${left}</b>` : ""}`;
     btn.title = "Buka panel (Alt+8)";
     btn.onclick = openPanel;
     document.body.appendChild(btn);
@@ -2410,5 +2608,5 @@
     refreshPanelLive();
   }, 700);
 
-  console.log("[OSS → Keluarga v2.20] Aktif. Tombol di kiri bawah (Alt+8).");
+  console.log("[OSS → Keluarga v2.21] Aktif. Tombol di kiri bawah (Alt+8).");
 })();
