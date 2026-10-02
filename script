@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Batch Otomatis - Tahap 1 + 2: Excel -> Cari -> Isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      3.21
+// @version      3.22
 // @description  Membaca Excel penyisiran (Tindak Lanjut Fasih = false), mencari & membuka dokumen dengan filter wilayah, lalu mengisi Blok P + Blok II (usaha lama / tambah baru) dan mengirim tanpa konfirmasi. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -3042,8 +3042,8 @@
     if (!note && document.body) {
       note = document.createElement("div");
       note.id = "fasih-rate-note";
-      note.style.cssText =
-        "position:fixed;top:12px;right:12px;z-index:1000003;max-width:340px;background:#7f1d1d;color:#fff;padding:10px 14px;border-radius:10px;font:13px/1.4 system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.25)";
+      ensureStyles();
+      note.className = "fo fo-rate";
       document.body.appendChild(note);
     }
     if (note) {
@@ -4438,6 +4438,10 @@
     console.log(`[Tahap 2] ${message}`);
     const run = loadRun();
     run.lastLog = message;
+    run.logs = [
+      ...(run.logs || []),
+      `${new Date().toLocaleTimeString("id-ID")} ${message}`,
+    ].slice(-5);
     saveRun(run);
     updateRunBar();
   }
@@ -7485,6 +7489,12 @@
       itemIds: [],
       listUrl: location.href,
       navAt: 0,
+      total: onlyIds
+        ? onlyIds.length
+        : limit ||
+          loadQueue().filter((q) => q.status === "pending" || q.status === "green")
+            .length,
+      logs: [],
     });
     document.getElementById("fasih-t1-panel")?.remove();
     const what = onlyIds
@@ -7519,6 +7529,7 @@
       bar.addEventListener("click", (e) => {
         const act = e.target.closest("[data-bar]")?.dataset.bar;
         if (act === "stop") stopRun();
+        if (act === "panel") openPanel();
         if (act === "pause") setUserPause(true, "Dijeda oleh Anda");
         if (act === "resume") setUserPause(false);
         if (act === "send") setPhase("submit");
@@ -7562,27 +7573,68 @@
       : up.on
         ? `${up.reason || "Dijeda"} — perbaiki form bila perlu, lalu klik "▶ Lanjut"${up.resumeAt ? ` (lanjut sendiri ${new Date(up.resumeAt).toLocaleTimeString()})` : ""}`
         : "";
-    bar.innerHTML = `<span class="dot${paused || hold || up.on ? " paused" : ""}"></span>
-      <div style="flex:1;min-width:0;">
-        <div class="t">${up.on ? "⏸ Dijeda · " : ""}${PHASE_LABEL[run.phase] || escapeHtml(run.phase)} · ${currentSpeed().name}${run.testMode ? " · Mode uji" : ""} · ${run.processed || 0}${target ? " / " + target : ""} baris</div>
-        <div class="s" style="${hold || up.on ? "white-space:normal;color:#fcd34d;" : ""}">${escapeHtml(up.on ? upText : hold ? run.holdReason : run.lastLog || "")}</div>
-        <div class="c">✓ ${c.done || 0} terkirim · ${c.yellow || 0} kuning · ${c.red || 0} merah</div>
+    // Langkah per dokumen: "Menunggu Anda" (mode uji) = di depan tombol Kirim
+    const STEPS = [
+      ["find", "Cari dokumen"],
+      ["review", "Buka / edit"],
+      ["fill", "Isi Blok P + II"],
+      ["submit", "Kirim"],
+      ["approve", "Approve"],
+    ];
+    const stepKey = paused ? "submit" : hold ? "fill" : run.phase;
+    const iNow = STEPS.findIndex(([k]) => k === stepKey);
+    const items = loadQueue().filter((q) => (run.itemIds || []).includes(q.id));
+    const docName = items.length
+      ? `${items[0].krt}${items.length > 1 ? ` · ${items.length} usaha` : ` · ${items[0].namaUsaha || ""}`}`
+      : "";
+    const total = target || run.total || 0;
+    const done = run.processed || 0;
+    const pct = total ? Math.min(100, Math.round((100 * done) / total)) : 0;
+    const notice = up.on ? upText : hold ? run.holdReason : "";
+    const logs = (run.logs || []).length
+      ? run.logs
+      : run.lastLog
+        ? [run.lastLog]
+        : [];
+    bar.innerHTML = `
+      <div class="top">
+        <span class="dot${paused || hold || up.on ? " paused" : ""}"></span>
+        <div class="t">${up.on ? "⏸ Dijeda · " : ""}${PHASE_LABEL[run.phase] || escapeHtml(run.phase)}</div>
+        <div class="m">${currentSpeed().name}${run.testMode ? " · Mode uji" : ""} · ${done}${total ? " / " + total : ""} baris</div>
+        <span style="flex:1"></span>
+        ${
+          paused
+            ? `<button class="fo-btn go" data-bar="send">✓ Kirim sekarang</button>
+          <button class="fo-btn" data-bar="skip">Lewati</button>`
+            : ""
+        }
+        ${hold ? `<button class="fo-btn go" data-bar="next">Lanjut ke berikutnya →</button>` : ""}
+        ${!paused && !hold && !up.rate ? (up.on ? `<button class="fo-btn go" data-bar="resume">▶ Lanjut</button>` : `<button class="fo-btn" data-bar="pause">⏸ Jeda</button>`) : ""}
+        <button class="fo-btn" data-bar="panel" title="Buka panel (Alt+7)">☰</button>
+        <button class="fo-btn stop" data-bar="stop">■ Stop</button>
       </div>
-      ${
-        paused
-          ? `<button class="fo-btn go" data-bar="send">✓ Kirim sekarang</button>
-        <button class="fo-btn" data-bar="skip">Lewati</button>`
-          : ""
-      }
-      ${hold ? `<button class="fo-btn go" data-bar="next">Lanjut ke berikutnya →</button>` : ""}
-      ${!paused && !hold && !up.rate ? (up.on ? `<button class="fo-btn go" data-bar="resume">▶ Lanjut</button>` : `<button class="fo-btn" data-bar="pause">⏸ Jeda</button>`) : ""}
-      <button class="fo-btn stop" data-bar="stop">Stop</button>`;
+      ${notice ? `<div class="notice">${escapeHtml(notice)}</div>` : ""}
+      ${docName ? `<div class="doc">▶ ${escapeHtml(docName)}${run.docKode ? ` <span class="m">· ${escapeHtml(run.docKode)}</span>` : ""}</div>` : ""}
+      <div class="steps">${STEPS.map(
+        ([, label], i) =>
+          `<div class="st ${i < iNow ? "done" : i === iNow ? (paused || hold ? "wait" : "now") : ""}">${i < iNow ? "✓ " : ""}${label}</div>`,
+      ).join("")}</div>
+      <div class="log">${logs.map((l) => `<div>${escapeHtml(l)}</div>`).join("") || "<div>…</div>"}</div>
+      <div class="foot">
+        <div class="prog"><i style="width:${pct}%"></i></div>
+        <span class="chip ok">✓ ${c.done || 0}</span>
+        <span class="chip warn">● ${c.yellow || 0}</span>
+        <span class="chip bad">● ${c.red || 0}</span>
+        ${total ? `<span class="pct">${pct}%</span>` : ""}
+      </div>`;
   }
 
   setInterval(() => {
     runnerTick();
     if (loadRun().running && !document.getElementById("fasih-t2-bar"))
       updateRunBar();
+    // Panel dibiarkan terbuka: jumlah & progress bar tetap ikut berjalan
+    if (document.getElementById("fasih-t1-panel")) refreshPanelCounts();
   }, 1500);
 
   // =========================================================================
@@ -7615,6 +7667,23 @@
         const k = el.dataset.countKey;
         el.textContent = k === "all" ? loadQueue().length : c[k] || 0;
       });
+    const prog = document.querySelector("#fasih-t1-panel [data-prog]");
+    if (prog) {
+      const total = loadQueue().length;
+      const pct = (n) => (total ? (100 * (n || 0)) / total : 0);
+      const issues = (c.yellow || 0) + (c.red || 0);
+      prog.innerHTML = `
+        <div class="track">
+          <div class="seg" style="width:${pct(c.done)}%;background:#86efac"></div>
+          <div class="seg" style="width:${pct(c.filled)}%;background:#67e8f9"></div>
+          <div class="seg" style="width:${pct(c.green)}%;background:#c4b5fd"></div>
+          <div class="seg" style="width:${pct(issues)}%;background:#fcd34d"></div>
+        </div>
+        <div class="lbl">
+          <span><i style="--c:#86efac">${c.done || 0} terkirim</i><i style="--c:#c4b5fd">${c.green || 0} siap</i><i style="--c:#fcd34d">${issues} perlu cek</i></span>
+          <b>${Math.round(pct(c.done))}%</b>
+        </div>`;
+    }
   }
 
   // ---------- Gaya tampilan (sekali per halaman) ----------
@@ -7623,47 +7692,62 @@
     const style = document.createElement("style");
     style.id = "fo-style";
     style.textContent = `
-      .fo, .fo * { box-sizing: border-box; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-      .fo { --ink:#0f172a; --muted:#64748b; --line:#e5e7eb; --soft:#f8fafc; --accent:#4f46e5; --accent-soft:#eef2ff; }
-      .fo-overlay { position:fixed; inset:0; z-index:1000001; background:rgba(15,23,42,.35); display:flex; justify-content:flex-end; }
-      .fo-sheet { background:#fff; color:var(--ink); width:min(780px,100vw); height:100vh; display:flex; flex-direction:column;
-        box-shadow:-12px 0 40px rgba(15,23,42,.18); animation:fo-in .18s ease-out; }
-      @keyframes fo-in { from { transform:translateX(24px); opacity:.6; } to { transform:none; opacity:1; } }
-      .fo-head { padding:18px 22px 14px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; }
-      .fo-logo { width:36px; height:36px; border-radius:10px; background:var(--accent); color:#fff; display:grid; place-items:center; font-size:18px; }
-      .fo-title { font-size:16px; font-weight:700; letter-spacing:-.01em; }
-      .fo-subtitle { font-size:12px; color:var(--muted); margin-top:2px; }
+      .fo, .fo * { box-sizing: border-box; font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+      .fo { --ink:#0f1222; --muted:#6b7186; --line:#e7e8ef; --soft:#f6f7fb; --accent:#4f46e5; --accent2:#7c3aed; --accent-soft:#eef0ff;
+        --ok:#16a34a; --warn:#d97706; --bad:#dc2626; }
+      .fo-overlay { position:fixed; inset:0; z-index:1000001; background:rgba(15,18,34,.38); backdrop-filter:blur(3px); display:flex; justify-content:flex-end;
+        animation:fo-fade .18s ease; }
+      @keyframes fo-fade { from { opacity:0; } to { opacity:1; } }
+      .fo-sheet { background:var(--soft); color:var(--ink); width:min(820px,100vw); height:100vh; display:flex; flex-direction:column;
+        box-shadow:-20px 0 60px rgba(15,18,34,.25); animation:fo-in .2s ease; }
+      @keyframes fo-in { from { transform:translateX(24px); opacity:.4; } to { transform:none; opacity:1; } }
+      .fo-head { position:relative; padding:20px 24px 18px; color:#fff; background:linear-gradient(120deg,#4338ca,#7c3aed 55%,#c026d3);
+        display:flex; align-items:center; gap:12px; overflow:hidden; }
+      .fo-head:after { content:""; position:absolute; right:-60px; top:-80px; width:240px; height:240px; border-radius:50%;
+        background:rgba(255,255,255,.09); pointer-events:none; }
+      .fo-head > * { position:relative; z-index:1; }
+      .fo-head .fo-btn { background:rgba(255,255,255,.14); border-color:rgba(255,255,255,.22); color:#fff; }
+      .fo-head .fo-btn:hover { background:rgba(255,255,255,.26); border-color:rgba(255,255,255,.32); }
+      .fo-logo { width:44px; height:44px; border-radius:12px; background:rgba(255,255,255,.18); color:#fff; display:grid; place-items:center;
+        font-size:20px; box-shadow:inset 0 0 0 1px rgba(255,255,255,.25); }
+      .fo-title { font-size:17px; font-weight:750; letter-spacing:-.2px; }
+      .fo-subtitle { font-size:12.5px; color:rgba(255,255,255,.85); margin-top:2px; }
       .fo-body { flex:1; overflow:auto; padding:18px 22px 24px; display:flex; flex-direction:column; gap:18px; }
-      .fo-btn { border:1px solid var(--line); background:#fff; color:var(--ink); border-radius:9px; padding:8px 12px; font-size:12.5px;
-        font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:6px; transition:background .12s,border-color .12s; line-height:1.2; }
-      .fo-btn:hover { background:var(--soft); border-color:#cbd5e1; }
-      .fo-btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-      .fo-btn.primary:hover { background:#4338ca; }
-      .fo-btn.danger { color:#dc2626; }
-      .fo-btn.danger-solid { background:#dc2626; border-color:#dc2626; color:#fff; }
-      .fo-btn.sm { padding:5px 9px; font-size:12px; border-radius:8px; }
+      .fo-btn { border:1px solid var(--line); background:#fff; color:var(--ink); border-radius:10px; padding:8px 13px; font-size:13px;
+        font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:6px; transition:all .15s; line-height:1.2; }
+      .fo-btn:hover { background:#fafaff; border-color:#c7c9d9; transform:translateY(-1px); }
+      .fo-btn:active { transform:translateY(0); }
+      .fo-btn:disabled { opacity:.45; cursor:not-allowed; transform:none; }
+      .fo-btn.primary { background:linear-gradient(120deg,var(--accent),var(--accent2)); border-color:transparent; color:#fff;
+        box-shadow:0 6px 16px rgba(79,70,229,.3); }
+      .fo-btn.primary:hover { box-shadow:0 8px 22px rgba(79,70,229,.4); }
+      .fo-btn.danger { color:var(--bad); }
+      .fo-btn.danger-solid { background:var(--bad); border-color:var(--bad); color:#fff; }
+      .fo-btn.sm { padding:5px 10px; font-size:12px; border-radius:8px; }
       .fo-btn.icon { width:34px; height:34px; justify-content:center; padding:0; font-size:16px; border-color:transparent; }
       .fo-section-title { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-bottom:8px; }
       .fo-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
-      .fo-stat { border:1px solid var(--line); border-radius:12px; padding:10px 12px; cursor:pointer; background:#fff; text-align:left; transition:all .12s; }
-      .fo-stat:hover { border-color:#cbd5e1; background:var(--soft); }
+      .fo-stat { border:1px solid var(--line); border-radius:12px; padding:10px 12px; cursor:pointer; background:#fff; text-align:left; transition:all .15s; }
+      .fo-stat:hover { border-color:#c7c9d9; transform:translateY(-1px); }
       .fo-stat.active { border-color:var(--c); box-shadow:0 0 0 3px color-mix(in srgb, var(--c) 18%, transparent); }
-      .fo-stat .n { font-size:20px; font-weight:700; color:var(--c); line-height:1.1; }
+      .fo-stat .n { font-size:21px; font-weight:780; color:var(--c); line-height:1.1; letter-spacing:-.5px; }
       .fo-stat .l { font-size:11.5px; color:var(--muted); margin-top:2px; display:flex; align-items:center; gap:5px; }
       .fo-stat .l::before { content:""; width:7px; height:7px; border-radius:50%; background:var(--c); }
-      .fo-card { border:1px solid var(--line); border-radius:14px; padding:14px; background:#fff; }
+      .fo-card { border:1px solid var(--line); border-radius:16px; padding:16px; background:#fff; box-shadow:0 1px 2px rgba(15,18,34,.04); }
       .fo-card.run { background:linear-gradient(180deg,#fafaff,#fff); border-color:#c7d2fe; }
+      .fo-grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; align-items:stretch; }
+      .fo-grid2 .fo-card { display:flex; flex-direction:column; }
       .fo-rowflex { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
       .fo-hint { font-size:12px; color:var(--muted); }
       .fo-warn { font-size:12px; color:#b45309; background:#fffbeb; border:1px solid #fde68a; padding:8px 10px; border-radius:9px; }
-      .fo-seg { display:inline-flex; background:#f1f5f9; border-radius:10px; padding:3px; gap:2px; }
+      .fo-seg { display:inline-flex; background:#f0f1f6; border-radius:10px; padding:3px; gap:2px; }
       .fo-seg label { position:relative; cursor:pointer; }
       .fo-seg input { position:absolute; opacity:0; pointer-events:none; }
       .fo-seg span { display:block; padding:6px 12px; border-radius:8px; font-size:12.5px; font-weight:600; color:var(--muted); }
-      .fo-seg input:checked + span { background:#fff; color:var(--ink); box-shadow:0 1px 3px rgba(15,23,42,.12); }
+      .fo-seg input:checked + span { background:#fff; color:var(--accent); box-shadow:0 1px 3px rgba(15,18,34,.12); }
       .fo-switch { display:inline-flex; align-items:center; gap:8px; font-size:12.5px; font-weight:600; cursor:pointer; }
       .fo-switch input { display:none; }
-      .fo-switch i { width:34px; height:20px; border-radius:20px; background:#cbd5e1; position:relative; transition:background .15s; }
+      .fo-switch i { width:34px; height:20px; border-radius:20px; background:#d5d7e3; position:relative; transition:background .15s; }
       .fo-switch i::after { content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:#fff;
         box-shadow:0 1px 2px rgba(0,0,0,.2); transition:transform .15s; }
       .fo-switch input:checked + i { background:var(--accent); }
@@ -7677,13 +7761,13 @@
       .fo-details[open] summary { margin-bottom:10px; }
       .fo-list { display:flex; flex-direction:column; gap:8px; }
       .fo-item { display:grid; grid-template-columns:22px 1fr auto; gap:12px; align-items:start; border:1px solid var(--line);
-        border-radius:12px; padding:12px; background:#fff; transition:border-color .12s; }
-      .fo-item:hover { border-color:#cbd5e1; }
+        border-left:3px solid var(--c, var(--line)); border-radius:12px; padding:12px; background:#fff; transition:all .15s; }
+      .fo-item:hover { border-color:#c7c9d9; border-left-color:var(--c, #c7c9d9); transform:translateY(-1px); box-shadow:0 2px 8px rgba(15,18,34,.06); }
       .fo-item.sel { border-color:#a5b4fc; background:#fafaff; }
       .fo-item input[type=checkbox] { width:17px; height:17px; margin-top:2px; accent-color:var(--accent); cursor:pointer; }
       .fo-name { font-weight:650; font-size:13.5px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-      .fo-badge { font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; color:var(--c);
-        background:color-mix(in srgb, var(--c) 12%, #fff); }
+      .fo-badge { font-size:11px; font-weight:650; padding:2px 8px; border-radius:999px; color:var(--c);
+        background:color-mix(in srgb, var(--c) 11%, #fff); }
       .fo-meta { font-size:12px; color:var(--muted); margin-top:3px; line-height:1.45; }
       .fo-reason { font-size:12px; margin-top:6px; padding:6px 9px; border-radius:8px; color:var(--c);
         background:color-mix(in srgb, var(--c) 8%, #fff); line-height:1.4; }
@@ -7692,23 +7776,58 @@
       .fo-actions a { font-size:11.5px; color:var(--accent); text-decoration:none; text-align:center; }
       .fo-empty { text-align:center; color:var(--muted); font-size:13px; padding:28px 0; }
       .fo-launch { position:fixed; left:16px; bottom:16px; z-index:999999; border:none; border-radius:999px; padding:10px 16px 10px 12px;
-        background:#4f46e5; color:#fff; font:600 13px ui-sans-serif,system-ui,sans-serif; cursor:pointer; display:flex; align-items:center; gap:8px;
-        box-shadow:0 8px 24px rgba(79,70,229,.35); }
-      .fo-launch:hover { background:#4338ca; }
-      .fo-launch b { background:rgba(255,255,255,.2); border-radius:999px; padding:1px 8px; font-size:12px; }
-      .fo-bar { position:fixed; left:50%; bottom:16px; transform:translateX(-50%); z-index:1000002; width:min(640px,94vw);
-        background:#0f172a; color:#f8fafc; border-radius:14px; padding:12px 14px; display:flex; gap:12px; align-items:center;
-        box-shadow:0 16px 40px rgba(15,23,42,.35); font:13px ui-sans-serif,system-ui,sans-serif; }
-      .fo-bar .dot { width:9px; height:9px; border-radius:50%; background:#22c55e; box-shadow:0 0 0 4px rgba(34,197,94,.2); flex:none; animation:fo-pulse 1.4s infinite; }
-      .fo-bar .dot.paused { background:#f59e0b; box-shadow:0 0 0 4px rgba(245,158,11,.2); animation:none; }
-      @keyframes fo-pulse { 50% { opacity:.4; } }
-      .fo-bar .t { font-weight:650; }
-      .fo-bar .s { color:#cbd5e1; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .fo-bar .c { color:#94a3b8; font-size:11.5px; margin-top:2px; }
-      .fo-bar .fo-btn { border-color:#334155; background:#1e293b; color:#f8fafc; }
-      .fo-bar .fo-btn:hover { background:#334155; }
+        background:linear-gradient(120deg,var(--accent),var(--accent2)); color:#fff; font:650 13px "Inter",ui-sans-serif,system-ui,sans-serif;
+        cursor:pointer; display:flex; align-items:center; gap:8px; box-shadow:0 10px 28px rgba(79,70,229,.4); transition:transform .15s; }
+      .fo-launch:hover { transform:translateY(-2px); }
+      .fo-launch b { background:rgba(255,255,255,.22); border-radius:7px; padding:2px 7px; font-size:11.5px; font-weight:800; }
+      .fo-head { flex-direction:column; align-items:stretch; gap:0; }
+      .fo-head-row { display:flex; align-items:center; gap:12px; }
+      .fo-prog { margin-top:16px; }
+      .fo-prog .track { height:8px; border-radius:99px; background:rgba(255,255,255,.2); overflow:hidden; display:flex; }
+      .fo-prog .seg { height:100%; transition:width .4s ease; }
+      .fo-prog .lbl { display:flex; justify-content:space-between; gap:10px; font-size:12px; margin-top:7px; color:rgba(255,255,255,.9); }
+      .fo-prog .lbl i { font-style:normal; display:inline-flex; align-items:center; gap:5px; margin-right:10px; }
+      .fo-prog .lbl i::before { content:""; width:8px; height:8px; border-radius:50%; background:var(--c); }
+      .fo-bar { position:fixed; left:50%; bottom:16px; transform:translateX(-50%); z-index:1000002; width:min(680px,94vw);
+        background:rgba(17,19,36,.93); backdrop-filter:blur(12px); color:#eef0ff; border-radius:18px; padding:14px 16px;
+        box-shadow:0 20px 50px rgba(10,10,30,.45), inset 0 0 0 1px rgba(255,255,255,.07); font:13px "Inter",ui-sans-serif,system-ui,sans-serif;
+        animation:fo-up .25s ease; }
+      @keyframes fo-up { from { transform:translate(-50%,12px); opacity:0; } to { transform:translate(-50%,0); opacity:1; } }
+      .fo-bar .top { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+      .fo-bar .dot { width:16px; height:16px; border-radius:50%; border:2.5px solid rgba(255,255,255,.2); border-top-color:#a5b4fc; flex:none;
+        animation:fo-spin .8s linear infinite; }
+      .fo-bar .dot.paused { animation:none; border-color:rgba(251,191,36,.3); border-top-color:#fbbf24; }
+      @keyframes fo-spin { to { transform:rotate(360deg); } }
+      @keyframes fo-pulse { 0%,100% { opacity:1; } 50% { opacity:.5; } }
+      .fo-bar .t { font-weight:700; color:#fff; }
+      .fo-bar .m { color:#9aa0c3; font-size:12px; font-weight:500; }
+      .fo-bar .notice { margin-top:10px; padding:8px 11px; border-radius:10px; background:rgba(251,191,36,.12); color:#fcd34d; font-size:12.5px; line-height:1.45;
+        box-shadow:inset 0 0 0 1px rgba(251,191,36,.25); }
+      .fo-bar .doc { margin-top:10px; font-weight:650; font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .fo-bar .steps { display:flex; gap:4px; margin-top:10px; }
+      .fo-bar .st { flex:1; text-align:center; font-size:11px; padding:5px 2px; border-radius:8px; background:rgba(255,255,255,.06); color:#7d83a8;
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:all .2s; }
+      .fo-bar .st.done { color:#86efac; background:rgba(34,197,94,.1); }
+      .fo-bar .st.now { color:#fff; background:linear-gradient(120deg,#4f46e5,#7c3aed); font-weight:650; box-shadow:0 4px 14px rgba(124,58,237,.35); }
+      .fo-bar .st.wait { color:#1f1300; background:#fbbf24; font-weight:650; animation:fo-pulse 1.6s infinite; }
+      .fo-bar .log { margin-top:10px; color:#c7cbf0; font-size:11.5px; font-family:ui-monospace,Consolas,monospace; background:rgba(0,0,0,.28);
+        border-radius:9px; padding:7px 10px; line-height:1.55; max-height:92px; overflow:hidden; }
+      .fo-bar .log div { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:.65; }
+      .fo-bar .log div:last-child { opacity:1; color:#fde68a; }
+      .fo-bar .foot { display:flex; align-items:center; gap:8px; margin-top:11px; }
+      .fo-bar .prog { flex:1; height:5px; border-radius:99px; background:rgba(255,255,255,.1); overflow:hidden; }
+      .fo-bar .prog i { display:block; height:100%; border-radius:99px; background:linear-gradient(90deg,#818cf8,#c084fc); transition:width .4s; }
+      .fo-bar .chip { font-size:11px; font-weight:650; padding:2px 7px; border-radius:99px; background:rgba(255,255,255,.07); }
+      .fo-bar .chip.ok { color:#86efac; } .fo-bar .chip.warn { color:#fcd34d; } .fo-bar .chip.bad { color:#fca5a5; }
+      .fo-bar .pct { font-size:12px; font-weight:700; color:#fff; min-width:34px; text-align:right; }
+      .fo-rate { position:fixed; top:14px; left:50%; transform:translateX(-50%); z-index:1000003; max-width:min(520px,92vw); display:flex; gap:10px; align-items:flex-start;
+        background:rgba(127,29,29,.94); backdrop-filter:blur(10px); color:#fff; padding:11px 15px; border-radius:14px;
+        font:13px/1.45 "Inter",ui-sans-serif,system-ui,sans-serif; box-shadow:0 14px 36px rgba(127,29,29,.35), inset 0 0 0 1px rgba(255,255,255,.1); }
+      .fo-bar .fo-btn { background:rgba(255,255,255,.08); border-color:rgba(255,255,255,.12); color:#eef0ff; padding:6px 11px; font-size:12.5px; }
+      .fo-bar .fo-btn:hover { background:rgba(255,255,255,.16); }
       .fo-bar .fo-btn.go { background:#16a34a; border-color:#16a34a; }
-      .fo-bar .fo-btn.stop { background:transparent; border-color:#7f1d1d; color:#fca5a5; }
+      .fo-bar .fo-btn.stop { background:transparent; border-color:rgba(248,113,113,.45); color:#fca5a5; }
+      @media (max-width:720px) { .fo-grid2 { grid-template-columns:1fr; } }
       @media (max-width:640px) { .fo-stats { grid-template-columns:repeat(2,1fr); } .fo-item { grid-template-columns:22px 1fr; } .fo-actions { grid-column:2; flex-direction:row; } }
     `;
     document.head.appendChild(style);
@@ -7880,7 +7999,7 @@
           .join("");
         const text =
           `${q.id} ${q.krt} ${q.namaUsaha} ${q.pemilik} ${q.alamat} ${q.kode}`.toUpperCase();
-        return `<div class="fo-item${selected.has(q.id) ? " sel" : ""}" data-text="${escapeHtml(text)}">
+        return `<div class="fo-item${selected.has(q.id) ? " sel" : ""}" style="--c:${color}" data-text="${escapeHtml(text)}">
         <input type="checkbox" data-sel="${q.id}" ${selected.has(q.id) ? "checked" : ""} title="Centang untuk dikerjakan otomatis">
         <div style="min-width:0;">
           <div class="fo-name">${escapeHtml(q.krt)} <span class="fo-badge" style="--c:${color}">${STATUS_LABEL[q.status] || q.status}</span></div>
@@ -7917,15 +8036,15 @@
     overlay.innerHTML = `
       <div class="fo-sheet">
         <div class="fo-head">
+         <div class="fo-head-row">
           <div class="fo-logo">⚡</div>
           <div style="flex:1;min-width:0;">
             <div class="fo-title">FASIH Otomatis</div>
             <div class="fo-subtitle">Excel → cari dokumen → isi → kirim · ${queue.length} baris antrean</div>
           </div>
-          ${queue.length || wilayahCount ? `<button class="fo-btn sm" data-act="export-data" title="Simpan antrean + daftar wilayah + kamus KBLI jadi satu file, untuk dibawa ke laptop lain">💾 Export data</button>` : ""}
-          <button class="fo-btn sm" data-act="import-data" title="Muat file export dari laptop lain (data di laptop ini akan ditimpa)">📂 Import data</button>
-          ${queue.length ? `<button class="fo-btn sm" data-act="report">⬇ Laporan CSV</button>` : ""}
           <button class="fo-btn icon" data-act="close" title="Tutup">✕</button>
+         </div>
+          ${queue.length ? `<div class="fo-prog" data-prog></div>` : ""}
         </div>
 
         <div class="fo-body">
@@ -7941,59 +8060,80 @@
               : ""
           }
 
-          <div class="fo-card">
-            <div class="fo-section-title">Persiapan</div>
-            <div class="fo-rowflex">
-              <button class="fo-btn ${queue.length ? "" : "primary"}" data-act="load">📥 Muat Excel</button>
-              <button class="fo-btn ${wilayahCount ? "" : "primary"}" data-act="wilayah">🗺 Baca daftar wilayah</button>
-              ${unresolved.length ? `<button class="fo-btn" data-act="kbli" style="border-color:#c4b5fd;color:#6d28d9;">🏷 Tentukan KBLI · ${unresolved.length} produk</button>` : ""}
+          <div class="fo-grid2">
+            <div class="fo-card">
+              <div class="fo-section-title">① Data Excel &amp; wilayah</div>
+              <div class="fo-rowflex">
+                <button class="fo-btn ${queue.length ? "" : "primary"}" data-act="load">📥 Muat Excel</button>
+                <button class="fo-btn ${wilayahCount ? "" : "primary"}" data-act="wilayah">🗺 Baca wilayah</button>
+                ${unresolved.length ? `<button class="fo-btn" data-act="kbli" style="border-color:#c4b5fd;color:#6d28d9;">🏷 KBLI · ${unresolved.length}</button>` : ""}
+              </div>
+              <div class="fo-hint" style="margin-top:10px;">
+                ${wilayahCount ? `✓ ${wilayahCount} desa tersimpan` : '<span style="color:#dc2626;">Daftar wilayah belum dibaca (cukup sekali)</span>'}
+                · Jeda setelah loading <input class="fo-input fo-num" data-delay type="number" min="2" max="30" step="0.5" value="${delaySec}"> detik
+              </div>
+              ${
+                state.excelFileName || state.importedFileName
+                  ? `<div class="fo-hint" style="margin-top:4px;">
+                ${state.excelFileName ? `📄 Excel aktif: <b>${escapeHtml(state.excelFileName)}</b> (dimuat ${new Date(state.excelLoadedAt).toLocaleString()})` : ""}
+                ${state.excelFileName && state.importedFileName ? " · " : ""}
+                ${state.importedFileName ? `📂 Data terakhir di-import: <b>${escapeHtml(state.importedFileName)}</b> (${new Date(state.importedAt).toLocaleString()})` : ""}
+              </div>`
+                  : ""
+              }
+              ${unresolved.length ? `<div class="fo-warn" style="margin-top:10px;">${unresolved.length} produk belum punya KBLI. Barisnya akan jadi kuning sampai KBLI ditentukan.</div>` : ""}
+              <div class="fo-divider"></div>
+              <div class="fo-rowflex">
+                ${queue.length ? `<button class="fo-btn sm" data-act="report">⬇ Laporan CSV</button>` : ""}
+                ${queue.length || wilayahCount ? `<button class="fo-btn sm" data-act="export-data" title="Simpan antrean + daftar wilayah + kamus KBLI jadi satu file, untuk dibawa ke laptop lain">💾 Export</button>` : ""}
+                <button class="fo-btn sm" data-act="import-data" title="Muat file export dari laptop lain (data di laptop ini akan ditimpa)">📂 Import</button>
+                ${queue.length ? `<button class="fo-btn sm danger" data-act="clear">🗑 Hapus antrean</button>` : ""}
+              </div>
             </div>
-            <div class="fo-hint" style="margin-top:10px;">
-              ${wilayahCount ? `✓ ${wilayahCount} desa tersimpan` : '<span style="color:#dc2626;">Daftar wilayah belum dibaca (cukup sekali)</span>'}
-              · Jeda setelah loading <input class="fo-input fo-num" data-delay type="number" min="2" max="30" step="0.5" value="${delaySec}"> detik
-            </div>
+
             ${
-              state.excelFileName || state.importedFileName
-                ? `<div class="fo-hint" style="margin-top:4px;">
-              ${state.excelFileName ? `📄 Excel aktif: <b>${escapeHtml(state.excelFileName)}</b> (dimuat ${new Date(state.excelLoadedAt).toLocaleString()})` : ""}
-              ${state.excelFileName && state.importedFileName ? " · " : ""}
-              ${state.importedFileName ? `📂 Data terakhir di-import: <b>${escapeHtml(state.importedFileName)}</b> (${new Date(state.importedAt).toLocaleString()})` : ""}
+              queue.length
+                ? `<div class="fo-card">
+              <div class="fo-section-title">② Pengaturan</div>
+              ${
+                run.running
+                  ? `<div class="fo-hint">Sedang berjalan · ${currentSpeed().name}${run.testMode ? " · Mode uji" : ""}${run.approveOff ? "" : " · Approve setelah kirim"}</div>`
+                  : `
+              <div class="fo-seg">
+                <label><input type="radio" name="t2mode" value="test" ${run.testMode !== false ? "checked" : ""}><span>Mode uji</span></label>
+                <label><input type="radio" name="t2mode" value="auto" ${run.testMode === false ? "checked" : ""}><span>Otomatis penuh</span></label>
+              </div>
+              <label class="fo-switch" style="margin-top:10px;"><input type="checkbox" data-approve ${run.approveOff ? "" : "checked"}><i></i>Approve setelah kirim</label>
+              <div class="fo-hint" style="margin-top:8px;">Mode uji berhenti di halaman CATATAN tiap dokumen · Otomatis penuh langsung kirim tanpa berhenti.</div>
+              <div class="fo-divider"></div>
+              <div class="fo-rowflex" style="align-items:center;">
+                <span class="fo-hint" style="margin:0;">Kecepatan</span>
+                <div class="fo-seg">
+                  ${SPEEDS.map((sp, i) => `<label><input type="radio" name="t2speed" value="${i}" ${(loadSpeed().base || 0) === i ? "checked" : ""}><span>${sp.name}</span></label>`).join("")}
+                </div>
+              </div>
+              <label class="fo-switch" style="margin-top:8px;" title="Jeda antar-dokumen dipangkas lagi. Hanya aktif saat Cepat dipilih, dan mati otomatis kalau server membalas 429."><input type="checkbox" data-turbo ${loadTurbo() ? "checked" : ""}><i></i>⚡ Turbo</label>
+              <div class="fo-hint" style="margin-top:4px;">${speedLevel() > (loadSpeed().base || 0) ? `sedang diturunkan otomatis ke ${currentSpeed().name} (setelah 429)` : currentSpeed().name === "Turbo" ? "Turbo aktif · mati sendiri kalau kena 429" : "turun sendiri kalau server membatasi (429)"}</div>`
+              }
             </div>`
-                : ""
+                : `<div class="fo-card">
+              <div class="fo-section-title">② Pengaturan</div>
+              <div class="fo-empty" style="padding:16px 0;">Muat Excel dulu untuk mengatur mode &amp; kecepatan.</div>
+            </div>`
             }
-            ${unresolved.length ? `<div class="fo-warn" style="margin-top:10px;">${unresolved.length} produk belum punya KBLI. Barisnya akan jadi kuning sampai KBLI ditentukan.</div>` : ""}
           </div>
 
           ${
             queue.length
               ? `<div class="fo-card run">
-            <div class="fo-section-title">Jalankan otomatis</div>
+            <div class="fo-section-title">③ Jalankan</div>
             ${
               run.running
-                ? `
-              <div class="fo-rowflex" style="justify-content:space-between;">
+                ? `<div class="fo-rowflex" style="justify-content:space-between;">
                 <div class="fo-hint">Sedang berjalan · ${escapeHtml(run.lastLog || "")}</div>
                 <button class="fo-btn danger-solid" data-act="t2stop">⏹ Stop</button>
               </div>`
-                : `
-              <div class="fo-rowflex" style="justify-content:space-between;">
-                <div class="fo-seg">
-                  <label><input type="radio" name="t2mode" value="test" ${run.testMode !== false ? "checked" : ""}><span>Mode uji</span></label>
-                  <label><input type="radio" name="t2mode" value="auto" ${run.testMode === false ? "checked" : ""}><span>Otomatis penuh</span></label>
-                </div>
-                <label class="fo-switch"><input type="checkbox" data-approve ${run.approveOff ? "" : "checked"}><i></i>Approve setelah kirim</label>
-              </div>
-              <div class="fo-hint" style="margin-top:8px;">Mode uji berhenti di halaman CATATAN tiap dokumen · Otomatis penuh langsung kirim tanpa berhenti.</div>
-              <div class="fo-rowflex" style="margin-top:10px;align-items:center;">
-                <span class="fo-hint" style="margin:0;">Kecepatan</span>
-                <div class="fo-seg">
-                  ${SPEEDS.map((sp, i) => `<label><input type="radio" name="t2speed" value="${i}" ${(loadSpeed().base || 0) === i ? "checked" : ""}><span>${sp.name}</span></label>`).join("")}
-                </div>
-                <label class="fo-switch" title="Jeda antar-dokumen dipangkas lagi. Hanya aktif saat Cepat dipilih, dan mati otomatis kalau server membalas 429."><input type="checkbox" data-turbo ${loadTurbo() ? "checked" : ""}><i></i>⚡ Turbo</label>
-                <span class="fo-hint" style="margin:0;">${speedLevel() > (loadSpeed().base || 0) ? `sedang diturunkan otomatis ke ${currentSpeed().name} (setelah 429)` : currentSpeed().name === "Turbo" ? "Turbo aktif · mati sendiri kalau kena 429" : "turun sendiri kalau server membatasi (429)"}</span>
-              </div>
-              <div class="fo-divider"></div>
-              <div class="fo-rowflex">
+                : `<div class="fo-rowflex">
                 <button class="fo-btn primary" data-act="t2sel" data-selcount>▶ Yang dicentang (${selected.size})</button>
                 ${[5, 10, 20].map((n) => `<button class="fo-btn" data-act="t2run" data-n="${n}">▶ ${n}</button>`).join("")}
                 <button class="fo-btn" data-act="t2run" data-n="0">▶ Semua</button>
@@ -8027,7 +8167,6 @@
               <button class="fo-btn sm" data-act="check">${state.checking ? "⏸ Hentikan cek" : "🔍 Cek kecocokan semua"}</button>
               <button class="fo-btn sm" data-act="next">Buka berikutnya (manual)</button>
               <button class="fo-btn sm" data-act="reset-status">↻ Kuning/merah → cek ulang</button>
-              <button class="fo-btn sm danger" data-act="clear">🗑 Hapus antrean</button>
               <label class="fo-switch" style="margin-left:auto;"><input type="checkbox" data-act="newtab" ${state.newTab ? "checked" : ""}><i></i>Buka manual di tab baru</label>
             </div>
           </details>`
@@ -8513,16 +8652,11 @@
 
   // Tombol melayang, selalu tampil di halaman FASIH (kecuali halaman isian assignment)
   function ensureLauncher() {
-    if (
-      !document.body ||
-      document.getElementById("fasih-t1-launcher") ||
-      /\/app\/assignment/.test(location.pathname)
-    )
-      return;
+    if (!document.body || document.getElementById("fasih-t1-launcher")) return;
     ensureStyles();
     const btn = document.createElement("button");
     btn.id = "fasih-t1-launcher";
-    btn.className = "fo-launch";
+    btn.className = "fo fo-launch";
     const left = loadQueue().filter(
       (q) => q.status === "pending" || q.status === "green",
     ).length;
