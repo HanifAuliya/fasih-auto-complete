@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH OSS -> Keluarga: Pindah + Tautkan
 // @namespace    hanif-bps-hst
-// @version      2.19
+// @version      2.20
 // @description  OSS dipindah ke SLS keluarga (⋮ > Ganti Wilayah), lalu dokumen keluarga dibuka: salin Blok P (alamat, no bangunan, geotag) dan pilih OSS di "Pilih UMKM dalam satu SLS". Ada -> OSS Ditemukan + alamat & geotag keluarga; tidak ada / keluarga tanpa usaha -> OSS Tutup. Keduanya dikirim & di-approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -46,6 +46,7 @@
     tested: "terisi (uji)",
     red: "gagal",
     yellow: "perlu cek",
+    manual: "selesai (dicek manual)",
   };
   const STATUS_COLOR = {
     pending: "#2563eb",
@@ -55,6 +56,7 @@
     tested: "#0891b2",
     red: "#dc2626",
     yellow: "#b45309",
+    manual: "#4d7c0f",
     ganda: "#c2410c", // sub-kategori closed: OSS Ganda
   };
 
@@ -2047,7 +2049,7 @@
   }
 
   function counts() {
-    const c = { pending: 0, moved: 0, linked: 0, closed: 0, tested: 0, red: 0, yellow: 0, ganda: 0 };
+    const c = { pending: 0, moved: 0, linked: 0, closed: 0, tested: 0, red: 0, yellow: 0, manual: 0, ganda: 0 };
     loadQueue().forEach((q) => {
       c[q.status] = (c[q.status] || 0) + 1;
       if (q.linkResult === "ganda") c.ganda++; // sub-kategori closed: OSS Ganda (bukan status tersendiri)
@@ -2138,7 +2140,7 @@
           <label class="fgw-hint" style="display:block;margin-top:8px;"><input type="checkbox" data-strict ${conf.strictId ? "checked" : ""}> Wajib cocok assignment_id (lebih aman, bisa lebih banyak "perlu cek")</label>
         </div>
         ${queue.length ? `
-        <div class="fgw-stats" style="grid-template-columns:repeat(4,1fr);">${stat("pending", "Belum dipindah", STATUS_COLOR.pending)}${stat("moved", "Dipindah, belum ditautkan", STATUS_COLOR.moved)}${stat("linked", "Ditautkan", STATUS_COLOR.linked)}${stat("closed", "OSS tutup", STATUS_COLOR.closed)}${stat("ganda", "OSS Ganda", STATUS_COLOR.ganda)}${stat("yellow", "Perlu cek", STATUS_COLOR.yellow)}${stat("red", "Gagal", STATUS_COLOR.red)}${stat("tested", "Uji", STATUS_COLOR.tested)}${stat("all", "Semua", "#0f172a")}</div>
+        <div class="fgw-stats" style="grid-template-columns:repeat(4,1fr);">${stat("pending", "Belum dipindah", STATUS_COLOR.pending)}${stat("moved", "Dipindah, belum ditautkan", STATUS_COLOR.moved)}${stat("linked", "Ditautkan", STATUS_COLOR.linked)}${stat("closed", "OSS tutup", STATUS_COLOR.closed)}${stat("ganda", "OSS Ganda", STATUS_COLOR.ganda)}${stat("yellow", "Perlu cek", STATUS_COLOR.yellow)}${stat("red", "Gagal", STATUS_COLOR.red)}${stat("manual", "Selesai manual", STATUS_COLOR.manual)}${stat("tested", "Uji", STATUS_COLOR.tested)}${stat("all", "Semua", "#0f172a")}</div>
         <div class="fgw-card"><div class="fgw-sec">Jalankan</div>
           <div class="fgw-row">
             <button class="fgw-btn primary" data-act="test">🧪 Uji 1 (berhenti sebelum tiap kirim)</button>
@@ -2156,8 +2158,9 @@
           <button class="fgw-btn sm" data-act="selall">☑ Centang semua tampil (${shown.length})</button>
           <button class="fgw-btn sm" data-act="selnone">☐ Kosongkan centang</button>
           <button class="fgw-btn sm" data-act="reset">↻ Gagal/perlu cek → belum</button>
+          <button class="fgw-btn sm" style="border-color:#4d7c0f;color:#4d7c0f;" data-act="markdone">✓ Tandai selesai (dicentang, <span data-selcount2>${selected.size}</span>)</button>
           <button class="fgw-btn sm danger" data-act="clear">🗑 Hapus antrean</button></div>
-        <div class="fgw-hint" style="margin-top:-6px;">Klik salah satu kotak statistik di atas dulu buat filter per status/Ganda, baru "Centang semua tampil" — lalu jalankan lewat "▶ Yang dicentang".</div>
+        <div class="fgw-hint" style="margin-top:-6px;">Klik salah satu kotak statistik di atas dulu buat filter per status/Ganda, baru "Centang semua tampil" — lalu jalankan lewat "▶ Yang dicentang", atau kalau baris Gagal/Perlu cek itu sudah kamu perbaiki sendiri manual di FASIH, klik "✓ Tandai selesai" supaya tidak dihitung lagi sebagai perlu dikerjakan.</div>
         <div style="display:flex;flex-direction:column;gap:6px;">${rows || '<div class="fgw-hint">Tidak ada baris.</div>'}</div>
         ${shown.length >= 150 ? '<div class="fgw-hint">Menampilkan 150 baris pertama · lengkapnya di Laporan CSV</div>' : ""}` : '<div class="fgw-hint">Belum ada antrean. Klik <b>Muat Excel target</b>.</div>'}
       </div>
@@ -2209,13 +2212,15 @@
       };
       if (panelSearch) applySearch();
     }
+    const updateSelCount = () => {
+      overlay.querySelectorAll("[data-selcount], [data-selcount2]").forEach((l) => (l.textContent = selected.size));
+    };
     overlay.addEventListener("change", (e) => {
       const box = e.target.closest("[data-sel]");
       if (!box) return;
       if (box.checked) selected.add(box.dataset.sel);
       else selected.delete(box.dataset.sel);
-      const l = overlay.querySelector("[data-selcount]");
-      if (l) l.textContent = selected.size;
+      updateSelCount();
     });
 
     const fileInput = overlay.querySelector("[data-file]");
@@ -2306,14 +2311,28 @@
           selected.add(cb.dataset.sel);
           cb.checked = true;
         });
-        const l = overlay.querySelector("[data-selcount]");
-        if (l) l.textContent = selected.size;
+        updateSelCount();
       }
       if (act === "selnone") {
         selected.clear();
         overlay.querySelectorAll("[data-sel]").forEach((cb) => (cb.checked = false));
-        const l = overlay.querySelector("[data-selcount]");
-        if (l) l.textContent = selected.size;
+        updateSelCount();
+      }
+      if (act === "markdone") {
+        const ids = loadQueue().filter((q) => selected.has(q.id)).map((q) => q.id);
+        if (!ids.length) return alert("Belum ada baris yang dicentang.");
+        if (confirm(`Tandai ${ids.length} baris yang dicentang sebagai "selesai (dicek manual)"? Baris ini tidak akan diproses otomatis lagi.`)) {
+          const q = loadQueue();
+          q.filter((i) => ids.includes(i.id)).forEach((i) => {
+            const prevLabel = STATUS_LABEL[i.status] || i.status;
+            i.status = "manual";
+            i.reason = `ditandai selesai manual oleh pengguna (sebelumnya: ${prevLabel})`;
+            i.doneAt = new Date().toISOString();
+          });
+          saveQueue(q);
+          selected.clear();
+          openPanel();
+        }
       }
       if (act === "sel") {
         const ids = loadQueue().filter((q) => selected.has(q.id) && !["linked", "closed"].includes(q.status)).map((q) => q.id);
@@ -2391,5 +2410,5 @@
     refreshPanelLive();
   }, 700);
 
-  console.log("[OSS → Keluarga v2.19] Aktif. Tombol di kiri bawah (Alt+8).");
+  console.log("[OSS → Keluarga v2.20] Aktif. Tombol di kiri bawah (Alt+8).");
 })();

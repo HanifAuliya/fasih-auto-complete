@@ -2942,7 +2942,12 @@
   // Turbo: lapisan tambahan di atas "Cepat" saja (bukan tingkat tersendiri), supaya penalti 429 tetap bisa
   // menaikkan ke Normal/Aman seperti biasa. Mati otomatis selama ada penalti aktif / masih masa tunggu 429.
   const TURBO_KEY = "fasih_turbo";
-  const TURBO_SPEED = { name: "Turbo", gap: [600, 1500], perHour: 0, checkMs: 800 };
+  const TURBO_SPEED = {
+    name: "Turbo",
+    gap: [600, 1500],
+    perHour: 0,
+    checkMs: 800,
+  };
   const loadTurbo = () => {
     try {
       return !!JSON.parse(localStorage.getItem(TURBO_KEY));
@@ -2959,7 +2964,12 @@
   };
   function currentSpeed() {
     const s = loadSpeed();
-    if (loadTurbo() && (s.base || 0) === 0 && !(s.penalty > 0) && !rateLimited())
+    if (
+      loadTurbo() &&
+      (s.base || 0) === 0 &&
+      !(s.penalty > 0) &&
+      !rateLimited()
+    )
       return TURBO_SPEED;
     return SPEEDS[speedLevel()];
   }
@@ -5248,13 +5258,14 @@
       const kb = box("keberadaan_usaha", inst);
       const kbliBox = box("kbli", inst);
       const code = kbliBox
-        ? ((dropdownValue(kbliBox) || kbliBox.innerText).match(
-            /\b(\d{5})\b/,
-          ) || [])[1]
+        ? ((dropdownValue(kbliBox) || kbliBox.innerText).match(/\b(\d{5})\b/) ||
+            [])[1]
         : "";
       // Jenis usaha Blok P kartu ini (semua jenis, bukan cuma pertanian): dari KBLI-nya,
       // atau dari nama kartu kalau KBLI belum terisi.
-      const cat = code ? usahaProfile(code).blokP : cardAgriCategory(inst, card.name);
+      const cat = code
+        ? usahaProfile(code).blokP
+        : cardAgriCategory(inst, card.name);
       if (kb && ["1", "2"].includes(radioValue(kb))) {
         found++;
         if (cat) cats.add(cat);
@@ -5741,7 +5752,8 @@
   async function fillPengusaha(inst, item, notes) {
     const owner = ownerOf(item);
     let peng = await waitBox("pengusaha_var", inst);
-    if (!peng || nameSimilarity(dropdownValue(peng), owner) >= 0.75) return true;
+    if (!peng || nameSimilarity(dropdownValue(peng), owner) >= 0.75)
+      return true;
     const score = (t) =>
       Math.max(nameSimilarity(t, owner), nameSimilarity(t, item.krt) - 0.2);
     const pick = (opts) => {
@@ -6225,7 +6237,9 @@
         item.plannedIdx = item.existingCard ? best.idx : undefined;
         if (item.existingCard) {
           taken.add(best.idx);
-          runLog(`Usaha "${item.namaUsaha}" sudah ada di kartu "${best.name}" → diisi di situ`);
+          runLog(
+            `Usaha "${item.namaUsaha}" sudah ada di kartu "${best.name}" → diisi di situ`,
+          );
         }
       });
     } catch (e) {
@@ -6271,7 +6285,8 @@
               usahaProfile(i.kbli).blokP === cat,
           );
           affected.forEach((i) => {
-            const stale = i.plannedIdx !== undefined && usahaCards()[i.plannedIdx];
+            const stale =
+              i.plannedIdx !== undefined && usahaCards()[i.plannedIdx];
             if (stale) staleCards.push({ name: stale.name });
             i.existingCard = false;
             i.plannedIdx = undefined;
@@ -6315,7 +6330,9 @@
                     !isPlaceholderName(c.name) &&
                     // Kartu lama yang baru saja ditinggalkan (lihat langkah 2) tidak boleh dipakai lagi di
                     // sini, supaya tidak tertukar balik ke kartu lama alih-alih kartu baru pemiliknya.
-                    !staleCards.some((s) => normalize(s.name) === normalize(c.name)),
+                    !staleCards.some(
+                      (s) => normalize(s.name) === normalize(c.name),
+                    ),
                 )
                 .sort((a, b) => b.score - a.score)[0];
         if (!card || card.score < 0.6) {
@@ -6373,12 +6390,18 @@
           missing = requiredLabels(inst);
           wrong = checkUsaha(inst, item, isNew);
         }
+        const pengusaha = box("pengusaha_var", inst);
         const nameNow =
           (
             (box("nama_komersial", inst) || document).querySelector(
               "input, textarea",
             ) || {}
           ).value || card.name;
+        ownerByCard.set(
+          card.idx,
+          pengusaha ? dropdownValue(pengusaha) : ownerOf(item),
+        );
+        catByCard.set(card.idx, usahaProfile(item.kbli).agri || "");
         updateItem(item.id, {
           usahaCard: nameNow || card.name,
           kbli: item.kbli,
@@ -6428,8 +6451,14 @@
           container: box("keberadaan_usaha", inst),
         });
         await sleep(1200);
-        await ensureRequired(inst, null, `kartu lama "${stale.name}" (ditutup)`);
-        runLog(`Usaha lama "${stale.name}": ditutup (keberadaan_usaha = Tutup)`);
+        await ensureRequired(
+          inst,
+          null,
+          `kartu lama "${stale.name}" (ditutup)`,
+        );
+        runLog(
+          `Usaha lama "${stale.name}": ditutup (keberadaan_usaha = Tutup)`,
+        );
       } catch (e) {
         warn(`menutup kartu lama "${stale.name}": ${e.message}`);
       }
@@ -6859,44 +6888,9 @@
     }
   }
 
-  // Perbaiki satu galat: buka lewat "Lihat", isi sesuai jenis rinciannya
-  async function fixGalat(err, items, ctx) {
+  // Isi satu galat yang kotaknya (target) sudah ketemu di halaman yang sedang terbuka
+  async function applyGalatFix(err, target, items, ctx) {
     const label = `${err.section} · ${err.title}`;
-    if (/anomali/i.test(err.title)) {
-      await openCatatan();
-      return;
-    }
-    // Galat jumlah roster usaha: hitung ulang usaha Ditemukan/Baru di Blok II lalu samakan di halaman P
-    if (
-      /roster|jumlah\s+usaha/i.test(`${err.title} ${err.messages.join(" ")}`)
-    ) {
-      runLog(`Perbaiki galat roster: ${label}`);
-      const { found, cats } = await readAllOwners(new Map()); // buka semua kartu, hitung Ditemukan/Baru
-      await syncBlokPTypes(cats); // jenis usaha di P yang tidak punya usaha -> Tidak
-      await syncRoster(found);
-      return;
-    }
-    // Buka ulang daftar galat untuk mendapat tombol "Lihat" yang masih hidup
-    const opened = await openKirimDialog();
-    if (!opened.galat || !opened.galat.n) return;
-    if (opened.galat.btn) triggerClick(opened.galat.btn);
-    await waitFor(() => readGalatList().length, 8000);
-    const cur = readGalatList().find(
-      (x) => x.title === err.title && x.section === err.section,
-    );
-    if (!cur) {
-      closeDialogs();
-      return;
-    }
-    triggerClick(cur.lihat);
-    await sleep(2500);
-    closeDialogs();
-
-    const target = containerByTitle(err.title);
-    if (!target) {
-      warn(`galat tidak bisa dibuka otomatis: ${label}`);
-      return;
-    }
     const [base, inst] = target.id.split("#");
     runLog(`Perbaiki galat: ${label}`);
 
@@ -7026,6 +7020,55 @@
     warn(
       `galat belum bisa diisi otomatis: ${label} (${err.messages.join(", ")})`,
     );
+  }
+
+  // Perbaiki satu galat: kalau kotaknya sudah kelihatan di halaman yang sedang terbuka (biasanya
+  // karena galat sebelumnya ada di kartu/section yang sama), langsung diisi di situ tanpa bolak-balik
+  // buka dialog Kirim lagi. Kalau belum kelihatan, baru buka dialog Kirim -> klik "Lihat" untuk pindah.
+  async function fixGalat(err, items, ctx) {
+    const label = `${err.section} · ${err.title}`;
+    if (/anomali/i.test(err.title)) {
+      await openCatatan();
+      return;
+    }
+    // Galat jumlah roster usaha: hitung ulang usaha Ditemukan/Baru di Blok II lalu samakan di halaman P
+    if (
+      /roster|jumlah\s+usaha/i.test(`${err.title} ${err.messages.join(" ")}`)
+    ) {
+      runLog(`Perbaiki galat roster: ${label}`);
+      const { found, cats } = await readAllOwners(new Map()); // buka semua kartu, hitung Ditemukan/Baru
+      await syncBlokPTypes(cats); // jenis usaha di P yang tidak punya usaha -> Tidak
+      await syncRoster(found);
+      return;
+    }
+    // Galat sebelumnya mungkin ada di kartu/section yang sama -> kotaknya sudah kelihatan di sini
+    const already = containerByTitle(err.title);
+    if (already && visible(already)) {
+      await applyGalatFix(err, already, items, ctx);
+      return;
+    }
+    // Buka ulang daftar galat untuk mendapat tombol "Lihat" yang masih hidup
+    const opened = await openKirimDialog();
+    if (!opened.galat || !opened.galat.n) return;
+    if (opened.galat.btn) triggerClick(opened.galat.btn);
+    await waitFor(() => readGalatList().length, 8000);
+    const cur = readGalatList().find(
+      (x) => x.title === err.title && x.section === err.section,
+    );
+    if (!cur) {
+      closeDialogs();
+      return;
+    }
+    triggerClick(cur.lihat);
+    await sleep(2500);
+    closeDialogs();
+
+    const target = containerByTitle(err.title);
+    if (!target) {
+      warn(`galat tidak bisa dibuka otomatis: ${label}`);
+      return;
+    }
+    await applyGalatFix(err, target, items, ctx);
   }
 
   // Switch "Tampilkan Anomali Usaha dan Keluarga" di halaman CATATAN
