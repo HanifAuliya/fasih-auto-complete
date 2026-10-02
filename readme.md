@@ -14,9 +14,50 @@ Semuanya independen — bisa dipasang salah satu atau dua-duanya sekaligus.
 
 ## Instalasi
 
-1. Pasang ekstensi **Tampermonkey** di Chrome/Edge/Firefox.
-2. Buka dashboard Tampermonkey → **Create a new script**, lalu tempel seluruh isi file yang mau dipakai. (Untuk file [`script`](script): karena namanya tanpa akhiran `.user.js`, Tampermonkey tidak bisa langsung drag-drop — harus copy-paste isinya ke editor Tampermonkey, atau ganti nama filenya jadi `*.user.js` dulu baru di-drag.)
-3. Simpan. Buka halaman `https://fasih-sm.bps.go.id/...` — tombol pelontar skrip akan muncul mengambang di pojok kiri bawah.
+Panduan versi bergambar (ilustrasi tiap langkah): lihat tautan yang dikirim terpisah, atau ikuti langkah teks di bawah ini.
+
+### 1. Pasang ekstensi Tampermonkey
+
+Pasang ekstensi **Tampermonkey** di browser (Chrome, Edge, atau Firefox) lewat halaman Web Store/Add-ons resmi browser masing-masing — cari "Tampermonkey" di sana.
+
+### 2. Nyalakan "Allow User Scripts" (WAJIB di Chrome/Edge versi baru — paling sering kelewat!)
+
+Chrome dan Edge versi baru mewajibkan izin tambahan supaya Tampermonkey boleh menjalankan skrip buatan sendiri (bukan yang dipasang dari toko resmi). **Tanpa langkah ini, skrip di repo ini akan kelihatan "Enabled" di Tampermonkey tapi sebenarnya tidak pernah jalan** — tidak ada tombol mengambang yang muncul di FASIH, dan tidak ada log apa pun di Console. Ini penyebab paling umum kalau "sudah dipasang tapi kok tidak ada reaksi sama sekali".
+
+Firefox **tidak perlu** langkah ini — langsung lompat ke bagian 3.
+
+Untuk Chrome/Edge:
+1. Buka `chrome://extensions` (Edge: `edge://extensions`).
+2. Nyalakan **Developer mode** di pojok kanan atas kalau belum nyala.
+3. Cari kartu **Tampermonkey**, klik **Details** (Detail).
+4. Di halaman detail itu, cari saklar **"Allow User Scripts"** (kadang diterjemahkan "Izinkan Skrip Pengguna" / "Izinkan Tampermonkey mengelola skrip pengguna") — nyalakan.
+5. Kalau saklar itu tidak ada di halaman Detail, biasanya artinya Developer mode belum aktif (ulangi langkah 2) atau versi Tampermonkey-nya perlu diperbarui dulu.
+
+### 3. Tempel isi skrip ke Tampermonkey
+
+1. Klik ikon Tampermonkey di toolbar browser → **Dashboard**.
+2. Klik tombol **"+"** (Create a new script).
+3. Hapus semua isi editor bawaan (Ctrl+A lalu Delete), lalu tempel **seluruh isi** file skrip yang mau dipakai dari tabel di atas (buka file-nya, select all, copy, lalu paste di editor Tampermonkey).
+   > Khusus file [`script`](script): namanya tanpa akhiran `.user.js`, jadi Tampermonkey **tidak bisa** drag-drop langsung — harus copy-paste manual seperti di atas. File yang namanya sudah `*.user.js` ([`fasih-koreksi-r27.user.js`](fasih-koreksi-r27.user.js), [`fasih-ganti-wilayah-oss.user.js`](fasih-ganti-wilayah-oss.user.js)) sebenarnya bisa langsung di-drag ke halaman Dashboard Tampermonkey untuk dipasang otomatis, tapi copy-paste manual tetap berlaku sama kalau lebih mudah.
+4. Simpan dengan **Ctrl+S** (atau menu **File → Save**).
+5. Cek status skrip itu di daftar Dashboard: saklarnya harus **hijau (Enabled)**. Skrip baru biasanya otomatis aktif, tapi tidak ada salahnya dicek ulang.
+6. Ulangi langkah 2–5 untuk tiap skrip lain yang mau dipasang — ketiganya independen, boleh pasang satu, dua, atau semuanya sekaligus.
+
+### 4. Pastikan jalan di FASIH
+
+1. Buka halaman `https://fasih-sm.bps.go.id/...` (halaman **DATA survei**, bukan halaman login).
+2. Tombol pelontar mengambang akan muncul di pojok kiri bawah — ikonnya tergantung skrip mana yang aktif: **⚡ FASIH Otomatis** (Batch Otomatis), **🔀 OSS → Keluarga** (Ganti Wilayah OSS), atau **27 Koreksi Pendapatan** (R.27). Kalau lebih dari satu skrip dipasang, semua tombolnya numpuk di situ.
+3. Buka Console browser (tekan **F12** → tab **Console**) dan refresh halaman. Harus ada baris log seperti `[FASIH Batch Otomatis v2.0] Skrip termuat di ...` (teksnya beda-beda tergantung skrip). **Kalau log ini tidak muncul sama sekali**, skrip belum benar-benar jalan — balik cek langkah 2 (Allow User Scripts) dan langkah 3.5 (status Enabled).
+4. Kalau muncul izin browser semacam "Izinkan ekstensi ini membaca dan mengubah data Anda di situs ini" saat halaman FASIH pertama kali dibuka, klik **Allow/Izinkan** — tanpa ini skrip tidak bisa membaca/mengisi form.
+
+### Memperbarui skrip setelah ada perbaikan
+
+Kalau salah satu skrip diperbaiki (misalnya setelah laporan bug), tidak perlu pasang ulang dari nol:
+1. Buka skrip yang sama di Dashboard Tampermonkey (klik nama skripnya).
+2. **Select all** isi editornya (Ctrl+A), hapus, lalu tempel isi file yang sudah diperbarui.
+3. Ctrl+S lagi.
+
+Progres kerja (antrean Excel yang sudah dimuat, daftar wilayah, kamus KBLI, dll) tersimpan terpisah di `localStorage` browser, **tidak ikut hilang** saat isi skrip ditimpa ulang seperti ini.
 
 ---
 

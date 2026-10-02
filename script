@@ -2902,6 +2902,41 @@
     }
   };
   const rateLimited = () => Date.now() < (rateInfo().until || 0);
+  // Jaringan/VPN (mis. FortiClient) terputus: fetch/XHR ke FASIH gagal total (bukan 429, beda dari server
+  // membatasi). Skrip dijeda dulu (seperti rate limit) daripada terus jalan dan menganggap baris yang
+  // kebetulan diproses saat itu sebagai galat data, padahal cuma jaringan yang putus sesaat.
+  const NET_KEY = "fasih_net_down";
+  const netInfo = () => {
+    try {
+      return JSON.parse(localStorage.getItem(NET_KEY)) || {};
+    } catch (e) {
+      return {};
+    }
+  };
+  const netDown = () => !!netInfo().down;
+  function noteNetDown() {
+    if (netDown()) return;
+    try {
+      localStorage.setItem(
+        NET_KEY,
+        JSON.stringify({ down: true, since: Date.now() }),
+      );
+    } catch (e) {
+      /* abaikan */
+    }
+    console.warn(
+      "[FASIH Otomatis] Jaringan/VPN terputus, skrip dijeda otomatis sampai tersambung lagi.",
+    );
+  }
+  function noteNetUp() {
+    if (!netDown()) return;
+    try {
+      localStorage.setItem(NET_KEY, JSON.stringify({ down: false }));
+    } catch (e) {
+      /* abaikan */
+    }
+    console.log("[FASIH Otomatis] Jaringan/VPN tersambung lagi, lanjut otomatis.");
+  }
   // Kecepatan: 0 Cepat, 1 Normal, 2 Aman. base = pilihan pengguna; penalty = turun otomatis setelah 429,
   // naik lagi satu tingkat tiap 1 jam tanpa 429. Dipakai: max(base, penalty).
   const SPEED_KEY = "fasih_speed";
@@ -3004,13 +3039,20 @@
     const origFetch = window.fetch;
     if (origFetch && !origFetch.__fo429) {
       const wrapped = function (input) {
-        return origFetch.apply(this, arguments).then((res) => {
-          if (res && res.status === 429)
-            noteRateLimit(
-              typeof input === "string" ? input : input && input.url,
-            );
-          return res;
-        });
+        return origFetch.apply(this, arguments).then(
+          (res) => {
+            noteNetUp(); // dapat respons apa pun dari server -> jaringan/VPN pasti tersambung
+            if (res && res.status === 429)
+              noteRateLimit(
+                typeof input === "string" ? input : input && input.url,
+              );
+            return res;
+          },
+          (err) => {
+            noteNetDown(); // fetch gagal total (bukan status error, tapi network error) -> jaringan putus
+            throw err;
+          },
+        );
       };
       wrapped.__fo429 = true;
       window.fetch = wrapped;
@@ -3024,18 +3066,32 @@
         return origOpen.apply(this, arguments);
       };
       XHR.send = function () {
-        this.addEventListener("loadend", () => {
+        this.addEventListener("load", () => {
+          noteNetUp();
           if (this.status === 429) noteRateLimit(this.__foUrl);
         });
+        this.addEventListener("error", () => noteNetDown());
+        this.addEventListener("timeout", () => noteNetDown());
         return origSend.apply(this, arguments);
       };
       XHR.__fo429 = true;
     }
   })();
+  // Jaringan/VPN down tapi skrip sedang diam (tidak ada request baru terjadi secara alami) -> coba ping
+  // berkala supaya begitu VPN tersambung lagi, skrip langsung tahu dan lanjut sendiri (tanpa refresh manual)
+  setInterval(() => {
+    if (!netDown()) return;
+    fetch(location.origin + "/favicon.ico", {
+      method: "HEAD",
+      cache: "no-store",
+    }).catch(() => {
+      /* masih putus, dicoba lagi di interval berikutnya */
+    });
+  }, 5000);
   // Pemberitahuan kecil di pojok selama masa tunggu (juga saat "Cek semua" Tahap 1)
   setInterval(() => {
     let note = document.getElementById("fasih-rate-note");
-    if (!rateLimited()) {
+    if (!rateLimited() && !netDown()) {
       if (note) note.remove();
       return;
     }
@@ -3047,8 +3103,12 @@
       document.body.appendChild(note);
     }
     if (note) {
-      const r = rateInfo();
-      note.textContent = `⛔ Server FASIH membatasi (429: terlalu banyak permintaan). Skrip berhenti otomatis sampai ${new Date(r.until).toLocaleTimeString()}, lalu lanjut sendiri. Jangan refresh berulang-ulang.`;
+      if (netDown()) {
+        note.textContent = `⛔ Jaringan/VPN terputus sejak ${new Date(netInfo().since).toLocaleTimeString()}. Skrip dijeda otomatis, lanjut sendiri begitu tersambung lagi. Jangan refresh.`;
+      } else {
+        const r = rateInfo();
+        note.textContent = `⛔ Server FASIH membatasi (429: terlalu banyak permintaan). Skrip berhenti otomatis sampai ${new Date(r.until).toLocaleTimeString()}, lalu lanjut sendiri. Jangan refresh berulang-ulang.`;
+      }
     }
   }, 3000);
 
@@ -3058,9 +3118,9 @@
     await new Promise((resolve) =>
       setTimeout(resolve, ms >= 500 ? Math.round(ms * SLEEP_FACTOR) : ms),
     );
-    if (!userPaused() && !rateLimited()) return;
+    if (!userPaused() && !rateLimited() && !netDown()) return;
     const t = Date.now();
-    while (userPaused() || rateLimited())
+    while (userPaused() || rateLimited() || netDown())
       await new Promise((resolve) => setTimeout(resolve, 1000));
     pausedTotalMs += Date.now() - t;
   }
@@ -5925,8 +5985,14 @@
   // baru dibuka -> kalau gagal atau nilainya tidak lengket, ulangi sekali lagi sebelum menyerah.
   async function selectKbli(kbliBox, code) {
     const pick = (opts) => opts.find((o) => o.innerText.includes(code));
-    for (let attempt = 0; attempt < 2; attempt++) {
-      if (attempt) await sleep(800);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt) {
+        // Percobaan sebelumnya gagal: pastikan modal Master KBLI benar-benar tertutup dulu, soalnya
+        // kalau masih nyangkut terbuka, triggerClick(toggle) di percobaan berikutnya malah MENUTUPnya
+        // (klik kedua pada tombol yang sama = toggle off) alih-alih membuka ulang -> selalu gagal.
+        closeDialogs();
+        await sleep(900 + attempt * 400); // daftar 1.559 kode kadang belum siap kalau baru dibuka lagi
+      }
       const ok = await chooseFromDropdown(fresh(kbliBox), code, pick);
       if (
         ok &&
@@ -7562,7 +7628,12 @@
     const target = run.onlyIds ? run.onlyIds.length : run.limit;
     const hold = run.phase === "hold";
     const up = loadPause();
-    if (!up.on && rateLimited()) {
+    if (!up.on && netDown()) {
+      up.on = true;
+      up.reason = `⛔ Jaringan/VPN terputus sejak ${new Date(netInfo().since).toLocaleTimeString()}`;
+      up.resumeAt = 0;
+      up.rate = true; // jalur yang sama: tombol Lanjut manual disembunyikan, nunggu tersambung sendiri
+    } else if (!up.on && rateLimited()) {
       up.on = true;
       up.reason = `⛔ Server membatasi (429). Berhenti otomatis sampai ${new Date(rateInfo().until).toLocaleTimeString()}`;
       up.resumeAt = 0;
