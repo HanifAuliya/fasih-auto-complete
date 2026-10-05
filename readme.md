@@ -14,7 +14,7 @@ Semuanya independen — bisa dipasang salah satu atau dua-duanya sekaligus.
 
 ## Instalasi
 
-Panduan versi bergambar (ilustrasi tiap langkah): lihat tautan yang dikirim terpisah, atau ikuti langkah teks di bawah ini.
+Panduan versi bergambar (ilustrasi tiap langkah): <https://claude.ai/artifact/UhoGB1C5nHAvidE5DguKKP>, atau ikuti langkah teks di bawah ini.
 
 ### 1. Pasang ekstensi Tampermonkey
 
@@ -154,7 +154,7 @@ Memuat ulang file Excel yang sama akan mempertahankan status baris yang sudah di
 Buka lewat tombol mengambang **"🔀 OSS → Keluarga"** di kiri bawah, atau **Alt+8**.
 
 - **Persiapan**: Muat Excel target, email Pengawas & Pencacah (buat isian petugas saat Ganti Wilayah), kecepatan **Turbo/Kilat/Cepat/Normal**, saklar "setelah dipindah: buka keluarga, pilih UMKM, isi OSS, kirim" dan "Approve setelah kirim", ID survei (UUID prefix URL, dipelajari otomatis), saklar "Wajib cocok assignment_id" (lebih ketat, bisa lebih banyak masuk kategori "perlu cek").
-- **Kotak statistik** (klik buat filter, termasuk filter khusus **"OSS Ganda"** yang baca sub-kategori dari status "OSS tutup"): Belum dipindah, Dipindah/belum ditautkan, Ditautkan, OSS tutup, **OSS Ganda**, Perlu cek, Gagal, Uji, Semua.
+- **Kotak statistik** (klik buat filter, termasuk filter khusus **"OSS Ganda"** yang baca sub-kategori dari status "OSS tutup"): Belum dipindah, Dipindah/belum ditautkan, Ditautkan, OSS tutup, **OSS Ganda**, Perlu cek, Gagal, Selesai manual, Uji, Semua.
 - **Jalankan**:
   - **🧪 Uji 1** — jalankan 1 baris, berhenti sebelum tiap Kirim (dialog Ganti Wilayah, Kirim keluarga, Kirim OSS) buat diperiksa manual lewat tombol "✓ Kirim sekarang"/"Lewati" di bar atas.
   - **🔗 Tautkan yang sudah dipindah** — lanjutkan baris yang statusnya "dipindah" tapi belum ditautkan.
@@ -162,6 +162,7 @@ Buka lewat tombol mengambang **"🔀 OSS → Keluarga"** di kiri bawah, atau **A
   - **🔎 Cek ulang Ganda dari OSS Tutup** — lihat bagian khusus di bawah.
   - **▶ Yang dicentang / ▶ 5 / ▶ 20 / ▶ Semua** — jalankan baris sesuai pilihan, mulai dari fase pindah wilayah lalu lanjut tautkan.
 - **Centang semua tampil / Kosongkan centang** — centang cepat semua baris yang sedang ditampilkan (menghormati filter status & pencarian aktif), buat dipakai bareng "▶ Yang dicentang". *(Catatan: "▶ Yang dicentang" cuma memproses baris yang statusnya bukan `Ditautkan`/`OSS tutup` — untuk baris yang sudah selesai dan mau dicek ulang, pakai tombol Force Submit / Cek ulang Ganda, bukan ini.)*
+- **✓ Pilih status akhir** — untuk baris yang sudah kamu selesaikan manual di FASIH (biasanya dari Gagal/Perlu cek). Centang baris-baris itu, klik tombol ini, lalu pilih status akhirnya: **Ditautkan**, **Tutup**, **Ganda**, atau **Selesaikan sendiri** (baris tidak dihitung sebagai ketiga status lain, cuma ditandai selesai). Pilihanmu ikut terbaca di Laporan CSV (kolom `status` & `hasil_tautan`), jadi kelihatan jelas baris itu akhirnya masuk ke mana. Baris yang sudah dipilih tidak akan diproses otomatis lagi.
 - Baris lain: Reset Gagal/Perlu cek → belum, Hapus antrean.
 - Tiap baris menampilkan badge status (termasuk badge terpisah "OSS Ganda"), alasan, dan link cepat ke dokumen OSS & Keluarga.
 
@@ -179,6 +180,7 @@ Cara kerjanya **dirancang hemat revoke**: dicek dulu dari halaman **Review kelua
 - **"⬇ Laporan CSV"** — laporan status untuk dibaca manusia (alasan, hasil tautan, alamat yang disalin, dll).
 - **"⬇ Ekspor Antrean"** — unduh **seluruh antrean mentah** (semua field + progres + pengaturan) sebagai JSON. Tidak perlu lagi bawa file Excel aslinya untuk lanjut kerja, karena semua data Excel sudah ikut tersimpan di sini.
 - **"📤 Impor Antrean"** — muat file itu di laptop lain untuk lanjut persis dari titik terakhir (dikonfirmasi dulu sebelum menimpa antrean yang ada).
+- **Nama file ekspor** otomatis memakai nama wilayah dari antrean, misalnya `laporan-oss-keluarga-<KECAMATAN>-<DESA>-<tanggal-jam>.csv` atau `antrean-oss-keluarga-<DESA>-<tanggal-jam>.json`. Kalau antrean berisi beberapa desa dalam satu kecamatan, yang dipakai nama kecamatannya; kalau beberapa kecamatan, dipakai jumlah kecamatannya (mis. `3-kecamatan`).
 
 ### Status & label
 
@@ -191,6 +193,7 @@ Cara kerjanya **dirancang hemat revoke**: dicek dulu dari halaman **Review kelua
 | Terisi (uji) | diisi di Mode Uji tapi sengaja tidak dikirim |
 | Gagal | error yang menghentikan baris itu |
 | Perlu cek | kemungkinan soft-error (misal nama tidak unik, data OSS sudah dipindah sebelumnya) |
+| Selesai (dicek manual) | ditandai sendiri lewat "✓ Pilih status akhir → Selesaikan sendiri"; tidak diproses otomatis lagi |
 
 ### Kecepatan & rate limit (429)
 

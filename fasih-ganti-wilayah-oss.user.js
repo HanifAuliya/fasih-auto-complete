@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH OSS -> Keluarga: Pindah + Tautkan
 // @namespace    hanif-bps-hst
-// @version      2.21
+// @version      2.23
 // @description  OSS dipindah ke SLS keluarga (⋮ > Ganti Wilayah), lalu dokumen keluarga dibuka: salin Blok P (alamat, no bangunan, geotag) dan pilih OSS di "Pilih UMKM dalam satu SLS". Ada -> OSS Ditemukan + alamat & geotag keluarga; tidak ada / keluarga tanpa usaha -> OSS Tutup. Keduanya dikirim & di-approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -2196,6 +2196,18 @@
     return c;
   }
 
+  // Label nama wilayah untuk nama file ekspor, dari kecamatan/desa yang ada di antrean
+  function wilayahTag() {
+    const queue = loadQueue();
+    const kecs = [...new Set(queue.map((i) => i.kec.name || i.kec.code).filter(Boolean))];
+    const desas = [...new Set(queue.map((i) => i.desa.name || i.desa.code).filter(Boolean))];
+    let tag = "semua-wilayah";
+    if (desas.length === 1) tag = kecs.length === 1 ? `${kecs[0]}-${desas[0]}` : desas[0];
+    else if (kecs.length === 1) tag = kecs[0];
+    else if (kecs.length > 1) tag = `${kecs.length}-kecamatan`;
+    return tag.replace(/[\\/:*?"<>|\s]+/g, "_").replace(/_+/g, "_").slice(0, 80);
+  }
+
   function downloadReport() {
     const q = (v) => `"${String(v === undefined || v === null ? "" : v).replace(/"/g, '""')}"`;
     const header = ["baris_excel", "assignment_id", "kel_assignment_id", "status", "alasan", "hasil_tautan", "usaha_keluarga", "force_submit", "jalan", "nomor", "no_bang", "latitude", "longitude", "waktu", "kecamatan", "desa", "sls_asal", "nama_usaha", "sls_tujuan", "subsls_tujuan", "sls_tujuan_nama", "kel_anggota", "yakin", "link_oss", "link_keluarga"];
@@ -2207,7 +2219,7 @@
     const blob = new Blob(["﻿" + [header.join(","), ...lines].join("\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `laporan-oss-keluarga-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}.csv`;
+    a.download = `laporan-oss-keluarga-${wilayahTag()}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}.csv`;
     a.click();
   }
 
@@ -2220,8 +2232,57 @@
     });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `antrean-oss-keluarga-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}.json`;
+    a.download = `antrean-oss-keluarga-${wilayahTag()}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}.json`;
     a.click();
+  }
+
+  // Status akhir yang dipilih manual. Ditautkan/Tutup/Ganda diisi seperti hasil otomatis
+  // (supaya kolom status & hasil_tautan di Laporan CSV terbaca benar); "manual" = diselesaikan sendiri.
+  const FINAL_CHOICES = {
+    linked: { label: "✅ Ditautkan", hint: "OSS ditemukan & tertaut ke usaha keluarga" },
+    closed: { label: "🔒 Tutup", hint: "OSS tutup" },
+    ganda: { label: "🔁 Ganda", hint: "usaha keluarga sudah dicatat langsung (tanpa Pilih UMKM)" },
+    manual: { label: "✍ Selesaikan sendiri", hint: "tidak masuk Ditautkan/Tutup/Ganda, diselesaikan manual di FASIH" },
+  };
+  function applyFinalStatus(ids, choice) {
+    const queue = loadQueue();
+    queue.filter((i) => ids.includes(i.id)).forEach((i) => {
+      const note = `dipilih manual (sebelumnya: ${STATUS_LABEL[i.status] || i.status})`;
+      if (choice === "linked") Object.assign(i, { status: "linked", linkResult: "found", forced: true, reason: `${i.namaUsaha}: ${note} → ditautkan` });
+      else if (choice === "closed") Object.assign(i, { status: "closed", linkResult: i.linkResult === "nousaha" ? "nousaha" : "nomatch", reason: `${i.namaUsaha}: ${note} → OSS tutup` });
+      else if (choice === "ganda") Object.assign(i, { status: "closed", linkResult: "ganda", reason: `${i.namaUsaha}: ${note} → OSS ganda` });
+      else Object.assign(i, { status: "manual", reason: `${i.namaUsaha}: ${note} → diselesaikan sendiri` });
+      i.gandaChecked = true; // sudah diputuskan manual, jangan dicek ulang otomatis
+      i.doneAt = new Date().toISOString();
+    });
+    saveQueue(queue);
+  }
+  function openFinalPicker(ids) {
+    document.getElementById("fgw-final")?.remove();
+    const modal = document.createElement("div");
+    modal.id = "fgw-final";
+    modal.className = "fgw fgw-overlay";
+    modal.style.cssText = "align-items:center;justify-content:center;z-index:1000002;";
+    const options = Object.entries(FINAL_CHOICES)
+      .map(([key, o]) => `<button class="fgw-btn" data-final="${key}" style="text-align:left;"><b>${o.label}</b><div class="fgw-hint">${o.hint}</div></button>`)
+      .join("");
+    modal.innerHTML = `<div style="background:#fff;color:#0f172a;border-radius:12px;padding:18px;width:min(440px,92vw);box-shadow:0 20px 50px rgba(15,23,42,.3);">
+      <div style="font-weight:700;font-size:15px;margin-bottom:4px;">Pilih status akhir</div>
+      <div class="fgw-hint" style="margin-bottom:12px;">${ids.length} baris yang dicentang akan diberi status ini. Hasilnya ikut terbaca di Laporan CSV (kolom status & hasil_tautan).</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">${options}<button class="fgw-btn ghost" data-final="cancel">Batal</button></div>
+    </div>`;
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) return modal.remove();
+      const btn = e.target.closest("[data-final]");
+      if (!btn) return;
+      const choice = btn.dataset.final;
+      modal.remove();
+      if (choice === "cancel") return;
+      applyFinalStatus(ids, choice);
+      selected.clear();
+      openPanel();
+    });
+    document.body.appendChild(modal);
   }
 
   let panelFilter = "pending";
@@ -2352,7 +2413,7 @@
             <button class="fgw-btn sm ghost" data-act="selnone">Kosongkan</button>
           </div>
           <div class="fgw-row" style="margin-bottom:10px;">
-            <button class="fgw-btn sm ok" data-act="markdone" title="Baris Gagal/Perlu cek yang sudah kamu perbaiki sendiri di FASIH">✓ Tandai selesai manual <span class="n" data-selcount2>${selected.size}</span></button>
+            <button class="fgw-btn sm ok" data-act="markdone" title="Pilih status akhir (Ditautkan / Tutup / Ganda / Selesaikan sendiri) untuk baris yang dicentang">✓ Pilih status akhir <span class="n" data-selcount2>${selected.size}</span></button>
             <button class="fgw-btn sm" data-act="reset">↻ Gagal/perlu cek → belum</button>
             <span style="flex:1"></span>
             <button class="fgw-btn sm ghost danger" data-act="clear">🗑 Hapus antrean</button>
@@ -2518,18 +2579,7 @@
       if (act === "markdone") {
         const ids = loadQueue().filter((q) => selected.has(q.id)).map((q) => q.id);
         if (!ids.length) return alert("Belum ada baris yang dicentang.");
-        if (confirm(`Tandai ${ids.length} baris yang dicentang sebagai "selesai (dicek manual)"? Baris ini tidak akan diproses otomatis lagi.`)) {
-          const q = loadQueue();
-          q.filter((i) => ids.includes(i.id)).forEach((i) => {
-            const prevLabel = STATUS_LABEL[i.status] || i.status;
-            i.status = "manual";
-            i.reason = `ditandai selesai manual oleh pengguna (sebelumnya: ${prevLabel})`;
-            i.doneAt = new Date().toISOString();
-          });
-          saveQueue(q);
-          selected.clear();
-          openPanel();
-        }
+        openFinalPicker(ids);
       }
       if (act === "sel") {
         const ids = loadQueue().filter((q) => selected.has(q.id) && !["linked", "closed"].includes(q.status)).map((q) => q.id);
@@ -2608,5 +2658,5 @@
     refreshPanelLive();
   }, 700);
 
-  console.log("[OSS → Keluarga v2.21] Aktif. Tombol di kiri bawah (Alt+8).");
+  console.log("[OSS → Keluarga v2.23] Aktif. Tombol di kiri bawah (Alt+8).");
 })();
