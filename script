@@ -7913,6 +7913,62 @@
     wilayah: WILAYAH_KEY,
     kamusKbli: "fasih_kbli_kamus_v1",
   };
+  // Gabung rekap JSON (ekspor dari sesi/laptop lain) ke baris Excel yang sudah dimuat.
+  // Dicocokkan per id + krt; baris rekap yang masih "pending" tidak disalin.
+  const REKAP_FIELDS = [
+    "status",
+    "reason",
+    "kode",
+    "fasihStatus",
+    "candidates",
+    "wilayah",
+    "assignmentUrl",
+    "kbli",
+    "usahaCard",
+    "doneAt",
+    "openedAt",
+    "chosenKode",
+    "notes",
+    "ownerEff",
+    "ownerGender",
+  ];
+  function applyRekap(recap, exportedAt) {
+    const queue = loadQueue();
+    if (!queue.length) {
+      alert('Muat Excel dulu ("📥 Muat Excel"), baru gabungkan rekapnya.');
+      return;
+    }
+    const byKey = new Map(recap.map((r) => [`${r.id}|${r.krt}`, r]));
+    const next = JSON.parse(JSON.stringify(queue));
+    const cocok = [];
+    const belum = [];
+    next.forEach((item) => {
+      const r = byKey.get(`${item.id}|${item.krt}`);
+      if (!r || r.status === "pending") return belum.push(item);
+      REKAP_FIELDS.forEach((k) => {
+        if (r[k] !== undefined) item[k] = r[k];
+      });
+      cocok.push(item);
+    });
+    const tally = (list) => {
+      const t = {};
+      list.forEach((q) => (t[q.status] = (t[q.status] || 0) + 1));
+      return Object.entries(t).map(([k, v]) => `${STATUS_LABEL[k] || k}: ${v}`).join(", ") || "-";
+    };
+    const idsExcel = new Set(queue.map((i) => `${i.id}|${i.krt}`));
+    const tidakAdaDiExcel = recap.filter((r) => !idsExcel.has(`${r.id}|${r.krt}`)).length;
+    const msg =
+      `Rekap${exportedAt ? ` (diekspor ${new Date(exportedAt).toLocaleString()})` : ""}: ${recap.length} baris.\n` +
+      `Excel saat ini: ${queue.length} baris.\n\n` +
+      `✓ Cocok & progres disalin: ${cocok.length}\n    ${tally(cocok)}\n` +
+      `• Belum ada progres di rekap (tetap dikerjakan): ${belum.length}\n` +
+      `• Baris rekap yang tidak ada di Excel ini: ${tidakAdaDiExcel}\n\n` +
+      `Gabungkan sekarang? Baris yang cocok akan memakai status dari rekap, jadi yang sudah terkirim tidak akan dikerjakan ulang.`;
+    if (!confirm(msg)) return;
+    saveQueue(next);
+    alert(`Rekap digabung.\n\nSekarang antrean: ${tally(next)}`);
+  }
+
   function exportAllData() {
     const data = { version: 1, exportedAt: new Date().toISOString() };
     Object.entries(EXPORT_KEYS).forEach(([key, storageKey]) => {
@@ -8136,6 +8192,7 @@
               <div class="fo-section-title">① Data Excel &amp; wilayah</div>
               <div class="fo-rowflex">
                 <button class="fo-btn ${queue.length ? "" : "primary"}" data-act="load">📥 Muat Excel</button>
+                <button class="fo-btn" data-act="rekap" title="Pilih file export dari sesi/laptop sebelumnya. Baris yang sudah terkirim di rekap tidak akan dikerjakan ulang.">🧩 Gabung rekap JSON</button>
                 <button class="fo-btn ${wilayahCount ? "" : "primary"}" data-act="wilayah">🗺 Baca wilayah</button>
                 ${unresolved.length ? `<button class="fo-btn" data-act="kbli" style="border-color:#c4b5fd;color:#6d28d9;">🏷 KBLI · ${unresolved.length}</button>` : ""}
               </div>
@@ -8246,6 +8303,7 @@
         </div>
         <input data-file type="file" accept=".xlsx,.xls" style="display:none">
         <input data-import-file type="file" accept=".json" style="display:none">
+        <input data-rekap-file type="file" accept=".json" style="display:none">
       </div>`;
 
     document.body.appendChild(overlay);
@@ -8357,6 +8415,22 @@
       const file = importInput.files[0];
       importInput.value = "";
       if (file) await importAllData(file);
+    };
+
+    const rekapInput = overlay.querySelector("[data-rekap-file]");
+    rekapInput.onchange = async () => {
+      const file = rekapInput.files[0];
+      rekapInput.value = "";
+      if (!file) return;
+      try {
+        const data = JSON.parse(await file.text());
+        const recap = Array.isArray(data) ? data : data.queue;
+        if (!Array.isArray(recap)) throw new Error("file bukan hasil Ekspor data");
+        applyRekap(recap, Array.isArray(data) ? null : data.exportedAt);
+      } catch (err) {
+        alert(`Gagal membaca rekap: ${err.message}`);
+      }
+      openPanel();
     };
 
     overlay.addEventListener("click", async (e) => {
@@ -8627,6 +8701,7 @@
       if (act === "report") downloadReport();
       if (act === "export-data") exportAllData();
       if (act === "import-data") importInput.click();
+      if (act === "rekap") rekapInput.click();
       if (act === "newtab") {
         const s = loadState();
         s.newTab = el.checked;

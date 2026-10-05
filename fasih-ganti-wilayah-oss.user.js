@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH OSS -> Keluarga: Pindah + Tautkan
 // @namespace    hanif-bps-hst
-// @version      2.23
+// @version      2.24
 // @description  OSS dipindah ke SLS keluarga (⋮ > Ganti Wilayah), lalu dokumen keluarga dibuka: salin Blok P (alamat, no bangunan, geotag) dan pilih OSS di "Pilih UMKM dalam satu SLS". Ada -> OSS Ditemukan + alamat & geotag keluarga; tidak ada / keluarga tanpa usaha -> OSS Tutup. Keduanya dikirim & di-approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -29,14 +29,61 @@
 
   // Tingkat kecepatan: jeda antar-assignment, lama tunggu tabel/dropdown/dialog (ms)
   const SPEEDS = [
-    { name: "Turbo", scale: 0.35, gap: [0, 150], settle: 300, after: 100, optStep: 80, afterPick: 150, dlg: 300, submit: 250, poll: 60 },
-    { name: "Kilat", scale: 0.5, gap: [300, 800], settle: 500, after: 200, optStep: 120, afterPick: 250, dlg: 500, submit: 500, poll: 100 },
-    { name: "Cepat", scale: 0.75, gap: [1000, 2500], settle: 800, after: 400, optStep: 200, afterPick: 400, dlg: 800, submit: 800, poll: 150 },
-    { name: "Normal", scale: 1, gap: [4000, 9000], settle: 1500, after: 1500, optStep: 300, afterPick: 700, dlg: 1200, submit: 1500, poll: 250 },
+    {
+      name: "Turbo",
+      scale: 0.35,
+      gap: [0, 150],
+      settle: 300,
+      after: 100,
+      optStep: 80,
+      afterPick: 150,
+      dlg: 300,
+      submit: 250,
+      poll: 60,
+    },
+    {
+      name: "Kilat",
+      scale: 0.5,
+      gap: [300, 800],
+      settle: 500,
+      after: 200,
+      optStep: 120,
+      afterPick: 250,
+      dlg: 500,
+      submit: 500,
+      poll: 100,
+    },
+    {
+      name: "Cepat",
+      scale: 0.75,
+      gap: [1000, 2500],
+      settle: 800,
+      after: 400,
+      optStep: 200,
+      afterPick: 400,
+      dlg: 800,
+      submit: 800,
+      poll: 150,
+    },
+    {
+      name: "Normal",
+      scale: 1,
+      gap: [4000, 9000],
+      settle: 1500,
+      after: 1500,
+      optStep: 300,
+      afterPick: 700,
+      dlg: 1200,
+      submit: 1500,
+      poll: 250,
+    },
   ];
   // Jeda tetap di form dikali skala kecepatan (Turbo 35%)
   const W = (ms) => Math.max(100, Math.round(ms * (T().scale || 1)));
-  const T = () => SPEEDS[Math.min(SPEEDS.length - 1, Math.max(0, Number(loadConf().speed) || 0))];
+  const T = () =>
+    SPEEDS[
+      Math.min(SPEEDS.length - 1, Math.max(0, Number(loadConf().speed) || 0))
+    ];
 
   const STATUS_LABEL = {
     pending: "belum dipindah",
@@ -111,7 +158,9 @@
     const cf = loadConf();
     cf.speed = Math.min(SPEEDS.length - 1, (Number(cf.speed) || 0) + 1);
     saveConf(cf);
-    console.warn(`[Ganti Wilayah] 429 dari server. Berhenti ${minutes} menit, kecepatan turun ke ${SPEEDS[cf.speed].name}.`);
+    console.warn(
+      `[Ganti Wilayah] 429 dari server. Berhenti ${minutes} menit, kecepatan turun ke ${SPEEDS[cf.speed].name}.`,
+    );
   }
   (function watch429() {
     const origFetch = window.fetch;
@@ -119,7 +168,9 @@
       const wrapped = function (input) {
         return origFetch.apply(this, arguments).then((res) => {
           if (res && res.status === 429)
-            noteRateLimit(typeof input === "string" ? input : input && input.url);
+            noteRateLimit(
+              typeof input === "string" ? input : input && input.url,
+            );
           return res;
         });
       };
@@ -234,7 +285,11 @@
     const bytes = new Uint8Array(arrayBuffer);
     const view = new DataView(arrayBuffer);
     let eocd = -1;
-    for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i--) {
+    for (
+      let i = bytes.length - 22;
+      i >= Math.max(0, bytes.length - 65557);
+      i--
+    ) {
       if (view.getUint32(i, true) === 0x06054b50) {
         eocd = i;
         break;
@@ -279,12 +334,16 @@
   // Hasil: [{ name, rows: [[teks sel, ...], ...] }] ; semua nilai sebagai teks (kode "0005" tetap utuh)
   async function readXlsx(arrayBuffer) {
     const read = await openZip(arrayBuffer);
-    const xml = (text) => new DOMParser().parseFromString(text, "application/xml");
-    const tags = (node, tag) => Array.from(node.getElementsByTagNameNS("*", tag));
+    const xml = (text) =>
+      new DOMParser().parseFromString(text, "application/xml");
+    const tags = (node, tag) =>
+      Array.from(node.getElementsByTagNameNS("*", tag));
     const sharedXml = await read("xl/sharedStrings.xml");
     const shared = sharedXml
       ? tags(xml(sharedXml), "si").map((si) =>
-          tags(si, "t").map((t) => t.textContent).join(""),
+          tags(si, "t")
+            .map((t) => t.textContent)
+            .join(""),
         )
       : [];
     const rels = {};
@@ -314,7 +373,9 @@
           const v = tags(c, "v")[0];
           let value = "";
           if (type === "inlineStr")
-            value = tags(c, "t").map((t) => t.textContent).join("");
+            value = tags(c, "t")
+              .map((t) => t.textContent)
+              .join("");
           else if (!v) value = "";
           else if (type === "s") value = shared[Number(v.textContent)];
           else value = v.textContent;
@@ -336,7 +397,8 @@
     "sls_tujuan",
     "subsls_tujuan",
   ];
-  const pad = (v, n) => (String(v || "").trim() ? String(v).trim().padStart(n, "0") : "");
+  const pad = (v, n) =>
+    String(v || "").trim() ? String(v).trim().padStart(n, "0") : "";
 
   async function parseWorkbook(arrayBuffer) {
     const sheets = await readXlsx(arrayBuffer);
@@ -344,12 +406,15 @@
     const headers = sheet.rows[0].map((h) => String(h).trim().toLowerCase());
     const missing = REQUIRED_COLS.filter((c) => !headers.includes(c));
     if (missing.length)
-      throw new Error(`kolom tidak ada di sheet "${sheet.name}": ${missing.join(", ")}`);
+      throw new Error(
+        `kolom tidak ada di sheet "${sheet.name}": ${missing.join(", ")}`,
+      );
     const col = (name) => headers.indexOf(name);
     const items = [];
     let skipped = 0;
     sheet.rows.slice(1).forEach((r, i) => {
-      const get = (name) => (col(name) >= 0 ? String(r[col(name)] || "").trim() : "");
+      const get = (name) =>
+        col(name) >= 0 ? String(r[col(name)] || "").trim() : "";
       if (!get("assignment_id")) return;
       const proses = get("proses").toUpperCase();
       if (proses && !/^(1|YA|Y|TRUE)$/.test(proses)) {
@@ -372,10 +437,16 @@
         kelAnggota: get("kel_anggota"),
         linkOss: get("link_oss"),
         linkKel: get("link_keluarga"),
-        kelId: (get("kel_assignment_id") || (get("link_keluarga").match(/([0-9a-f-]{36})/i) || [])[1] || "").toLowerCase(),
+        kelId: (
+          get("kel_assignment_id") ||
+          (get("link_keluarga").match(/([0-9a-f-]{36})/i) || [])[1] ||
+          ""
+        ).toLowerCase(),
         // status_awal "dipindah" (dari laporan sebelumnya) -> langsung ke tahap tautkan
         status: /^dipindah$/i.test(get("status_awal")) ? "moved" : "pending",
-        reason: /^dipindah$/i.test(get("status_awal")) ? `dipindah (laporan sebelumnya)` : "",
+        reason: /^dipindah$/i.test(get("status_awal"))
+          ? `dipindah (laporan sebelumnya)`
+          : "",
       });
     });
     return { items, sheet: sheet.name, skipped };
@@ -393,7 +464,9 @@
 
   function isLoading() {
     const busy = Array.from(
-      document.querySelectorAll('[class*="animate-spin"], [class*="skeleton"], [aria-busy="true"]'),
+      document.querySelectorAll(
+        '[class*="animate-spin"], [class*="skeleton"], [aria-busy="true"]',
+      ),
     ).some((el) => visible(el) && !el.closest("#fgw-panel, #fgw-bar"));
     return busy || /loading|memuat/i.test(tableText());
   }
@@ -416,19 +489,24 @@
   }
 
   function filterButton() {
-    return Array.from(document.querySelectorAll('button[aria-haspopup="dialog"]')).find(
-      (b) => b.querySelector(".tabler-icon-filter") && !b.closest("th"),
-    );
+    return Array.from(
+      document.querySelectorAll('button[aria-haspopup="dialog"]'),
+    ).find((b) => b.querySelector(".tabler-icon-filter") && !b.closest("th"));
   }
 
   const gantiDialog = () =>
     Array.from(document.querySelectorAll('[role="dialog"]')).find(
-      (d) => visible(d) && /ganti wilayah/i.test((d.querySelector("h2") || {}).innerText || ""),
+      (d) =>
+        visible(d) &&
+        /ganti wilayah/i.test((d.querySelector("h2") || {}).innerText || ""),
     ) || null;
 
   // Combobox berlabel (scope: dialog Ganti Wilayah, atau halaman kecuali dialog itu)
   // Label dicocokkan tanpa spasi/tanda baca ("SUBSLS" = "SUB SLS" = "Sub-SLS")
-  const squash = (s) => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const squash = (s) =>
+    String(s || "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "");
   function fieldButton(label, scope) {
     const dlg = gantiDialog();
     const lab = Array.from((scope || document).querySelectorAll("label")).find(
@@ -436,13 +514,18 @@
         squash(l.innerText) === squash(label) &&
         (scope || !dlg || !dlg.contains(l)),
     );
-    return lab ? lab.parentElement.querySelector('button[role="combobox"]') : null;
+    return lab
+      ? lab.parentElement.querySelector('button[role="combobox"]')
+      : null;
   }
 
   const OPTION_SELECTOR = '[cmdk-item], [role="option"]';
   const visibleOptions = () =>
     Array.from(document.querySelectorAll(OPTION_SELECTOR)).filter(
-      (el) => visible(el) && !el.closest("#fgw-panel, #fgw-bar") && el.innerText.trim(),
+      (el) =>
+        visible(el) &&
+        !el.closest("#fgw-panel, #fgw-bar") &&
+        el.innerText.trim(),
     );
   const optionText = (el) => el.getAttribute("data-value") || el.innerText;
   const shownText = (btn) =>
@@ -462,7 +545,8 @@
       count = visibleOptions().length; // tunggu daftar selesai dimuat
       await sleep(T().optStep);
     }
-    const find = () => visibleOptions().find((el) => parseOption(optionText(el)).code === code);
+    const find = () =>
+      visibleOptions().find((el) => parseOption(optionText(el)).code === code);
     let target = find();
     const input = document.querySelector("input[cmdk-input]");
     if (!target && input) {
@@ -499,7 +583,8 @@
     if (apply) triggerClick(apply);
     else pressKey("Escape");
     await sleep(400);
-    if (fieldButton("KECAMATAN") && filterButton()) triggerClick(filterButton());
+    if (fieldButton("KECAMATAN") && filterButton())
+      triggerClick(filterButton());
     await sleep(300);
   }
 
@@ -509,7 +594,11 @@
     if (appliedFilterKey === key) return;
     const before = tableText();
     await openFilterPanel();
-    await pickByCode(() => fieldButton("KECAMATAN"), item.kec.code, "Filter KECAMATAN");
+    await pickByCode(
+      () => fieldButton("KECAMATAN"),
+      item.kec.code,
+      "Filter KECAMATAN",
+    );
     await pickByCode(() => fieldButton("DESA"), item.desa.code, "Filter DESA");
     if (fieldButton("SLS"))
       await pickByCode(() => fieldButton("SLS"), sls, "Filter SLS");
@@ -526,7 +615,12 @@
       setInputValue(input, query);
       await sleep(T().after);
       input.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }),
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          code: "Enter",
+          keyCode: 13,
+          bubbles: true,
+        }),
       );
       await waitTableSettled(before);
     }
@@ -538,7 +632,9 @@
   // Baris yang pasti assignment ini: id ada di HTML baris, atau muncul di link Review setelah kode diklik
   async function rowHasId(tr, id) {
     if (tr.innerHTML.toLowerCase().includes(id)) return true;
-    const kodeBtn = tr.querySelector("td button:not([title]):not([aria-haspopup])");
+    const kodeBtn = tr.querySelector(
+      "td button:not([title]):not([aria-haspopup])",
+    );
     if (!kodeBtn) return false;
     triggerClick(kodeBtn);
     const link = await waitFor(
@@ -554,23 +650,41 @@
     const want = normalize(item.namaUsaha);
     const rows = await searchList(item.namaUsaha);
     const exact = rows.filter((tr) =>
-      Array.from(tr.querySelectorAll("td")).some((td) => normalize(td.innerText) === want),
+      Array.from(tr.querySelectorAll("td")).some(
+        (td) => normalize(td.innerText) === want,
+      ),
     );
     const loose = rows.filter((tr) => normalize(tr.innerText).includes(want));
     const candidates = exact.length ? exact : loose;
     // Jalur cepat: id langsung terbaca di HTML baris, atau (tidak wajib id) cuma 1 nama persis -> tanpa klik kode
-    const direct = candidates.find((tr) => tr.innerHTML.toLowerCase().includes(item.id));
+    const direct = candidates.find((tr) =>
+      tr.innerHTML.toLowerCase().includes(item.id),
+    );
     if (direct) return { tr: direct, note: "cocok assignment_id" };
     if (!loadConf().strictId && exact.length === 1)
       return { tr: exact[0], note: "1 nama persis di SLS asal" };
     for (const tr of candidates.slice(0, 6)) {
-      if (await rowHasId(tr, item.id)) return { tr, note: "cocok assignment_id" };
+      if (await rowHasId(tr, item.id))
+        return { tr, note: "cocok assignment_id" };
     }
     if (!loadConf().strictId && exact.length === 1)
-      return { tr: exact[0], note: "1 nama persis di SLS asal (id tidak terbaca di tabel)" };
+      return {
+        tr: exact[0],
+        note: "1 nama persis di SLS asal (id tidak terbaca di tabel)",
+      };
     if (!candidates.length)
-      throw Object.assign(new Error(`"${item.namaUsaha}" tidak ada di SLS ${item.slsAsal} (mungkin sudah dipindah)`), { soft: true });
-    throw Object.assign(new Error(`${candidates.length} baris bernama "${item.namaUsaha}", assignment_id tidak bisa dipastikan`), { soft: true });
+      throw Object.assign(
+        new Error(
+          `"${item.namaUsaha}" tidak ada di SLS ${item.slsAsal} (mungkin sudah dipindah)`,
+        ),
+        { soft: true },
+      );
+    throw Object.assign(
+      new Error(
+        `${candidates.length} baris bernama "${item.namaUsaha}", assignment_id tidak bisa dipastikan`,
+      ),
+      { soft: true },
+    );
   }
 
   // =========================================================================
@@ -609,7 +723,9 @@
     triggerClick(btn);
     await waitFor(() => visibleOptions().length, 6000);
     const find = () =>
-      visibleOptions().find((el) => optionText(el).toLowerCase().includes(email.toLowerCase()));
+      visibleOptions().find((el) =>
+        optionText(el).toLowerCase().includes(email.toLowerCase()),
+      );
     let target = find();
     const input = document.querySelector("input[cmdk-input]");
     for (const q of [email, email.split("@")[0]]) {
@@ -620,7 +736,9 @@
     if (!target) {
       pressKey("Escape");
       await sleep(300);
-      throw new Error(`${label} ${email} tidak ada di pilihan (belum punya akses ke SLS tujuan?)`);
+      throw new Error(
+        `${label} ${email} tidak ada di pilihan (belum punya akses ke SLS tujuan?)`,
+      );
     }
     triggerClick(target);
     return !!(await waitFor(
@@ -645,7 +763,9 @@
       // SLS tanpa pecahan: FASIH tidak menampilkan isian SUBSLS -> cukup untuk SubSLS 00
       if (label === "SUBSLS" && !(await waitFor(f(label), 8000))) {
         if (code === "00") continue;
-        throw new Error(`isian SUBSLS tidak muncul, padahal tujuan SubSLS ${code}`);
+        throw new Error(
+          `isian SUBSLS tidak muncul, padahal tujuan SubSLS ${code}`,
+        );
       }
       if (!(await pickByCode(f(label), code, label)))
         throw new Error(`${label} tidak bisa diisi [${code}]`);
@@ -657,23 +777,37 @@
     const got = ["KECAMATAN", "DESA", "SLS", "SUBSLS"].map((l) =>
       l === "SUBSLS" && !f(l)() ? "00" : shownCode(f(l)()),
     );
-    const want = [item.kec.code, item.desa.code, item.slsTujuan, item.subslsTujuan];
+    const want = [
+      item.kec.code,
+      item.desa.code,
+      item.slsTujuan,
+      item.subslsTujuan,
+    ];
     if (got.join("|") !== want.join("|"))
-      throw new Error(`isian wilayah tidak sesuai: ${got.join("/")} ≠ ${want.join("/")}`);
+      throw new Error(
+        `isian wilayah tidak sesuai: ${got.join("/")} ≠ ${want.join("/")}`,
+      );
   }
 
   async function submitGantiWilayah() {
     const d = gantiDialog();
-    const btn = d && Array.from(d.querySelectorAll('button[type="submit"]')).find(
-      (b) => /ubah wilayah/i.test(b.innerText),
-    );
-    if (!btn || btn.disabled) throw new Error('tombol "Ubah Wilayah Assignment" tidak aktif');
+    const btn =
+      d &&
+      Array.from(d.querySelectorAll('button[type="submit"]')).find((b) =>
+        /ubah wilayah/i.test(b.innerText),
+      );
+    if (!btn || btn.disabled)
+      throw new Error('tombol "Ubah Wilayah Assignment" tidak aktif');
     triggerClick(btn);
     const closed = await waitFor(() => !gantiDialog(), 20000);
     if (!closed) {
       const dlgNow = gantiDialog();
-      const msg = ((dlgNow ? dlgNow.innerText : "").match(/.*(gagal|error|tidak|wajib).*/i) || [""])[0];
-      throw new Error(`dialog tidak tertutup setelah kirim${msg ? `: ${msg.slice(0, 120)}` : ""}`);
+      const msg = ((dlgNow ? dlgNow.innerText : "").match(
+        /.*(gagal|error|tidak|wajib).*/i,
+      ) || [""])[0];
+      throw new Error(
+        `dialog tidak tertutup setelah kirim${msg ? `: ${msg.slice(0, 120)}` : ""}`,
+      );
     }
     await sleep(T().submit);
   }
@@ -681,11 +815,12 @@
   function closeGantiDialog() {
     const d = gantiDialog();
     if (!d) return;
-    const x = Array.from(d.querySelectorAll("button")).find((b) => /close/i.test(b.innerText));
+    const x = Array.from(d.querySelectorAll("button")).find((b) =>
+      /close/i.test(b.innerText),
+    );
     if (x) triggerClick(x);
     else pressKey("Escape");
   }
-
 
   // =========================================================================
   // FORM ASSIGNMENT (review / edit)
@@ -701,7 +836,11 @@
     for (let i = 1; i <= a.length; i++) {
       const cur = [i];
       for (let j = 1; j <= b.length; j++)
-        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+        cur[j] = Math.min(
+          prev[j] + 1,
+          cur[j - 1] + 1,
+          prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+        );
       prev = cur;
     }
     return 1 - prev[b.length] / Math.max(a.length, b.length);
@@ -721,33 +860,46 @@
   // Opsi "Pilih UMKM dalam satu SLS": "NAMA - ALAMAT" -> cocok jika NAMA = nama usaha OSS
   function umkmMatches(text, namaUsaha) {
     const name = String(text || "").split(/\s+-\s+/)[0];
-    return normName(name) === normName(namaUsaha) || nameSimilarity(name, namaUsaha) >= 0.9;
+    return (
+      normName(name) === normName(namaUsaha) ||
+      nameSimilarity(name, namaUsaha) >= 0.9
+    );
   }
 
   function box(id, inst) {
     return document.getElementById(inst === undefined ? id : `${id}#${inst}`);
   }
   async function waitBox(id, inst, ms) {
-    return waitFor(() => {
-      const b = box(id, inst);
-      return visible(b) ? b : null;
-    }, ms === undefined ? FIELD_WAIT_MS : ms);
+    return waitFor(
+      () => {
+        const b = box(id, inst);
+        return visible(b) ? b : null;
+      },
+      ms === undefined ? FIELD_WAIT_MS : ms,
+    );
   }
   const fresh = (el) => (el.id && document.getElementById(el.id)) || el;
 
   function radioValue(container) {
-    const checked = container.querySelector('input[type="radio"]:checked, input[type="radio"][data-checked]');
+    const checked = container.querySelector(
+      'input[type="radio"]:checked, input[type="radio"][data-checked]',
+    );
     return checked ? checked.value : "";
   }
 
   async function setRadio(container, value) {
-    const input = container.querySelector(`input[type="radio"][value="${value}"]`);
+    const input = container.querySelector(
+      `input[type="radio"][value="${value}"]`,
+    );
     if (!input) return false;
     if (radioValue(container) === value) return true;
     if (input.disabled) return false;
     const group = input.closest('[role="group"]') || input.parentElement;
     triggerClick((group && group.querySelector('[role="radio"]')) || input);
-    return !!(await waitFor(() => radioValue(fresh(container)) === value, 3000));
+    return !!(await waitFor(
+      () => radioValue(fresh(container)) === value,
+      3000,
+    ));
   }
 
   // Isi kotak teks seperti diketik sungguhan agar FASIH mencatatnya
@@ -758,14 +910,26 @@
     let typed = false;
     try {
       if (typeof el.select === "function") el.select();
-      typed = value === "" ? document.execCommand("delete", false) : document.execCommand("insertText", false, value);
+      typed =
+        value === ""
+          ? document.execCommand("delete", false)
+          : document.execCommand("insertText", false, value);
     } catch (e) {
       typed = false;
     }
     if (!typed || el.value !== value) {
-      const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const proto =
+        el.tagName === "TEXTAREA"
+          ? HTMLTextAreaElement.prototype
+          : HTMLInputElement.prototype;
       Object.getOwnPropertyDescriptor(proto, "value").set.call(el, value);
-      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+      el.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          inputType: "insertText",
+          data: value,
+        }),
+      );
     }
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }
@@ -782,7 +946,9 @@
     if (!container) return "skip";
     if (container.querySelector('input[type="radio"]'))
       return (await setRadio(container, String(value))) ? "ok" : "fail";
-    const input = container.querySelector('input[type="text"]:not([disabled]), input:not([type]):not([disabled]), textarea:not([disabled])');
+    const input = container.querySelector(
+      'input[type="text"]:not([disabled]), input:not([type]):not([disabled]), textarea:not([disabled])',
+    );
     if (!input) return "skip";
     if (input.value.trim() !== String(value)) {
       setFieldValue(input, String(value));
@@ -803,19 +969,26 @@
   }
   function buttonMatching(re) {
     return Array.from(document.querySelectorAll("button")).find(
-      (b) => visible(b) && !b.disabled && re.test(b.innerText) && !b.closest("#fgw-panel, #fgw-bar"),
+      (b) =>
+        visible(b) &&
+        !b.disabled &&
+        re.test(b.innerText) &&
+        !b.closest("#fgw-panel, #fgw-bar"),
     );
   }
   function buttonByIcon(icon) {
-    const svg = Array.from(document.querySelectorAll(`svg.tabler-icon-${icon}`)).find(
-      (s) => s.closest("button") && visible(s.closest("button")),
-    );
+    const svg = Array.from(
+      document.querySelectorAll(`svg.tabler-icon-${icon}`),
+    ).find((s) => s.closest("button") && visible(s.closest("button")));
     return svg ? svg.closest("button") : null;
   }
 
   const formOptions = () =>
     Array.from(document.querySelectorAll(FORM_OPTION_SELECTOR)).filter(
-      (el) => visible(el) && !el.closest("#fgw-panel, #fgw-bar") && el.innerText.trim(),
+      (el) =>
+        visible(el) &&
+        !el.closest("#fgw-panel, #fgw-bar") &&
+        el.innerText.trim(),
     );
   function dropdownValue(container) {
     const el = container.querySelector('textarea, input[type="text"]');
@@ -825,7 +998,12 @@
   // seperti "NAMA - DESA ..."), bukan slot kosong yang bisa dipilih
   function dropdownDisabled(container) {
     const el = container.querySelector('textarea, input[type="text"]');
-    return !!(el && (el.disabled || el.hasAttribute("data-disabled") || el.getAttribute("aria-disabled") === "true"));
+    return !!(
+      el &&
+      (el.disabled ||
+        el.hasAttribute("data-disabled") ||
+        el.getAttribute("aria-disabled") === "true")
+    );
   }
   // Dropdown pencarian di form. pick(options) -> elemen opsi yang dipilih
   async function chooseFromDropdown(container, searchText, pick) {
@@ -835,7 +1013,9 @@
     await sleep(400);
     if (searchText) {
       const search =
-        document.querySelector('[role="dialog"] input:not([type="radio"]):not([type="checkbox"])') || textarea;
+        document.querySelector(
+          '[role="dialog"] input:not([type="radio"]):not([type="checkbox"])',
+        ) || textarea;
       if (search) setFieldValue(search, searchText);
     }
     const target = await waitFor(() => pick(formOptions()), 6000);
@@ -850,9 +1030,16 @@
   }
 
   // ---------- Navigasi form ----------
-  const squashT = (s) => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const squashT = (s) =>
+    String(s || "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "");
   const sidebarItems = () =>
-    Array.from(document.querySelectorAll(".fasih-form-sidebar > div[title], .fasih-form-sidebar [title]"));
+    Array.from(
+      document.querySelectorAll(
+        ".fasih-form-sidebar > div[title], .fasih-form-sidebar [title]",
+      ),
+    );
   function sidebarItem(title) {
     const want = squashT(title);
     const items = sidebarItems();
@@ -867,7 +1054,8 @@
     const item = await waitFor(() => sidebarItem(title), 30000);
     if (!item) throw new Error(`menu "${title}" tidak ada di sidebar`);
     triggerClick(item);
-    if (!(await waitFor(readyCheck, 20000))) throw new Error(`halaman "${title}" tidak terbuka`);
+    if (!(await waitFor(readyCheck, 20000)))
+      throw new Error(`halaman "${title}" tidak terbuka`);
     await sleep(W(800));
     return true;
   }
@@ -878,11 +1066,19 @@
     if (check()) return true;
     const cache = loadJson(SECTION_CACHE_KEY, {});
     await waitFor(() => sidebarItems().length, 30000);
-    const titles = Array.from(new Set(sidebarItems().map((el) => el.getAttribute("title")).filter(Boolean)));
+    const titles = Array.from(
+      new Set(
+        sidebarItems()
+          .map((el) => el.getAttribute("title"))
+          .filter(Boolean),
+      ),
+    );
     // Halaman P dicoba duluan (isian Blok P paling sering dicari)
     const guess = titles.filter((t) => /(^|[\s-])P$|BLOK P\b/i.test(t.trim()));
     const base = guess.concat(titles.filter((t) => !guess.includes(t)));
-    const order = cache[key] ? [cache[key], ...base.filter((t) => t !== cache[key])] : base;
+    const order = cache[key]
+      ? [cache[key], ...base.filter((t) => t !== cache[key])]
+      : base;
     for (const title of order) {
       const el = sidebarItem(title);
       if (!el) continue;
@@ -897,14 +1093,21 @@
     throw new Error(`isian ${key} tidak ditemukan di halaman mana pun`);
   }
 
-  const onBlokII = () => visible(box("se2026_nested")) && !document.querySelector('[id^="keberadaan_usaha#"]');
+  const onBlokII = () =>
+    visible(box("se2026_nested")) &&
+    !document.querySelector('[id^="keberadaan_usaha#"]');
   function usahaCards() {
     const list = box("se2026_nested");
     if (!list) return [];
-    return Array.from(list.querySelectorAll("[data-nested-view]")).map((card) => {
-      const span = card.querySelector("span");
-      return { card, name: (span ? span.innerText : card.innerText).trim().toUpperCase() };
-    });
+    return Array.from(list.querySelectorAll("[data-nested-view]")).map(
+      (card) => {
+        const span = card.querySelector("span");
+        return {
+          card,
+          name: (span ? span.innerText : card.innerText).trim().toUpperCase(),
+        };
+      },
+    );
   }
   async function openUsahaPage(card) {
     triggerClick(card.card);
@@ -919,13 +1122,17 @@
 
   // ---------- Review -> Edit (revoke bila perlu) ----------
   async function reviewToEdit() {
-    await waitFor(() => buttonByIcon("edit") || buttonByIcon("rotate-clockwise"), 20000);
+    await waitFor(
+      () => buttonByIcon("edit") || buttonByIcon("rotate-clockwise"),
+      20000,
+    );
     await sleep(W(600));
     let revoked = false;
     let edit = buttonByIcon("edit");
     if (!edit || edit.disabled) {
       const revoke = buttonByIcon("rotate-clockwise");
-      if (!revoke || revoke.disabled) throw new Error("tombol Edit & Revoke tidak aktif");
+      if (!revoke || revoke.disabled)
+        throw new Error("tombol Edit & Revoke tidak aktif");
       runLog("Revoke dokumen");
       triggerClick(revoke);
       const ok = await waitFor(() => buttonByText("Konfirmasi"), 8000);
@@ -940,7 +1147,14 @@
       await sleep(W(600));
     }
     triggerClick(edit);
-    if (!(await waitFor(() => /\/edit/.test(location.pathname) && document.querySelector(".fasih-form-sidebar"), 30000)))
+    if (
+      !(await waitFor(
+        () =>
+          /\/edit/.test(location.pathname) &&
+          document.querySelector(".fasih-form-sidebar"),
+        30000,
+      ))
+    )
       throw new Error("halaman edit tidak terbuka");
     await sleep(W(1500));
     return revoked;
@@ -948,15 +1162,19 @@
 
   // ---------- Kirim + Approve ----------
   function findAnomaliSwitch() {
-    const direct = document.querySelector('#cek_anomali_button input[role="switch"]');
+    const direct = document.querySelector(
+      '#cek_anomali_button input[role="switch"]',
+    );
     if (direct) return direct;
     return (
-      Array.from(document.querySelectorAll('input[role="switch"]')).find((sw) => {
-        let el = sw;
-        for (let i = 0; i < 7 && el; i++, el = el.parentElement)
-          if (/anomali/i.test(el.innerText || "")) return true;
-        return false;
-      }) || null
+      Array.from(document.querySelectorAll('input[role="switch"]')).find(
+        (sw) => {
+          let el = sw;
+          for (let i = 0; i < 7 && el; i++, el = el.parentElement)
+            if (/anomali/i.test(el.innerText || "")) return true;
+          return false;
+        },
+      ) || null
     );
   }
   async function openCatatan() {
@@ -969,7 +1187,12 @@
     const isOn = () => {
       const s = findAnomaliSwitch();
       const c = control();
-      return !!s && (s.checked || s.getAttribute("aria-checked") === "true" || (c && c.hasAttribute("data-checked")));
+      return (
+        !!s &&
+        (s.checked ||
+          s.getAttribute("aria-checked") === "true" ||
+          (c && c.hasAttribute("data-checked")))
+      );
     };
     for (const attempt of [
       () => triggerClick(control() || findAnomaliSwitch()),
@@ -985,18 +1208,39 @@
 
   const isKirimText = (b) => b.innerText.trim().toUpperCase() === "KIRIM";
   const inDialog = (b) => !!b.closest('[role="dialog"], [role="alertdialog"]');
-  const hasSendIcon = (b) => !!b.querySelector('svg path[d^="M10 14l11 -11"], svg.tabler-icon-send');
+  const hasSendIcon = (b) =>
+    !!b.querySelector('svg path[d^="M10 14l11 -11"], svg.tabler-icon-send');
   function findNavKirim() {
     const buttons = Array.from(document.querySelectorAll("button")).filter(
-      (b) => visible(b) && !b.disabled && isKirimText(b) && !inDialog(b) && !b.closest("#fgw-panel, #fgw-bar"),
+      (b) =>
+        visible(b) &&
+        !b.disabled &&
+        isKirimText(b) &&
+        !inDialog(b) &&
+        !b.closest("#fgw-panel, #fgw-bar"),
     );
-    return buttons.find(hasSendIcon) || buttons.find((b) => b.id === "fasih-form-nav-submit-button") || buttons[0] || null;
+    return (
+      buttons.find(hasSendIcon) ||
+      buttons.find((b) => b.id === "fasih-form-nav-submit-button") ||
+      buttons[0] ||
+      null
+    );
   }
   function findDialogKirim() {
     const buttons = Array.from(document.querySelectorAll("button")).filter(
-      (b) => visible(b) && !b.disabled && isKirimText(b) && !b.closest("#fgw-panel, #fgw-bar"),
+      (b) =>
+        visible(b) &&
+        !b.disabled &&
+        isKirimText(b) &&
+        !b.closest("#fgw-panel, #fgw-bar"),
     );
-    return buttons.find(inDialog) || buttons.find((b) => !hasSendIcon(b) && b.id !== "fasih-form-nav-submit-button") || null;
+    return (
+      buttons.find(inDialog) ||
+      buttons.find(
+        (b) => !hasSendIcon(b) && b.id !== "fasih-form-nav-submit-button",
+      ) ||
+      null
+    );
   }
   function summaryCount(label) {
     const btn = Array.from(document.querySelectorAll("button")).find((b) => {
@@ -1011,28 +1255,48 @@
     return Array.from(document.querySelectorAll('button[title="Lihat"]'))
       .filter(visible)
       .map((lihat) => {
-        const card = lihat.closest('div[class*="rounded-lg"]') || lihat.parentElement.parentElement;
+        const card =
+          lihat.closest('div[class*="rounded-lg"]') ||
+          lihat.parentElement.parentElement;
         const titleEl = card.querySelector("div[title]");
-        return `${titleEl ? titleEl.getAttribute("title").trim() : "?"} (${Array.from(card.querySelectorAll("li")).map((li) => li.innerText.trim()).join(", ")})`;
+        return `${titleEl ? titleEl.getAttribute("title").trim() : "?"} (${Array.from(
+          card.querySelectorAll("li"),
+        )
+          .map((li) => li.innerText.trim())
+          .join(", ")})`;
       });
   }
   function closeDialogs() {
-    Array.from(document.querySelectorAll('button[aria-label="Dismiss"]')).filter(visible).forEach((b) => triggerClick(b));
-    if (Array.from(document.querySelectorAll('[role="dialog"]')).some(visible)) pressKey("Escape");
+    Array.from(document.querySelectorAll('button[aria-label="Dismiss"]'))
+      .filter(visible)
+      .forEach((b) => triggerClick(b));
+    if (Array.from(document.querySelectorAll('[role="dialog"]')).some(visible))
+      pressKey("Escape");
   }
   function dialogText() {
-    const d = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"]')).filter(visible).pop();
+    const d = Array.from(
+      document.querySelectorAll('[role="dialog"], [role="alertdialog"]'),
+    )
+      .filter(visible)
+      .pop();
     return d ? d.innerText.replace(/\s+/g, " ").trim().slice(0, 200) : "";
   }
 
   const backButton = () =>
     Array.from(document.querySelectorAll("button")).find(
-      (b) => /KEMBALI KE REVIEW/i.test(b.innerText) && b.getClientRects().length > 0,
+      (b) =>
+        /KEMBALI KE REVIEW/i.test(b.innerText) && b.getClientRects().length > 0,
     );
   const leftEdit = () => !/\/edit/.test(location.pathname);
   async function backToReview(timeoutMs) {
-    const sign = await waitFor(() => backButton() || (leftEdit() ? "left" : null), timeoutMs);
-    if (!sign) throw new Error(`tidak ada tanda terkirim setelah Konfirmasi: ${dialogText() || "cek manual"}`);
+    const sign = await waitFor(
+      () => backButton() || (leftEdit() ? "left" : null),
+      timeoutMs,
+    );
+    if (!sign)
+      throw new Error(
+        `tidak ada tanda terkirim setelah Konfirmasi: ${dialogText() || "cek manual"}`,
+      );
     if (sign !== "left") {
       await sleep(W(400));
       triggerClick(sign);
@@ -1055,7 +1319,11 @@
     const nav = await waitFor(findNavKirim, 10000);
     if (!nav) throw new Error("tombol Kirim tidak ditemukan / tidak aktif");
     triggerClick(nav);
-    await waitFor(() => summaryCount("GALAT") || findDialogKirim() || readGalatList().length, 15000);
+    await waitFor(
+      () =>
+        summaryCount("GALAT") || findDialogKirim() || readGalatList().length,
+      15000,
+    );
     await sleep(W(1200));
     const galat = summaryCount("GALAT");
     const list = readGalatList();
@@ -1066,16 +1334,20 @@
       }
       const detail = readGalatList().join("; ");
       closeDialogs();
-      throw new Error(`galat ${galat ? galat.n : list.length}: ${detail || "lihat di FASIH"}`);
+      throw new Error(
+        `galat ${galat ? galat.n : list.length}: ${detail || "lihat di FASIH"}`,
+      );
     }
     const dialogKirim = findDialogKirim();
-    if (!dialogKirim) throw new Error(`tombol Kirim di dialog tidak muncul: ${dialogText()}`);
+    if (!dialogKirim)
+      throw new Error(`tombol Kirim di dialog tidak muncul: ${dialogText()}`);
     const r = loadRun();
     r.cur.submitClicked = true;
     saveRun(r);
     triggerClick(dialogKirim);
     const konfirmasi = await waitFor(() => buttonByText("Konfirmasi"), 15000);
-    if (!konfirmasi) throw new Error(`tombol Konfirmasi tidak muncul: ${dialogText()}`);
+    if (!konfirmasi)
+      throw new Error(`tombol Konfirmasi tidak muncul: ${dialogText()}`);
     await sleep(W(400));
     triggerClick(konfirmasi);
     await backToReview(60000);
@@ -1085,8 +1357,13 @@
   const isDotsButton = (b) => !!b.querySelector('svg path[d^="M12 12m-1 0"]');
   function findForceTrigger() {
     const cands = Array.from(
-      document.querySelectorAll('button[id^="dropdownmenu-"][id$="-trigger"], button[aria-haspopup="true"], button[aria-haspopup="menu"]'),
-    ).filter((b) => visible(b) && isDotsButton(b) && !b.closest("#fgw-panel, #fgw-bar"));
+      document.querySelectorAll(
+        'button[id^="dropdownmenu-"][id$="-trigger"], button[aria-haspopup="true"], button[aria-haspopup="menu"]',
+      ),
+    ).filter(
+      (b) =>
+        visible(b) && isDotsButton(b) && !b.closest("#fgw-panel, #fgw-bar"),
+    );
     return cands.find(inDialog) || cands[0] || null;
   }
   async function forceSubmitCurrent() {
@@ -1100,24 +1377,36 @@
     if (!nav) throw new Error("tombol Kirim tidak ditemukan / tidak aktif");
     runLog("OSS: klik Kirim");
     triggerClick(nav);
-    await waitFor(() => summaryCount("GALAT") || findDialogKirim() || findForceTrigger(), 15000);
+    await waitFor(
+      () => summaryCount("GALAT") || findDialogKirim() || findForceTrigger(),
+      15000,
+    );
     await sleep(W(1000));
     const galat = summaryCount("GALAT");
     const trigger = await waitFor(findForceTrigger, 8000);
-    if (!trigger) throw new Error(`tombol ⋮ (Submit Paksa) tidak muncul: ${dialogText()}`);
+    if (!trigger)
+      throw new Error(`tombol ⋮ (Submit Paksa) tidak muncul: ${dialogText()}`);
     triggerClick(trigger);
     const menu = await waitFor(
-      () => Array.from(document.querySelectorAll('[role="menuitem"]')).find((el) => visible(el) && /SUBMIT\s+PAKSA/i.test(el.innerText)),
+      () =>
+        Array.from(document.querySelectorAll('[role="menuitem"]')).find(
+          (el) => visible(el) && /SUBMIT\s+PAKSA/i.test(el.innerText),
+        ),
       6000,
     );
     if (!menu) {
       pressKey("Escape");
       throw new Error('menu "Submit Paksa" tidak muncul');
     }
-    runLog(`OSS: Submit Paksa${galat && galat.n ? ` (galat ${galat.n} diabaikan)` : ""}`);
+    runLog(
+      `OSS: Submit Paksa${galat && galat.n ? ` (galat ${galat.n} diabaikan)` : ""}`,
+    );
     triggerClick(menu);
     const konfirmasi = await waitFor(() => buttonByText("Konfirmasi"), 15000);
-    if (!konfirmasi) throw new Error(`tombol Konfirmasi Submit Paksa tidak muncul: ${dialogText()}`);
+    if (!konfirmasi)
+      throw new Error(
+        `tombol Konfirmasi Submit Paksa tidak muncul: ${dialogText()}`,
+      );
     const r = loadRun();
     r.cur.submitClicked = true;
     saveRun(r);
@@ -1128,20 +1417,34 @@
 
   async function approveDocument() {
     const findCheck = () => {
-      const buttons = Array.from(document.querySelectorAll("svg.tabler-icon-check"))
+      const buttons = Array.from(
+        document.querySelectorAll("svg.tabler-icon-check"),
+      )
         .map((s) => s.closest("button"))
         .filter((b) => b && visible(b) && !b.disabled);
-      return buttons.find((b) => /bg-success/.test(b.className)) || buttons[0] || null;
+      return (
+        buttons.find((b) => /bg-success/.test(b.className)) ||
+        buttons[0] ||
+        null
+      );
     };
     const check = await waitFor(findCheck, 25000);
-    if (!check) throw new Error("terkirim, tapi tombol Approve (✔) tidak aktif");
+    if (!check)
+      throw new Error("terkirim, tapi tombol Approve (✔) tidak aktif");
     await sleep(W(600));
     triggerClick(check);
     const ok = await waitFor(() => {
       const buttons = Array.from(document.querySelectorAll("button")).filter(
-        (b) => visible(b) && !b.disabled && b.innerText.trim().toUpperCase() === "KONFIRMASI",
+        (b) =>
+          visible(b) &&
+          !b.disabled &&
+          b.innerText.trim().toUpperCase() === "KONFIRMASI",
       );
-      return buttons.find((b) => /bg-success/.test(b.className)) || buttons[0] || null;
+      return (
+        buttons.find((b) => /bg-success/.test(b.className)) ||
+        buttons[0] ||
+        null
+      );
     }, 10000);
     if (!ok) throw new Error("terkirim, tapi konfirmasi approve tidak muncul");
     await sleep(W(400));
@@ -1162,7 +1465,9 @@
     if (!g) return out;
     Array.from(g.querySelectorAll("span")).forEach((s) => {
       const label = s.innerText.trim().toUpperCase();
-      const val = s.nextElementSibling ? s.nextElementSibling.innerText.trim() : "";
+      const val = s.nextElementSibling
+        ? s.nextElementSibling.innerText.trim()
+        : "";
       if (label === "LATITUDE") out.lat = val;
       if (label === "LONGITUDE") out.lng = val;
     });
@@ -1186,10 +1491,20 @@
   // Opsi di popover dropdown UMKM (id popover diambil dari aria-controls tombol panah)
   function umkmOptions(container) {
     const toggle = container.querySelector('button[aria-haspopup="dialog"]');
-    const pop = toggle && toggle.getAttribute("aria-controls") && document.getElementById(toggle.getAttribute("aria-controls"));
+    const pop =
+      toggle &&
+      toggle.getAttribute("aria-controls") &&
+      document.getElementById(toggle.getAttribute("aria-controls"));
     const scoped = pop
-      ? Array.from(pop.querySelectorAll('[role="option"], [cmdk-item], li, button, [data-value]')).filter(
-          (el) => visible(el) && el.innerText.trim() && !el.querySelector('[role="option"], li, button'),
+      ? Array.from(
+          pop.querySelectorAll(
+            '[role="option"], [cmdk-item], li, button, [data-value]',
+          ),
+        ).filter(
+          (el) =>
+            visible(el) &&
+            el.innerText.trim() &&
+            !el.querySelector('[role="option"], li, button'),
         )
       : [];
     return scoped.length ? scoped : formOptions();
@@ -1201,12 +1516,27 @@
     if (!ta()) return false;
     triggerClick(ta());
     setFieldValue(ta(), query);
-    let target = await waitFor(() => umkmOptions(fresh(umkm)).find((o) => umkmMatches(o.innerText, namaUsaha)), 5000);
+    let target = await waitFor(
+      () =>
+        umkmOptions(fresh(umkm)).find((o) =>
+          umkmMatches(o.innerText, namaUsaha),
+        ),
+      5000,
+    );
     if (!target) {
       // Daftar belum terbuka: buka lewat tombol panah (teks pencarian tetap)
-      const toggle = fresh(umkm).querySelector('button[aria-haspopup="dialog"]');
-      if (toggle && toggle.getAttribute("aria-expanded") !== "true") triggerClick(toggle);
-      target = await waitFor(() => umkmOptions(fresh(umkm)).find((o) => umkmMatches(o.innerText, namaUsaha)), 4000);
+      const toggle = fresh(umkm).querySelector(
+        'button[aria-haspopup="dialog"]',
+      );
+      if (toggle && toggle.getAttribute("aria-expanded") !== "true")
+        triggerClick(toggle);
+      target = await waitFor(
+        () =>
+          umkmOptions(fresh(umkm)).find((o) =>
+            umkmMatches(o.innerText, namaUsaha),
+          ),
+        4000,
+      );
     }
     if (!target) {
       pressKey("Escape");
@@ -1215,7 +1545,10 @@
       return false;
     }
     triggerClick(target);
-    return !!(await waitFor(() => umkmMatches(dropdownValue(fresh(umkm)), namaUsaha), 4000));
+    return !!(await waitFor(
+      () => umkmMatches(dropdownValue(fresh(umkm)), namaUsaha),
+      4000,
+    ));
   }
 
   // Tautkan OSS ke SATU usaha keluarga yang punya isian "Pilih UMKM dalam satu SLS".
@@ -1246,15 +1579,21 @@
         continue;
       }
       const now = dropdownValue(umkm);
-      if (now && umkmMatches(now, item.namaUsaha)) return { result: "found", card: card.name, slots: [] };
+      if (now && umkmMatches(now, item.namaUsaha))
+        return { result: "found", card: card.name, slots: [] };
       if (dropdownDisabled(umkm)) {
         if (!now) noField++; // kosong & terkunci -> kartu ini memang tidak pakai Pilih UMKM
         // terkunci tapi SUDAH terisi usaha lain -> mekanismenya dipakai, cuma bukan OSS kita; bukan bukti Ganda
         continue;
       }
-      slots.push({ idx, name: card.name, empty: !now || /TIDAK ADA/i.test(now) });
+      slots.push({
+        idx,
+        name: card.name,
+        empty: !now || /TIDAK ADA/i.test(now),
+      });
     }
-    if (!slots.length && noField === total) return { result: "ganda", slots: [] };
+    if (!slots.length && noField === total)
+      return { result: "ganda", slots: [] };
     if (!slots.length) return { result: "nomatch", slots: [] };
     return { result: "pick", slots };
   }
@@ -1263,16 +1602,34 @@
   async function linkUmkm(item) {
     const scan = await scanUsahaCards(item);
     if (scan.result === "nousaha") return { result: "nousaha", changed: false };
-    if (scan.result === "found") return { result: "found", changed: false, card: scan.card };
+    if (scan.result === "found")
+      return { result: "found", changed: false, card: scan.card };
     if (scan.result === "ganda")
-      return { result: "ganda", changed: false, note: "usaha keluarga tidak punya isian Pilih UMKM dalam satu SLS" };
-    if (scan.result === "nomatch") return { result: "nomatch", changed: false, note: "tidak ada usaha dengan isian Pilih UMKM" };
+      return {
+        result: "ganda",
+        changed: false,
+        note: "usaha keluarga tidak punya isian Pilih UMKM dalam satu SLS",
+      };
+    if (scan.result === "nomatch")
+      return {
+        result: "nomatch",
+        changed: false,
+        note: "tidak ada usaha dengan isian Pilih UMKM",
+      };
     const { slots } = scan;
 
     // 2) Pilih satu kartu (yang masih kosong didahulukan), cari nama OSS, pilih
     const words = normalize(item.namaUsaha).split(" ");
-    const queries = Array.from(new Set([item.namaUsaha.trim(), words.slice(0, 2).join(" "), words.sort((a, b) => b.length - a.length)[0]]));
-    const order = slots.filter((s) => s.empty).concat(slots.filter((s) => !s.empty));
+    const queries = Array.from(
+      new Set([
+        item.namaUsaha.trim(),
+        words.slice(0, 2).join(" "),
+        words.sort((a, b) => b.length - a.length)[0],
+      ]),
+    );
+    const order = slots
+      .filter((s) => s.empty)
+      .concat(slots.filter((s) => !s.empty));
     for (const slot of order) {
       await goSection("SE2026 - L BLOK II", onBlokII, true);
       const card = usahaCards()[slot.idx];
@@ -1298,28 +1655,69 @@
     if (!g) throw new Error("isian Geotagging tidak ada di OSS");
     const cur = readGeotag(g);
     if (cur.lat === lat && cur.lng === lng) return;
-    const btn = Array.from(g.querySelectorAll("button")).find((b) => /AMBIL LOKASI|PERBARUI LOKASI/i.test(b.innerText));
+    const btn = Array.from(g.querySelectorAll("button")).find((b) =>
+      /AMBIL LOKASI|PERBARUI LOKASI/i.test(b.innerText),
+    );
     if (!btn) throw new Error('tombol "Ambil Lokasi" tidak ada');
     triggerClick(btn);
     const peta = await waitFor(() => buttonMatching(/PILIH DI PETA/i), 8000);
     if (!peta) throw new Error('pilihan "Pilih di peta" tidak muncul');
     triggerClick(peta);
-    const latIn = await waitFor(() => document.getElementById("map-latitude"), 8000);
+    const latIn = await waitFor(
+      () => document.getElementById("map-latitude"),
+      8000,
+    );
     const lngIn = document.getElementById("map-longitude");
-    if (!latIn || !lngIn) throw new Error("kotak latitude/longitude tidak muncul");
+    if (!latIn || !lngIn)
+      throw new Error("kotak latitude/longitude tidak muncul");
     const accIn = document.getElementById("map-accuracy"); // akurasi (meter) diisi 5
-    const fields = [[latIn, lat], [lngIn, lng]];
+    const fields = [
+      [latIn, lat],
+      [lngIn, lng],
+    ];
     if (accIn) fields.push([accIn, "5"]);
+    const commitAll = () => {
+      for (const [el, v] of fields) {
+        if (el.value !== String(v)) setInputValue(el, v);
+        el.focus();
+        ["keydown", "keypress", "keyup"].forEach((type) =>
+          el.dispatchEvent(
+            new KeyboardEvent(type, {
+              key: "Enter",
+              code: "Enter",
+              keyCode: 13,
+              which: 13,
+              bubbles: true,
+            }),
+          ),
+        );
+        commitField(el);
+      }
+    };
     for (const [el, v] of fields) {
       setInputValue(el, v);
-      el.focus();
-      ["keydown", "keypress", "keyup"].forEach((type) =>
-        el.dispatchEvent(new KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true })),
-      );
       await sleep(W(400));
     }
-    const use = await waitFor(() => buttonMatching(/GUNAKAN LOKASI/i), 8000);
-    if (!use) throw new Error('tombol "Gunakan Lokasi" tidak aktif');
+    commitAll();
+    const gunakan = () => buttonMatching(/GUNAKAN LOKASI/i);
+    let use = await waitFor(gunakan, 3000);
+    for (let attempt = 1; !use && attempt <= 2; attempt++) {
+      // Kartu = leluhur terdekat yang memuat isian koordinat DAN tombol "Gunakan Lokasi" (bukan pembungkus input)
+      const footer = Array.from(document.querySelectorAll("button")).find((b) => /GUNAKAN LOKASI/i.test(b.innerText));
+      let card = latIn;
+      while (card && footer && !card.contains(footer)) card = card.parentElement;
+      triggerClick(card || latIn.parentElement);
+      await sleep(W(300));
+      commitAll();
+      use = await waitFor(gunakan, 3000);
+    }
+    if (!use) {
+      const dlg = latIn.closest('[role="dialog"]') || latIn.parentElement;
+      console.error("[OSS→Keluarga] Gunakan Lokasi tidak aktif. HTML dialog peta:", dlg && dlg.outerHTML);
+      throw new Error(
+        `tombol "Gunakan Lokasi" tidak aktif (lat ${latIn.value}, lng ${lngIn.value}, akurasi ${accIn ? accIn.value : "-"}). Lihat console untuk HTML dialog peta.`,
+      );
+    }
     triggerClick(use);
     const ya = await waitFor(() => buttonByText("Ya"), 6000);
     if (ya) triggerClick(ya);
@@ -1330,10 +1728,10 @@
 
   // Keberadaan Bangunan/Usaha (Blok P) -> Keberadaan Usaha (Blok II) harus sama statusnya
   const KEBERADAAN = {
-    "0": { label: "Tidak Ditemukan", blok2: ["00", "0"] },
-    "1": { label: "Ditemukan", blok2: ["1"] },
-    "3": { label: "Tutup", blok2: ["3"] },
-    "4": { label: "Ganda", blok2: ["4"] },
+    0: { label: "Tidak Ditemukan", blok2: ["00", "0"] },
+    1: { label: "Ditemukan", blok2: ["1"] },
+    3: { label: "Tutup", blok2: ["3"] },
+    4: { label: "Ganda", blok2: ["4"] },
   };
 
   async function setBlok2Keberadaan(code) {
@@ -1353,11 +1751,20 @@
     await sleep(W(500));
     const kb = kbVisible();
     // Pilihan di Blok II menyesuaikan Blok P (mis. hanya "3. Tutup"); pakai nilai yang tersedia
-    const value = want.blok2.find((v) => kb && kb.querySelector(`input[type="radio"][value="${v}"]`));
-    if (!value || (await fillField("", undefined, value, { container: kb })) !== "ok")
-      throw new Error(`Keberadaan Usaha (Blok II) tidak bisa diisi ${want.label}`);
+    const value = want.blok2.find(
+      (v) => kb && kb.querySelector(`input[type="radio"][value="${v}"]`),
+    );
+    if (
+      !value ||
+      (await fillField("", undefined, value, { container: kb })) !== "ok"
+    )
+      throw new Error(
+        `Keberadaan Usaha (Blok II) tidak bisa diisi ${want.label}`,
+      );
     if (radioValue(fresh(kb)) !== value)
-      throw new Error(`Keberadaan Usaha (Blok II) = ${radioValue(fresh(kb)) || "kosong"}, seharusnya ${want.label}`);
+      throw new Error(
+        `Keberadaan Usaha (Blok II) = ${radioValue(fresh(kb)) || "kosong"}, seharusnya ${want.label}`,
+      );
     runLog(`Blok II: Keberadaan Usaha = ${want.label}`);
     await sleep(W(600));
   }
@@ -1372,11 +1779,21 @@
     }
     const info = box("nama_info_list");
     if (!/PEMILIK USAHA/i.test(dropdownValue(info))) {
-      const pick = (opts) => opts.find((o) => /PEMILIK\s+USAHA/i.test(o.innerText));
+      const pick = (opts) =>
+        opts.find((o) => /PEMILIK\s+USAHA/i.test(o.innerText));
       const ok =
-        (await chooseFromDropdown(info, "", pick)) || (await chooseFromDropdown(fresh(info), "Pemilik", pick));
-      if (!ok || !(await waitFor(() => /PEMILIK USAHA/i.test(dropdownValue(fresh(info))), 3000)))
-        throw new Error('Nama Pemberi Informasi tidak bisa diisi "Pemilik Usaha"');
+        (await chooseFromDropdown(info, "", pick)) ||
+        (await chooseFromDropdown(fresh(info), "Pemilik", pick));
+      if (
+        !ok ||
+        !(await waitFor(
+          () => /PEMILIK USAHA/i.test(dropdownValue(fresh(info))),
+          3000,
+        ))
+      )
+        throw new Error(
+          'Nama Pemberi Informasi tidak bisa diisi "Pemilik Usaha"',
+        );
     }
     const setuju = await waitBox("persetujuan_responden", undefined, 3000);
     if (!setuju) throw new Error("centang persetujuan responden tidak ada");
@@ -1384,17 +1801,26 @@
       const b = box("persetujuan_responden");
       const cb = b && b.querySelector('input[type="checkbox"]');
       const ctl = b && b.querySelector('[id$="-control"]');
-      return !!(cb && (cb.checked || cb.hasAttribute("data-checked"))) || !!(ctl && ctl.hasAttribute("data-checked"));
+      return (
+        !!(cb && (cb.checked || cb.hasAttribute("data-checked"))) ||
+        !!(ctl && ctl.hasAttribute("data-checked"))
+      );
     };
     if (!checked()) {
-      triggerClick(setuju.querySelector('[id$="-control"]') || setuju.querySelector('input[type="checkbox"]'));
+      triggerClick(
+        setuju.querySelector('[id$="-control"]') ||
+          setuju.querySelector('input[type="checkbox"]'),
+      );
       if (!(await waitFor(checked, 3000))) {
         const cb = setuju.querySelector('input[type="checkbox"]');
         if (cb) cb.click();
-        if (!(await waitFor(checked, 3000))) throw new Error("persetujuan responden tidak bisa dicentang");
+        if (!(await waitFor(checked, 3000)))
+          throw new Error("persetujuan responden tidak bisa dicentang");
       }
     }
-    runLog("OSS Keterangan: Pemberi informasi = Pemilik Usaha, persetujuan dicentang");
+    runLog(
+      "OSS Keterangan: Pemberi informasi = Pemilik Usaha, persetujuan dicentang",
+    );
     await sleep(W(500));
   }
 
@@ -1407,7 +1833,9 @@
       await waitFor(() => radioValue(box("ada_bang_usaha")) === code, 2000);
     }
     if (radioValue(box("ada_bang_usaha")) !== code)
-      throw new Error(`Keberadaan Bangunan/Usaha tidak bisa diisi ${label} (sekarang: ${radioValue(box("ada_bang_usaha")) || "kosong"})`);
+      throw new Error(
+        `Keberadaan Bangunan/Usaha tidak bisa diisi ${label} (sekarang: ${radioValue(box("ada_bang_usaha")) || "kosong"})`,
+      );
     runLog(`OSS Blok P: Keberadaan Bangunan/Usaha = ${code}. ${label} ✓`);
     await sleep(W(800)); // isian lanjutan muncul setelah dijawab
   }
@@ -1438,17 +1866,25 @@
     // Keterangan di halaman lain: pastikan Blok P tetap Ditemukan setelah kembali
     await setAdaBangUsaha("1");
     runLog("OSS Blok P: Kode Penggunaan Bangunan = 1");
-    if ((await fillField("kode_bang", undefined, "1", { wait: 4000 })) === "fail") throw new Error("Kode Penggunaan Bangunan tidak bisa diisi 1");
+    if (
+      (await fillField("kode_bang", undefined, "1", { wait: 4000 })) === "fail"
+    )
+      throw new Error("Kode Penggunaan Bangunan tidak bisa diisi 1");
     const p = item.pdata || {};
-    runLog(`OSS Blok P: alamat "${p.jalan || "-"}", no ${p.nomor || "-"}, no bangunan ${p.noBang || "-"}`);
-    if (p.jalan) await fillField("jalan_domisili", undefined, p.jalan, { wait: 1500 });
-    await fillField("nomor_domisili", undefined, p.nomor || "-", { wait: 1500 });
-    if (p.noBang) await fillField("no_bang", undefined, p.noBang, { wait: 1500 });
+    runLog(
+      `OSS Blok P: alamat "${p.jalan || "-"}", no ${p.nomor || "-"}, no bangunan ${p.noBang || "-"}`,
+    );
+    if (p.jalan)
+      await fillField("jalan_domisili", undefined, p.jalan, { wait: 1500 });
+    await fillField("nomor_domisili", undefined, p.nomor || "-", {
+      wait: 1500,
+    });
+    if (p.noBang)
+      await fillField("no_bang", undefined, p.noBang, { wait: 1500 });
     if (p.lat && p.lng) {
       runLog(`OSS Blok P: geotag ${p.lat}, ${p.lng} (akurasi 5 m)`);
       await setGeotag(p.lat, p.lng);
-    }
-    else runLog("⚠ geotag keluarga kosong, OSS tidak diberi koordinat");
+    } else runLog("⚠ geotag keluarga kosong, OSS tidak diberi koordinat");
 
     await setBlok2Keberadaan("1");
   }
@@ -1487,7 +1923,10 @@
     console.log(`[OSS→Keluarga] ${msg}`);
     const r = loadRun();
     r.lastLog = msg;
-    r.logs = [...(r.logs || []), `${new Date().toLocaleTimeString("id-ID")} ${msg}`].slice(-5);
+    r.logs = [
+      ...(r.logs || []),
+      `${new Date().toLocaleTimeString("id-ID")} ${msg}`,
+    ].slice(-5);
     saveRun(r);
     updateBar();
   }
@@ -1502,10 +1941,14 @@
   }
 
   const prefix = () => loadConf().surveyPrefix;
-  const reviewUrl = (id) => `${location.origin}/app/assignment/${prefix()}/${id}`;
-  const onReviewOf = (id) => new RegExp(`/app/assignment/[^/]+/${id}/?$`, "i").test(location.pathname);
-  const onEditOf = (id) => new RegExp(`/app/assignment/[^/]+/${id}/edit`, "i").test(location.pathname);
-  const onDetailOf = (id) => new RegExp(`/app/assignment-detail/${id}`, "i").test(location.pathname);
+  const reviewUrl = (id) =>
+    `${location.origin}/app/assignment/${prefix()}/${id}`;
+  const onReviewOf = (id) =>
+    new RegExp(`/app/assignment/[^/]+/${id}/?$`, "i").test(location.pathname);
+  const onEditOf = (id) =>
+    new RegExp(`/app/assignment/[^/]+/${id}/edit`, "i").test(location.pathname);
+  const onDetailOf = (id) =>
+    new RegExp(`/app/assignment-detail/${id}`, "i").test(location.pathname);
   // ID survei bisa beda antara dokumen keluarga dan OSS -> diingat terpisah
   const prefixFor = (kind) => {
     const c = loadConf();
@@ -1519,19 +1962,23 @@
     if (onDetailOf(id)) {
       const link = await waitFor(
         () =>
-          Array.from(document.querySelectorAll('a[href*="/app/assignment/"]')).find((a) =>
-            a.getAttribute("href").toLowerCase().includes(id),
-          ),
+          Array.from(
+            document.querySelectorAll('a[href*="/app/assignment/"]'),
+          ).find((a) => a.getAttribute("href").toLowerCase().includes(id)),
         12000,
       );
       if (link) {
-        const m = link.getAttribute("href").match(/\/app\/assignment\/([0-9a-f-]{36})\//i);
+        const m = link
+          .getAttribute("href")
+          .match(/\/app\/assignment\/([0-9a-f-]{36})\//i);
         if (m) {
           const c = loadConf();
           c[kind === "oss" ? "prefixOss" : "prefixKel"] = m[1];
           saveConf(c);
         }
-        runLog(`Buka Review ${kind === "oss" ? "OSS" : "keluarga"} dari halaman detail`);
+        runLog(
+          `Buka Review ${kind === "oss" ? "OSS" : "keluarga"} dari halaman detail`,
+        );
         const r = loadRun();
         r.navAt = Date.now();
         saveRun(r);
@@ -1543,7 +1990,10 @@
     const r = loadRun();
     if (Date.now() - (r.navAt || 0) < 3000) return false; // tunggu halaman sebelumnya selesai dimuat
     const tries = (r.cur && r.cur.navTries) || 0;
-    if (tries >= 4) throw new Error(`dokumen ${kind === "oss" ? "OSS" : "keluarga"} tidak bisa dibuka (cek ID survei / akses akun)`);
+    if (tries >= 4)
+      throw new Error(
+        `dokumen ${kind === "oss" ? "OSS" : "keluarga"} tidak bisa dibuka (cek ID survei / akses akun)`,
+      );
     r.cur.navTries = tries + 1;
     r.navAt = Date.now();
     saveRun(r);
@@ -1551,7 +2001,9 @@
       tries === 0
         ? `${location.origin}/app/assignment/${prefixFor(kind)}/${id}`
         : `${location.origin}/app/assignment-detail/${id}`;
-    runLog(`Membuka ${kind === "oss" ? "OSS" : "keluarga"} (percobaan ${tries + 1})`);
+    runLog(
+      `Membuka ${kind === "oss" ? "OSS" : "keluarga"} (percobaan ${tries + 1})`,
+    );
     location.href = url;
     return false;
   }
@@ -1571,7 +2023,9 @@
   // Ambil awalan survei dari link Review di halaman daftar (jika ada)
   function learnPrefix() {
     const a = document.querySelector('a[href*="/app/assignment/"]');
-    const m = a && a.getAttribute("href").match(/\/app\/assignment\/([0-9a-f-]{36})\//i);
+    const m =
+      a &&
+      a.getAttribute("href").match(/\/app\/assignment\/([0-9a-f-]{36})\//i);
     if (m && m[1] !== prefix()) {
       const cf = loadConf();
       cf.surveyPrefix = m[1];
@@ -1594,7 +2048,9 @@
 
   // Pindah wilayah di halaman daftar. Hasil: { status, reason }
   async function moveItem(item, testMode) {
-    runLog(`Mencari ${item.namaUsaha} (${item.desa.name} ${item.slsAsalNama || item.slsAsal})`);
+    runLog(
+      `Mencari ${item.namaUsaha} (${item.desa.name} ${item.slsAsalNama || item.slsAsal})`,
+    );
     let found;
     try {
       found = await findRow(item);
@@ -1604,58 +2060,98 @@
       await applyFilter(item, item.slsTujuan);
       const want = normalize(item.namaUsaha);
       const rows = await searchList(item.namaUsaha);
-      if (rows.some((tr) => Array.from(tr.querySelectorAll("td")).some((td) => normalize(td.innerText) === want)))
-        return { status: "moved", reason: `sudah ada di SLS tujuan ${item.slsTujuan}` };
+      if (
+        rows.some((tr) =>
+          Array.from(tr.querySelectorAll("td")).some(
+            (td) => normalize(td.innerText) === want,
+          ),
+        )
+      )
+        return {
+          status: "moved",
+          reason: `sudah ada di SLS tujuan ${item.slsTujuan}`,
+        };
       throw e;
     }
     await openGantiWilayah(found.tr);
-    runLog(`Mengisi → SLS ${item.slsTujuan}/${item.subslsTujuan} ${item.slsTujuanNama}`);
+    runLog(
+      `Mengisi → SLS ${item.slsTujuan}/${item.subslsTujuan} ${item.slsTujuanNama}`,
+    );
     await fillGantiWilayah(item);
     if (testMode) {
       userDecision = null;
       const r = loadRun();
       r.waiting = true;
       saveRun(r);
-      runLog(`MODE UJI: periksa dialog Ganti Wilayah, lalu "Kirim sekarang" / "Lewati"`);
+      runLog(
+        `MODE UJI: periksa dialog Ganti Wilayah, lalu "Kirim sekarang" / "Lewati"`,
+      );
       await waitFor(() => userDecision, 24 * 3600000);
       const r2 = loadRun();
       r2.waiting = false;
       saveRun(r2);
       if (userDecision !== "send") {
         closeGantiDialog();
-        return { status: "tested", reason: `terisi, tidak dikirim (${found.note})` };
+        return {
+          status: "tested",
+          reason: `terisi, tidak dikirim (${found.note})`,
+        };
       }
     }
     await submitGantiWilayah();
     appliedFilterKey = null;
-    return { status: "moved", reason: `dipindah ke SLS ${item.slsTujuan}/${item.subslsTujuan} (${found.note})` };
+    return {
+      status: "moved",
+      reason: `dipindah ke SLS ${item.slsTujuan}/${item.subslsTujuan} (${found.note})`,
+    };
   }
 
   const needsForce = (q) => q.status === "linked" && !q.forced;
   // OSS Tutup lama (sebelum perbaikan Ganda): karena saat itu kartu usaha tanpa isian
   // "Pilih UMKM dalam satu SLS" selalu dibaca "nomatch" -> OSS Tutup, padahal seharusnya "Ganda".
   // gandaChecked: sudah pernah dicek ulang (dan dipastikan tetap Tutup) -> jangan diulang terus.
-  const needsGandaCheck = (q) => q.status === "closed" && q.linkResult === "nomatch" && !q.gandaChecked;
+  const needsGandaCheck = (q) =>
+    q.status === "closed" && q.linkResult === "nomatch" && !q.gandaChecked;
   function nextItem(run) {
     const only = run.onlyIds ? new Set(run.onlyIds) : null;
-    if (run.forceRedo) return loadQueue().find((q) => needsForce(q) && (!only || only.has(q.id)));
-    if (run.recheckGanda) return loadQueue().find((q) => needsGandaCheck(q) && (!only || only.has(q.id)));
-    const want = run.onlyLink ? ["moved"] : run.doLink ? ["moved", "pending"] : ["pending"];
-    const ready = loadQueue().filter((q) => want.includes(q.status) && (!only || only.has(q.id)));
+    if (run.forceRedo)
+      return loadQueue().find(
+        (q) => needsForce(q) && (!only || only.has(q.id)),
+      );
+    if (run.recheckGanda)
+      return loadQueue().find(
+        (q) => needsGandaCheck(q) && (!only || only.has(q.id)),
+      );
+    const want = run.onlyLink
+      ? ["moved"]
+      : run.doLink
+        ? ["moved", "pending"]
+        : ["pending"];
+    const ready = loadQueue().filter(
+      (q) => want.includes(q.status) && (!only || only.has(q.id)),
+    );
     // Pindah wilayah SEMUA dulu (tetap di halaman daftar), baru tautkan yang sudah dipindah
     const pending = ready.filter((q) => q.status === "pending");
     if (pending.length)
-      return pending.find((q) => `${q.kec.code}|${q.desa.code}|${q.slsAsal}` === appliedFilterKey) || pending[0];
+      return (
+        pending.find(
+          (q) =>
+            `${q.kec.code}|${q.desa.code}|${q.slsAsal}` === appliedFilterKey,
+        ) || pending[0]
+      );
     return ready.find((q) => q.status === "moved");
   }
 
   // Mode uji: berhenti sebelum Kirim. Hasil true = boleh lanjut
   function testGate(run, what) {
-    if (!run.testMode || (run.cur && run.cur.confirmed === run.cur.stage)) return true;
+    if (!run.testMode || (run.cur && run.cur.confirmed === run.cur.stage))
+      return true;
     if (!run.paused) {
       run.paused = { stage: run.cur.stage };
       saveRun(run);
-      runLog(`MODE UJI: ${what} siap dikirim. Periksa, lalu "Kirim sekarang" / "Lewati"`);
+      runLog(
+        `MODE UJI: ${what} siap dikirim. Periksa, lalu "Kirim sekarang" / "Lewati"`,
+      );
     }
     return false;
   }
@@ -1675,7 +2171,8 @@
       if (!run.cur) {
         if (Date.now() < (run.nextAt || 0)) return;
         const item = nextItem(run);
-        if (!item || (run.limit && run.processed >= run.limit)) return stopRun("Selesai.");
+        if (!item || (run.limit && run.processed >= run.limit))
+          return stopRun("Selesai.");
         if (run.forceRedo) {
           setStage("oss_open", { id: item.id, force: true });
           runLog(`Force submit ulang OSS ${item.namaUsaha}`);
@@ -1683,7 +2180,9 @@
         }
         if (run.recheckGanda) {
           setStage("gcheck_scan", { id: item.id });
-          runLog(`Cek ulang Ganda (baca halaman Review dulu, tanpa edit): ${item.namaUsaha}`);
+          runLog(
+            `Cek ulang Ganda (baca halaman Review dulu, tanpa edit): ${item.namaUsaha}`,
+          );
           return;
         }
         if (item.status === "moved") {
@@ -1714,14 +2213,22 @@
       const item = loadQueue().find((q) => q.id === cur.id);
       if (!item) return finishItem(cur.id, "red", "item hilang dari antrean");
       if (Date.now() - (run.phaseAt || 0) > STAGE_TIMEOUT_MS)
-        return finishItem(item.id, "red", `${item.namaUsaha}: macet di tahap "${STAGE_LABEL[cur.stage] || cur.stage}"`);
+        return finishItem(
+          item.id,
+          "red",
+          `${item.namaUsaha}: macet di tahap "${STAGE_LABEL[cur.stage] || cur.stage}"`,
+        );
       try {
         await runStage(run, cur, item);
       } catch (e) {
         console.error("[OSS→Keluarga]", e);
         pressKey("Escape");
         const where = STAGE_LABEL[cur.stage] || cur.stage;
-        finishItem(item.id, /galat/.test(e.message) ? "yellow" : "red", `${item.namaUsaha}: [${where}] ${e.message}`);
+        finishItem(
+          item.id,
+          /galat/.test(e.message) ? "yellow" : "red",
+          `${item.namaUsaha}: [${where}] ${e.message}`,
+        );
       }
     } finally {
       busy = false;
@@ -1735,24 +2242,34 @@
         // Baca dulu di halaman Review keluarga (TANPA klik Edit / revoke) -- cuma lanjut ke cara lama
         // (revoke) kalau ternyata ada yang perlu ditulis (OSS baru ketemu cocok).
         if (!(await ensureReview(kelId, "kel"))) return;
-        runLog(`Cek kartu usaha keluarga (halaman Review, belum edit): ${item.namaUsaha}`);
+        runLog(
+          `Cek kartu usaha keluarga (halaman Review, belum edit): ${item.namaUsaha}`,
+        );
         let scan;
         try {
           scan = await scanUsahaCards(item);
         } catch (e) {
-          runLog(`⚠ cek tanpa-edit gagal (${e.message}), pakai cara lama (revoke keluarga)`);
+          runLog(
+            `⚠ cek tanpa-edit gagal (${e.message}), pakai cara lama (revoke keluarga)`,
+          );
           return setStage("kel_open");
         }
         if (scan.result === "nousaha" || scan.result === "nomatch") {
           updateItem(item.id, { gandaChecked: true });
-          finishItem(item.id, item.status, `${item.namaUsaha}: dicek ulang tanpa revoke, tidak ada perubahan (tetap OSS Tutup)`);
+          finishItem(
+            item.id,
+            item.status,
+            `${item.namaUsaha}: dicek ulang tanpa revoke, tidak ada perubahan (tetap OSS Tutup)`,
+          );
           return goList();
         }
         if (scan.result === "ganda") {
           // Keluarga tidak perlu diubah sama sekali -> langsung revoke & perbaiki OSS-nya saja
           updateItem(item.id, { linkResult: "ganda", gandaChecked: true });
           setStage("oss_open", { submitClicked: false });
-          runLog(`Ganda terkonfirmasi tanpa revoke keluarga, membuka OSS ${item.namaUsaha}`);
+          runLog(
+            `Ganda terkonfirmasi tanpa revoke keluarga, membuka OSS ${item.namaUsaha}`,
+          );
           const r = loadRun();
           r.navAt = 0;
           saveRun(r);
@@ -1764,16 +2281,24 @@
         // dicek supaya baris ini tidak diulang-ulang lagi oleh tombol Cek Ganda meskipun hasil akhirnya
         // ternyata tetap Tutup.
         updateItem(item.id, { gandaChecked: true });
-        runLog(`Berpotensi ada yang bisa ditautkan, lanjut cara biasa (revoke keluarga)`);
+        runLog(
+          `Berpotensi ada yang bisa ditautkan, lanjut cara biasa (revoke keluarga)`,
+        );
         return setStage("kel_open");
       }
       case "kel_open":
       case "oss_open": {
         const id = cur.stage === "kel_open" ? kelId : item.id;
         if (!id) throw new Error("assignment_id keluarga kosong di Excel");
-        const next = cur.stage === "kel_open" ? "kel_fill" : cur.force ? "oss_submit" : "oss_fill";
+        const next =
+          cur.stage === "kel_open"
+            ? "kel_fill"
+            : cur.force
+              ? "oss_submit"
+              : "oss_fill";
         if (onEditOf(id)) return setStage(next);
-        if (!(await ensureReview(id, cur.stage === "kel_open" ? "kel" : "oss"))) return;
+        if (!(await ensureReview(id, cur.stage === "kel_open" ? "kel" : "oss")))
+          return;
         runLog(`${STAGE_LABEL[cur.stage]}: ${item.namaUsaha}`);
         const revoked = await reviewToEdit();
         return setStage(next, { revoked, submitClicked: false });
@@ -1784,7 +2309,11 @@
         const pdata = await readFamilyP();
         runLog("Cek usaha keluarga & Pilih UMKM SLS");
         const link = await linkUmkm(item);
-        updateItem(item.id, { pdata, linkResult: link.result, linkCard: link.card || "" });
+        updateItem(item.id, {
+          pdata,
+          linkResult: link.result,
+          linkCard: link.card || "",
+        });
         runLog(
           link.result === "found"
             ? `UMKM ${item.namaUsaha} ${link.changed ? "dipilih" : "sudah terpilih"} di usaha "${link.card}"`
@@ -1794,11 +2323,18 @@
                 ? "Usaha keluarga tidak punya isian Pilih UMKM → OSS akan Ganda"
                 : "OSS tidak ada di pilihan UMKM keluarga → OSS akan ditutup",
         );
-        return setStage(cur.revoked || link.changed ? "kel_submit" : "oss_open", { submitClicked: false });
+        return setStage(
+          cur.revoked || link.changed ? "kel_submit" : "oss_open",
+          { submitClicked: false },
+        );
       }
       case "oss_fill": {
         if (!onEditOf(item.id)) return setStage("oss_open");
-        runLog(item.linkResult === "found" ? "OSS: Ditemukan + salin alamat & geotag" : "OSS: Tutup");
+        runLog(
+          item.linkResult === "found"
+            ? "OSS: Ditemukan + salin alamat & geotag"
+            : "OSS: Tutup",
+        );
         await fillOss(item);
         return setStage("oss_submit", { submitClicked: false });
       }
@@ -1810,8 +2346,20 @@
           if (cur.submitClicked && onReviewOf(id)) return setStage(next);
           throw new Error("halaman edit tertutup sebelum dikirim");
         }
-        const paksa = cur.stage === "oss_submit" && (cur.force || item.linkResult === "found");
-        if (!testGate(run, cur.stage === "kel_submit" ? "Dokumen keluarga" : paksa ? "Dokumen OSS (Submit Paksa)" : "Dokumen OSS (Tutup, Kirim biasa)")) return;
+        const paksa =
+          cur.stage === "oss_submit" &&
+          (cur.force || item.linkResult === "found");
+        if (
+          !testGate(
+            run,
+            cur.stage === "kel_submit"
+              ? "Dokumen keluarga"
+              : paksa
+                ? "Dokumen OSS (Submit Paksa)"
+                : "Dokumen OSS (Tutup, Kirim biasa)",
+          )
+        )
+          return;
         runLog(STAGE_LABEL[cur.stage]);
         if (paksa) await forceSubmitCurrent();
         else await submitCurrent();
@@ -1820,7 +2368,10 @@
       case "kel_approve":
       case "oss_approve": {
         const id = cur.stage === "kel_approve" ? kelId : item.id;
-        if (!(await ensureReview(id, cur.stage === "kel_approve" ? "kel" : "oss"))) return;
+        if (
+          !(await ensureReview(id, cur.stage === "kel_approve" ? "kel" : "oss"))
+        )
+          return;
         runLog(STAGE_LABEL[cur.stage]);
         // Pada titik ini dokumen SUDAH terkirim (kel_submit/oss_submit lolos sebelum sampai di sini),
         // dan untuk OSS, sudah tertaut (linkUmkm di kel_fill). Approve cuma langkah terakhir
@@ -1832,8 +2383,15 @@
             await approveDocument();
           } catch (e) {
             approveNote = ` (approve ${cur.stage === "kel_approve" ? "keluarga" : "OSS"} gagal, cek manual: ${e.message})`;
-            updateItem(item.id, cur.stage === "kel_approve" ? { kelNote: `approve keluarga gagal: ${e.message}` } : { ossNote: `approve OSS gagal: ${e.message}` });
-            runLog(`⚠ approve ${cur.stage === "kel_approve" ? "keluarga" : "OSS"} gagal (${e.message}), status tetap dicatat terkirim`);
+            updateItem(
+              item.id,
+              cur.stage === "kel_approve"
+                ? { kelNote: `approve keluarga gagal: ${e.message}` }
+                : { ossNote: `approve OSS gagal: ${e.message}` },
+            );
+            runLog(
+              `⚠ approve ${cur.stage === "kel_approve" ? "keluarga" : "OSS"} gagal (${e.message}), status tetap dicatat terkirim`,
+            );
           }
           closeDialogs();
         }
@@ -1848,7 +2406,11 @@
           return;
         }
         if (cur.force) {
-          finishItem(item.id, item.status, `${item.namaUsaha}: force submit ulang ✓${loadConf().approve && !approveNote ? " & approve" : ""}${approveNote}`);
+          finishItem(
+            item.id,
+            item.status,
+            `${item.namaUsaha}: force submit ulang ✓${loadConf().approve && !approveNote ? " & approve" : ""}${approveNote}`,
+          );
           updateItem(item.id, { forced: true });
           return goList();
         }
@@ -1863,7 +2425,8 @@
               ? `${item.namaUsaha}: dipindah, keluarga tanpa usaha → OSS Tutup`
               : item.linkResult === "ganda"
                 ? `${item.namaUsaha}: dipindah, usaha keluarga tidak punya isian Pilih UMKM → OSS Ganda`
-                : `${item.namaUsaha}: dipindah, tidak ada di pilihan UMKM → OSS Tutup`) + approveNote,
+                : `${item.namaUsaha}: dipindah, tidak ada di pilihan UMKM → OSS Tutup`) +
+            approveNote,
         );
         return goList();
       }
@@ -1874,14 +2437,19 @@
 
   function startRun(opts) {
     if (!isListPage()) {
-      alert('Mulai dari halaman daftar assignment (tabel dengan kotak "Cari...").');
+      alert(
+        'Mulai dari halaman daftar assignment (tabel dengan kotak "Cari...").',
+      );
       return;
     }
     const conf = loadConf();
     // ▶ N / Uji 1: ambil N baris dari antrean -> N baris itu dipindah dulu, lalu ditautkan
     let onlyIds = opts.onlyIds || null;
     if (!onlyIds && opts.limit && opts.forceRedo)
-      onlyIds = loadQueue().filter(needsForce).slice(0, opts.limit).map((q) => q.id);
+      onlyIds = loadQueue()
+        .filter(needsForce)
+        .slice(0, opts.limit)
+        .map((q) => q.id);
     if (!onlyIds && opts.limit && !opts.forceRedo) {
       const want = opts.onlyLink ? ["moved"] : ["pending"];
       onlyIds = loadQueue()
@@ -1889,7 +2457,10 @@
         .slice(0, opts.limit)
         .map((q) => q.id);
       if (!onlyIds.length && !opts.onlyLink && conf.doLink)
-        onlyIds = loadQueue().filter((q) => q.status === "moved").slice(0, opts.limit).map((q) => q.id);
+        onlyIds = loadQueue()
+          .filter((q) => q.status === "moved")
+          .slice(0, opts.limit)
+          .map((q) => q.id);
     }
     saveRun({
       running: true,
@@ -1905,7 +2476,9 @@
       cur: null,
     });
     document.getElementById("fgw-panel")?.remove();
-    runLog(`Mulai${opts.forceRedo ? " (force submit ulang OSS)" : ""}${opts.recheckGanda ? " (cek ulang Ganda dari OSS Tutup)" : ""}${opts.onlyLink ? " (tautkan saja)" : ""}${opts.testMode ? " · MODE UJI" : ""}`);
+    runLog(
+      `Mulai${opts.forceRedo ? " (force submit ulang OSS)" : ""}${opts.recheckGanda ? " (cek ulang Ganda dari OSS Tutup)" : ""}${opts.onlyLink ? " (tautkan saja)" : ""}${opts.testMode ? " · MODE UJI" : ""}`,
+    );
   }
 
   function stopRun(msg) {
@@ -2059,7 +2632,10 @@
   }
 
   const esc = (s) =>
-    String(s || "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]);
+    String(s || "").replace(
+      /[&<>"]/g,
+      (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch],
+    );
 
   // Label pendek untuk langkah di bar status
   const STEP_SHORT = {
@@ -2106,7 +2682,12 @@
         }
         if (act === "pass") {
           const r = loadRun();
-          if (r.cur) finishItem(r.cur.id, "tested", "MODE UJI: tidak dikirim (dokumen masih terbuka/revoke, cek manual)");
+          if (r.cur)
+            finishItem(
+              r.cur.id,
+              "tested",
+              "MODE UJI: tidak dikirim (dokumen masih terbuka/revoke, cek manual)",
+            );
           goList();
         }
       });
@@ -2135,10 +2716,13 @@
           : `Fase 1/2 · Pindah wilayah · sisa ${sisaPindah}${run.doLink ? ` (lalu tautkan ${sisaTaut + sisaPindah})` : ""}`;
     const waiting = !!(run.paused || run.waiting);
     const steps = it
-      ? `<div class="steps">${STEPS.filter(([k]) => (stepNow === "move" ? k === "move" : k !== "move"))
+      ? `<div class="steps">${STEPS.filter(([k]) =>
+          stepNow === "move" ? k === "move" : k !== "move",
+        )
           .map(([k, label]) => {
             const i = STEPS.findIndex(([x]) => x === k);
-            const cls = i < iNow ? "done" : i === iNow ? (waiting ? "wait" : "now") : "";
+            const cls =
+              i < iNow ? "done" : i === iNow ? (waiting ? "wait" : "now") : "";
             return `<div class="st ${cls}" title="${esc(label)}">${i < iNow ? "✓ " : ""}${STEP_SHORT[k] || label}</div>`;
           })
           .join("")}</div>`
@@ -2148,10 +2732,31 @@
     const nDone = scope.filter((q) => DONE_STATUSES.includes(q.status)).length;
     const nMoved = scope.filter((q) => q.status === "moved").length;
     const pct = (n) => (total ? (100 * n) / total : 0);
-    const logs = (run.logs || []).length ? run.logs : run.lastLog ? [run.lastLog] : [];
-    const timer = run.cur && run.phaseAt ? `${Math.round((Date.now() - run.phaseAt) / 1000)} dtk` : "";
+    const logs = (run.logs || []).length
+      ? run.logs
+      : run.lastLog
+        ? [run.lastLog]
+        : [];
+    const timer =
+      run.cur && run.phaseAt
+        ? `${Math.round((Date.now() - run.phaseAt) / 1000)} dtk`
+        : "";
     // Digambar ulang hanya kalau isinya berubah (penghitung detik diperbarui di tempat) supaya tombol tidak berkedip
-    const sig = JSON.stringify([run.cur && run.cur.stage, curId, run.paused, run.waiting, logs, rate, run.lastStep, fase, c, nDone, nMoved, T().name, run.testMode]);
+    const sig = JSON.stringify([
+      run.cur && run.cur.stage,
+      curId,
+      run.paused,
+      run.waiting,
+      logs,
+      rate,
+      run.lastStep,
+      fase,
+      c,
+      nDone,
+      nMoved,
+      T().name,
+      run.testMode,
+    ]);
     if (sig === barSig) {
       const tm = bar.querySelector("[data-timer]");
       if (tm) tm.textContent = timer;
@@ -2188,7 +2793,17 @@
   }
 
   function counts() {
-    const c = { pending: 0, moved: 0, linked: 0, closed: 0, tested: 0, red: 0, yellow: 0, manual: 0, ganda: 0 };
+    const c = {
+      pending: 0,
+      moved: 0,
+      linked: 0,
+      closed: 0,
+      tested: 0,
+      red: 0,
+      yellow: 0,
+      manual: 0,
+      ganda: 0,
+    };
     loadQueue().forEach((q) => {
       c[q.status] = (c[q.status] || 0) + 1;
       if (q.linkResult === "ganda") c.ganda++; // sub-kategori closed: OSS Ganda (bukan status tersendiri)
@@ -2199,24 +2814,87 @@
   // Label nama wilayah untuk nama file ekspor, dari kecamatan/desa yang ada di antrean
   function wilayahTag() {
     const queue = loadQueue();
-    const kecs = [...new Set(queue.map((i) => i.kec.name || i.kec.code).filter(Boolean))];
-    const desas = [...new Set(queue.map((i) => i.desa.name || i.desa.code).filter(Boolean))];
+    const kecs = [
+      ...new Set(queue.map((i) => i.kec.name || i.kec.code).filter(Boolean)),
+    ];
+    const desas = [
+      ...new Set(queue.map((i) => i.desa.name || i.desa.code).filter(Boolean)),
+    ];
     let tag = "semua-wilayah";
-    if (desas.length === 1) tag = kecs.length === 1 ? `${kecs[0]}-${desas[0]}` : desas[0];
+    if (desas.length === 1)
+      tag = kecs.length === 1 ? `${kecs[0]}-${desas[0]}` : desas[0];
     else if (kecs.length === 1) tag = kecs[0];
     else if (kecs.length > 1) tag = `${kecs.length}-kecamatan`;
-    return tag.replace(/[\\/:*?"<>|\s]+/g, "_").replace(/_+/g, "_").slice(0, 80);
+    return tag
+      .replace(/[\\/:*?"<>|\s]+/g, "_")
+      .replace(/_+/g, "_")
+      .slice(0, 80);
   }
 
   function downloadReport() {
-    const q = (v) => `"${String(v === undefined || v === null ? "" : v).replace(/"/g, '""')}"`;
-    const header = ["baris_excel", "assignment_id", "kel_assignment_id", "status", "alasan", "hasil_tautan", "usaha_keluarga", "force_submit", "jalan", "nomor", "no_bang", "latitude", "longitude", "waktu", "kecamatan", "desa", "sls_asal", "nama_usaha", "sls_tujuan", "subsls_tujuan", "sls_tujuan_nama", "kel_anggota", "yakin", "link_oss", "link_keluarga"];
+    const q = (v) =>
+      `"${String(v === undefined || v === null ? "" : v).replace(/"/g, '""')}"`;
+    const header = [
+      "baris_excel",
+      "assignment_id",
+      "kel_assignment_id",
+      "status",
+      "alasan",
+      "hasil_tautan",
+      "usaha_keluarga",
+      "force_submit",
+      "jalan",
+      "nomor",
+      "no_bang",
+      "latitude",
+      "longitude",
+      "waktu",
+      "kecamatan",
+      "desa",
+      "sls_asal",
+      "nama_usaha",
+      "sls_tujuan",
+      "subsls_tujuan",
+      "sls_tujuan_nama",
+      "kel_anggota",
+      "yakin",
+      "link_oss",
+      "link_keluarga",
+    ];
     const lines = loadQueue().map((i) =>
-      [i.row, i.id, i.kelId, STATUS_LABEL[i.status], i.reason, i.linkResult || "", i.linkCard || "", i.forced ? "ya" : "", (i.pdata || {}).jalan, (i.pdata || {}).nomor, (i.pdata || {}).noBang, (i.pdata || {}).lat, (i.pdata || {}).lng, i.doneAt || "", i.kec.name, i.desa.name, i.slsAsal, i.namaUsaha, i.slsTujuan, i.subslsTujuan, i.slsTujuanNama, i.kelAnggota, i.yakin, i.linkOss, i.linkKel]
+      [
+        i.row,
+        i.id,
+        i.kelId,
+        STATUS_LABEL[i.status],
+        i.reason,
+        i.linkResult || "",
+        i.linkCard || "",
+        i.forced ? "ya" : "",
+        (i.pdata || {}).jalan,
+        (i.pdata || {}).nomor,
+        (i.pdata || {}).noBang,
+        (i.pdata || {}).lat,
+        (i.pdata || {}).lng,
+        i.doneAt || "",
+        i.kec.name,
+        i.desa.name,
+        i.slsAsal,
+        i.namaUsaha,
+        i.slsTujuan,
+        i.subslsTujuan,
+        i.slsTujuanNama,
+        i.kelAnggota,
+        i.yakin,
+        i.linkOss,
+        i.linkKel,
+      ]
         .map(q)
         .join(","),
     );
-    const blob = new Blob(["﻿" + [header.join(","), ...lines].join("\n")], { type: "text/csv;charset=utf-8" });
+    const blob = new Blob(["﻿" + [header.join(","), ...lines].join("\n")], {
+      type: "text/csv;charset=utf-8",
+    });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `laporan-oss-keluarga-${wilayahTag()}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}.csv`;
@@ -2227,9 +2905,22 @@
   // bisa lanjut kerja persis dari titik yang sama di laptop lain -- status, alasan, hasil tautan,
   // Blok P yang sudah disalin, dll ikut semua. Laporan CSV di atas cuma buat dibaca, bukan buat dimuat balik.
   function downloadQueueJson() {
-    const blob = new Blob([JSON.stringify({ queue: loadQueue(), conf: loadConf(), exportedAt: new Date().toISOString() }, null, 2)], {
-      type: "application/json;charset=utf-8",
-    });
+    const blob = new Blob(
+      [
+        JSON.stringify(
+          {
+            queue: loadQueue(),
+            conf: loadConf(),
+            exportedAt: new Date().toISOString(),
+          },
+          null,
+          2,
+        ),
+      ],
+      {
+        type: "application/json;charset=utf-8",
+      },
+    );
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `antrean-oss-keluarga-${wilayahTag()}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}.json`;
@@ -2239,22 +2930,53 @@
   // Status akhir yang dipilih manual. Ditautkan/Tutup/Ganda diisi seperti hasil otomatis
   // (supaya kolom status & hasil_tautan di Laporan CSV terbaca benar); "manual" = diselesaikan sendiri.
   const FINAL_CHOICES = {
-    linked: { label: "✅ Ditautkan", hint: "OSS ditemukan & tertaut ke usaha keluarga" },
+    linked: {
+      label: "✅ Ditautkan",
+      hint: "OSS ditemukan & tertaut ke usaha keluarga",
+    },
     closed: { label: "🔒 Tutup", hint: "OSS tutup" },
-    ganda: { label: "🔁 Ganda", hint: "usaha keluarga sudah dicatat langsung (tanpa Pilih UMKM)" },
-    manual: { label: "✍ Selesaikan sendiri", hint: "tidak masuk Ditautkan/Tutup/Ganda, diselesaikan manual di FASIH" },
+    ganda: {
+      label: "🔁 Ganda",
+      hint: "usaha keluarga sudah dicatat langsung (tanpa Pilih UMKM)",
+    },
+    manual: {
+      label: "✍ Selesaikan sendiri",
+      hint: "tidak masuk Ditautkan/Tutup/Ganda, diselesaikan manual di FASIH",
+    },
   };
   function applyFinalStatus(ids, choice) {
     const queue = loadQueue();
-    queue.filter((i) => ids.includes(i.id)).forEach((i) => {
-      const note = `dipilih manual (sebelumnya: ${STATUS_LABEL[i.status] || i.status})`;
-      if (choice === "linked") Object.assign(i, { status: "linked", linkResult: "found", forced: true, reason: `${i.namaUsaha}: ${note} → ditautkan` });
-      else if (choice === "closed") Object.assign(i, { status: "closed", linkResult: i.linkResult === "nousaha" ? "nousaha" : "nomatch", reason: `${i.namaUsaha}: ${note} → OSS tutup` });
-      else if (choice === "ganda") Object.assign(i, { status: "closed", linkResult: "ganda", reason: `${i.namaUsaha}: ${note} → OSS ganda` });
-      else Object.assign(i, { status: "manual", reason: `${i.namaUsaha}: ${note} → diselesaikan sendiri` });
-      i.gandaChecked = true; // sudah diputuskan manual, jangan dicek ulang otomatis
-      i.doneAt = new Date().toISOString();
-    });
+    queue
+      .filter((i) => ids.includes(i.id))
+      .forEach((i) => {
+        const note = `dipilih manual (sebelumnya: ${STATUS_LABEL[i.status] || i.status})`;
+        if (choice === "linked")
+          Object.assign(i, {
+            status: "linked",
+            linkResult: "found",
+            forced: true,
+            reason: `${i.namaUsaha}: ${note} → ditautkan`,
+          });
+        else if (choice === "closed")
+          Object.assign(i, {
+            status: "closed",
+            linkResult: i.linkResult === "nousaha" ? "nousaha" : "nomatch",
+            reason: `${i.namaUsaha}: ${note} → OSS tutup`,
+          });
+        else if (choice === "ganda")
+          Object.assign(i, {
+            status: "closed",
+            linkResult: "ganda",
+            reason: `${i.namaUsaha}: ${note} → OSS ganda`,
+          });
+        else
+          Object.assign(i, {
+            status: "manual",
+            reason: `${i.namaUsaha}: ${note} → diselesaikan sendiri`,
+          });
+        i.gandaChecked = true; // sudah diputuskan manual, jangan dicek ulang otomatis
+        i.doneAt = new Date().toISOString();
+      });
     saveQueue(queue);
   }
   function openFinalPicker(ids) {
@@ -2262,9 +2984,13 @@
     const modal = document.createElement("div");
     modal.id = "fgw-final";
     modal.className = "fgw fgw-overlay";
-    modal.style.cssText = "align-items:center;justify-content:center;z-index:1000002;";
+    modal.style.cssText =
+      "align-items:center;justify-content:center;z-index:1000002;";
     const options = Object.entries(FINAL_CHOICES)
-      .map(([key, o]) => `<button class="fgw-btn" data-final="${key}" style="text-align:left;"><b>${o.label}</b><div class="fgw-hint">${o.hint}</div></button>`)
+      .map(
+        ([key, o]) =>
+          `<button class="fgw-btn" data-final="${key}" style="text-align:left;"><b>${o.label}</b><div class="fgw-hint">${o.hint}</div></button>`,
+      )
       .join("");
     modal.innerHTML = `<div style="background:#fff;color:#0f172a;border-radius:12px;padding:18px;width:min(440px,92vw);box-shadow:0 20px 50px rgba(15,23,42,.3);">
       <div style="font-weight:700;font-size:15px;margin-bottom:4px;">Pilih status akhir</div>
@@ -2285,6 +3011,80 @@
     document.body.appendChild(modal);
   }
 
+  // Gabung rekap JSON (ekspor dari sesi/laptop lain) ke baris Excel yang sudah dimuat.
+  // Dicocokkan per assignment_id; hanya baris rekap yang sudah punya progres (status bukan pending) yang disalin.
+  const REKAP_FIELDS = [
+    "status",
+    "reason",
+    "doneAt",
+    "pdata",
+    "linkResult",
+    "linkCard",
+    "forced",
+    "kelNote",
+    "ossNote",
+    "gandaChecked",
+  ];
+  const REKAP_LABEL = {
+    linked: "ditautkan",
+    closed: "OSS tutup",
+    ganda: "OSS ganda",
+    manual: "selesai manual",
+    red: "gagal",
+    yellow: "perlu cek",
+    moved: "dipindah, belum ditautkan",
+    pending: "belum dipindah",
+    tested: "uji",
+  };
+  const rekapBucket = (q) =>
+    q.status === "closed" && q.linkResult === "ganda" ? "ganda" : q.status;
+  function rekapTally(list) {
+    const t = {};
+    list.forEach((q) => {
+      const b = rekapBucket(q);
+      t[b] = (t[b] || 0) + 1;
+    });
+    return (
+      Object.entries(t)
+        .map(([k, v]) => `${REKAP_LABEL[k] || k}: ${v}`)
+        .join(", ") || "-"
+    );
+  }
+  function applyRekap(recap, exportedAt) {
+    const queue = loadQueue();
+    if (!queue.length)
+      return alert("Muat Excel target dulu, baru gabungkan rekapnya.");
+    const next = JSON.parse(JSON.stringify(queue));
+    const byId = new Map(recap.map((r) => [r.id, r]));
+    const cocok = [];
+    const belum = [];
+    next.forEach((i) => {
+      const r = byId.get(i.id);
+      if (!r || r.status === "pending") return belum.push(i);
+      REKAP_FIELDS.forEach((k) => {
+        if (r[k] !== undefined) i[k] = r[k];
+      });
+      cocok.push(i);
+    });
+    const idsExcel = new Set(queue.map((i) => i.id));
+    const tidakAdaDiExcel = recap.filter((r) => !idsExcel.has(r.id)).length;
+    const sudah = next.filter(
+      (i) =>
+        ["linked", "closed", "manual"].includes(i.status) && cocok.includes(i),
+    ).length;
+    const msg =
+      `Rekap${exportedAt ? ` (diekspor ${new Date(exportedAt).toLocaleString()})` : ""}: ${recap.length} baris.\n` +
+      `Excel saat ini: ${queue.length} baris.\n\n` +
+      `✓ Cocok & progres disalin: ${cocok.length}\n    ${rekapTally(cocok)}\n` +
+      `• Belum ada progres di rekap (tetap dikerjakan): ${belum.length}\n` +
+      `• Baris rekap yang tidak ada di Excel ini: ${tidakAdaDiExcel}\n\n` +
+      `Sudah selesai setelah digabung: ${sudah} baris.\n\n` +
+      `Gabungkan sekarang? Baris yang cocok akan memakai status dari rekap.`;
+    if (!confirm(msg)) return;
+    saveQueue(next);
+    alert(`Rekap digabung.\n\nSekarang antrean: ${rekapTally(next)}`);
+  }
+
   let panelFilter = "pending";
   let panelSearch = "";
   let lastPanelRefresh = 0;
@@ -2299,14 +3099,22 @@
     const c = counts();
     // "ganda" bukan status tersendiri (statusnya tetap "closed"), jadi filternya khusus baca linkResult
     const shown = queue
-      .filter((q) => panelFilter === "all" || (panelFilter === "ganda" ? q.linkResult === "ganda" : q.status === panelFilter))
+      .filter(
+        (q) =>
+          panelFilter === "all" ||
+          (panelFilter === "ganda"
+            ? q.linkResult === "ganda"
+            : q.status === panelFilter),
+      )
       .slice(0, 150);
     const stat = (key, label, color) =>
       `<button class="fgw-stat${panelFilter === key ? " active" : ""}" style="--c:${color}" data-act="filter" data-f="${key}"><div class="n">${key === "all" ? queue.length : c[key] || 0}</div><div class="l">${label}</div></button>`;
     const rows = shown
       .map((q) => {
         const isGanda = q.linkResult === "ganda";
-        const color = isGanda ? STATUS_COLOR.ganda : STATUS_COLOR[q.status] || "#64748b";
+        const color = isGanda
+          ? STATUS_COLOR.ganda
+          : STATUS_COLOR[q.status] || "#64748b";
         const label = isGanda ? "OSS Ganda" : STATUS_LABEL[q.status];
         return `<div class="fgw-item" style="--c:${color}" data-text="${esc(normalize(`${q.namaUsaha} ${q.desa.name} ${q.kec.name} ${q.id}`))}">
           <input type="checkbox" data-sel="${q.id}" ${selected.has(q.id) ? "checked" : ""}>
@@ -2363,6 +3171,7 @@
           <div class="fgw-sec">Persiapan</div>
           <div class="fgw-row">
             <button class="fgw-btn ${total ? "" : "primary"}" data-act="load">📥 Muat Excel target</button>
+            <button class="fgw-btn" data-act="rekap" title="Pilih file Ekspor Antrean lama. Baris yang sudah selesai di rekap akan ditandai, tidak dikerjakan ulang.">🧩 Gabung rekap JSON</button>
             <span class="fgw-hint">sheet "Pindah" · kolom proses = 1</span>
           </div>
           <div class="fgw-grid2" style="margin-top:14px;">
@@ -2384,7 +3193,9 @@
           </details>
         </div>
 
-        ${total ? `
+        ${
+          total
+            ? `
         <div class="fgw-card run">
           <div class="fgw-sec">Jalankan</div>
           <div class="fgw-row">
@@ -2420,10 +3231,13 @@
           </div>
           <div class="fgw-list">${rows || '<div class="fgw-empty">Tidak ada baris di kategori ini.</div>'}</div>
           ${shown.length >= 150 ? '<div class="fgw-hint" style="text-align:center;margin-top:8px;">Menampilkan 150 baris pertama · lengkapnya di Laporan CSV</div>' : ""}
-        </div>` : '<div class="fgw-empty">Belum ada antrean.<br>Mulai dengan <b>📥 Muat Excel target</b>.</div>'}
+        </div>`
+            : '<div class="fgw-empty">Belum ada antrean.<br>Mulai dengan <b>📥 Muat Excel target</b>.</div>'
+        }
       </div>
       <input data-file type="file" accept=".xlsx" style="display:none">
-      <input data-file-json type="file" accept=".json" style="display:none"></div>`;
+      <input data-file-json type="file" accept=".json" style="display:none">
+      <input data-file-rekap type="file" accept=".json" style="display:none"></div>`;
     document.body.appendChild(overlay);
     overlay.addEventListener("keydown", (e) => e.stopPropagation());
     overlay.addEventListener("mousedown", (e) => {
@@ -2461,7 +3275,12 @@
     const search = overlay.querySelector("[data-search]");
     const applySearch = () => {
       const t = normalize(search.value);
-      overlay.querySelectorAll(".fgw-item").forEach((r) => (r.style.display = !t || r.dataset.text.includes(t) ? "" : "none"));
+      overlay
+        .querySelectorAll(".fgw-item")
+        .forEach(
+          (r) =>
+            (r.style.display = !t || r.dataset.text.includes(t) ? "" : "none"),
+        );
     };
     if (search) {
       search.oninput = () => {
@@ -2471,7 +3290,9 @@
       if (panelSearch) applySearch();
     }
     const updateSelCount = () => {
-      overlay.querySelectorAll("[data-selcount], [data-selcount2]").forEach((l) => (l.textContent = selected.size));
+      overlay
+        .querySelectorAll("[data-selcount], [data-selcount2]")
+        .forEach((l) => (l.textContent = selected.size));
     };
     overlay.addEventListener("change", (e) => {
       const box = e.target.closest("[data-sel]");
@@ -2487,19 +3308,46 @@
       if (!file) return;
       try {
         const old = new Map(loadQueue().map((q) => [q.id, q]));
-        const { items, sheet, skipped } = await parseWorkbook(await file.arrayBuffer());
+        const { items, sheet, skipped } = await parseWorkbook(
+          await file.arrayBuffer(),
+        );
         let kept = 0;
         items.forEach((i) => {
           const o = old.get(i.id);
           if (o && o.status !== "pending") {
-            Object.assign(i, { status: o.status, reason: o.reason, doneAt: o.doneAt, pdata: o.pdata, linkResult: o.linkResult, linkCard: o.linkCard });
+            Object.assign(i, {
+              status: o.status,
+              reason: o.reason,
+              doneAt: o.doneAt,
+              pdata: o.pdata,
+              linkResult: o.linkResult,
+              linkCard: o.linkCard,
+            });
             kept++;
           }
         });
         saveQueue(items);
-        alert(`Sheet "${sheet}": ${items.length} baris dimuat, ${skipped} dilewati (proses ≠ 1).${kept ? `\nStatus lama dipertahankan untuk ${kept} baris.` : ""}`);
+        alert(
+          `Sheet "${sheet}": ${items.length} baris dimuat, ${skipped} dilewati (proses ≠ 1).${kept ? `\nStatus lama dipertahankan untuk ${kept} baris.` : ""}`,
+        );
       } catch (err) {
         alert(`Gagal membaca Excel: ${err.message}`);
+      }
+      openPanel();
+    };
+
+    const fileInputRekap = overlay.querySelector("[data-file-rekap]");
+    fileInputRekap.onchange = async () => {
+      const file = fileInputRekap.files[0];
+      if (!file) return;
+      try {
+        const data = JSON.parse(await file.text());
+        const recap = Array.isArray(data) ? data : data.queue;
+        if (!Array.isArray(recap))
+          throw new Error("file bukan hasil Ekspor Antrean");
+        applyRekap(recap, Array.isArray(data) ? null : data.exportedAt);
+      } catch (err) {
+        alert(`Gagal membaca rekap: ${err.message}`);
       }
       openPanel();
     };
@@ -2511,12 +3359,23 @@
       try {
         const data = JSON.parse(await file.text());
         const items = Array.isArray(data) ? data : data.queue; // dukung file lama yang cuma array
-        if (!Array.isArray(items)) throw new Error("file bukan hasil Ekspor Antrean yang valid");
+        if (!Array.isArray(items))
+          throw new Error("file bukan hasil Ekspor Antrean yang valid");
         const n = loadQueue().length;
-        if (n && !confirm(`Antrean saat ini (${n} baris) akan diganti dengan isi file ini (${items.length} baris, diekspor ${data.exportedAt ? new Date(data.exportedAt).toLocaleString() : "?"}). Lanjutkan?`))
+        if (
+          n &&
+          !confirm(
+            `Antrean saat ini (${n} baris) akan diganti dengan isi file ini (${items.length} baris, diekspor ${data.exportedAt ? new Date(data.exportedAt).toLocaleString() : "?"}). Lanjutkan?`,
+          )
+        )
           return;
         saveQueue(items);
-        if (data.conf && confirm("File ini juga menyimpan pengaturan (Pengawas/Pencacah/dll). Pakai pengaturan itu juga?"))
+        if (
+          data.conf &&
+          confirm(
+            "File ini juga menyimpan pengaturan (Pengawas/Pencacah/dll). Pakai pengaturan itu juga?",
+          )
+        )
           saveConf({ ...loadConf(), ...data.conf });
         alert(`Antrean dimuat: ${items.length} baris.`);
       } catch (err) {
@@ -2534,6 +3393,7 @@
       if (act === "report") downloadReport();
       if (act === "export") downloadQueueJson();
       if (act === "import") fileInputJson.click();
+      if (act === "rekap") fileInputRekap.click();
       if (act === "filter") {
         panelFilter = el.dataset.f;
         openPanel();
@@ -2541,24 +3401,47 @@
       if (act === "test") startRun({ limit: 1, testMode: true });
       if (act === "force") {
         const n = loadQueue().filter(needsForce).length;
-        if (!n) return alert("Tidak ada OSS tertaut (Ditemukan) yang perlu di-force submit ulang.");
-        if (confirm(`Force submit ulang ${n} OSS Ditemukan (tertaut) (revoke → Submit Paksa${loadConf().approve ? " → approve" : ""}) TANPA berhenti?`))
+        if (!n)
+          return alert(
+            "Tidak ada OSS tertaut (Ditemukan) yang perlu di-force submit ulang.",
+          );
+        if (
+          confirm(
+            `Force submit ulang ${n} OSS Ditemukan (tertaut) (revoke → Submit Paksa${loadConf().approve ? " → approve" : ""}) TANPA berhenti?`,
+          )
+        )
           startRun({ forceRedo: true });
       }
       if (act === "gandaCheck") {
         const n = loadQueue().filter(needsGandaCheck).length;
-        if (!n) return alert('Tidak ada OSS Tutup berstatus "tidak ada di pilihan UMKM" yang perlu dicek ulang.');
-        if (confirm(`Cek ulang ${n} OSS Tutup lewat halaman Review keluarga dulu (TANPA revoke). Keluarga/OSS cuma direvoke & dikirim ulang${loadConf().approve ? " (+ approve)" : ""} kalau memang ada yang perlu diperbaiki (jadi Ganda atau ternyata Ditemukan). TANPA berhenti, lanjutkan?`))
+        if (!n)
+          return alert(
+            'Tidak ada OSS Tutup berstatus "tidak ada di pilihan UMKM" yang perlu dicek ulang.',
+          );
+        if (
+          confirm(
+            `Cek ulang ${n} OSS Tutup lewat halaman Review keluarga dulu (TANPA revoke). Keluarga/OSS cuma direvoke & dikirim ulang${loadConf().approve ? " (+ approve)" : ""} kalau memang ada yang perlu diperbaiki (jadi Ganda atau ternyata Ditemukan). TANPA berhenti, lanjutkan?`,
+          )
+        )
           startRun({ recheckGanda: true });
       }
       if (act === "link") {
-        if (!counts().moved) return alert("Tidak ada baris berstatus dipindah.");
-        if (confirm(`Tautkan ${counts().moved} OSS yang sudah dipindah (revoke keluarga & OSS, kirim${loadConf().approve ? ", approve" : ""}) TANPA berhenti?`))
+        if (!counts().moved)
+          return alert("Tidak ada baris berstatus dipindah.");
+        if (
+          confirm(
+            `Tautkan ${counts().moved} OSS yang sudah dipindah (revoke keluarga & OSS, kirim${loadConf().approve ? ", approve" : ""}) TANPA berhenti?`,
+          )
+        )
           startRun({ onlyLink: true });
       }
       if (act === "run") {
         const n = Number(el.dataset.n);
-        if (confirm(`Pindahkan ${n || "SEMUA (" + counts().pending + ")"} assignment OSS ke SLS keluarga TANPA berhenti?\nPengawas: ${loadConf().pengawas}\nPencacah: ${loadConf().pencacah}`))
+        if (
+          confirm(
+            `Pindahkan ${n || "SEMUA (" + counts().pending + ")"} assignment OSS ke SLS keluarga TANPA berhenti?\nPengawas: ${loadConf().pengawas}\nPencacah: ${loadConf().pencacah}`,
+          )
+        )
           startRun({ limit: n });
       }
       if (act === "selall") {
@@ -2573,28 +3456,45 @@
       }
       if (act === "selnone") {
         selected.clear();
-        overlay.querySelectorAll("[data-sel]").forEach((cb) => (cb.checked = false));
+        overlay
+          .querySelectorAll("[data-sel]")
+          .forEach((cb) => (cb.checked = false));
         updateSelCount();
       }
       if (act === "markdone") {
-        const ids = loadQueue().filter((q) => selected.has(q.id)).map((q) => q.id);
+        const ids = loadQueue()
+          .filter((q) => selected.has(q.id))
+          .map((q) => q.id);
         if (!ids.length) return alert("Belum ada baris yang dicentang.");
         openFinalPicker(ids);
       }
       if (act === "sel") {
-        const ids = loadQueue().filter((q) => selected.has(q.id) && !["linked", "closed"].includes(q.status)).map((q) => q.id);
-        if (!ids.length) return alert("Belum ada baris (belum dipindah) yang dicentang.");
+        const ids = loadQueue()
+          .filter(
+            (q) =>
+              selected.has(q.id) && !["linked", "closed"].includes(q.status),
+          )
+          .map((q) => q.id);
+        if (!ids.length)
+          return alert("Belum ada baris (belum dipindah) yang dicentang.");
         const q = loadQueue();
-        q.filter((i) => ids.includes(i.id) && i.status !== "moved").forEach((i) => (i.status = "pending"));
+        q.filter((i) => ids.includes(i.id) && i.status !== "moved").forEach(
+          (i) => (i.status = "pending"),
+        );
         saveQueue(q);
-        if (confirm(`Kerjakan ${ids.length} baris yang dicentang tanpa berhenti?`)) startRun({ onlyIds: ids });
+        if (
+          confirm(`Kerjakan ${ids.length} baris yang dicentang tanpa berhenti?`)
+        )
+          startRun({ onlyIds: ids });
       }
       if (act === "reset") {
         const q = loadQueue();
-        q.filter((i) => ["red", "yellow", "tested"].includes(i.status)).forEach((i) => {
-          i.status = "pending";
-          i.reason = "";
-        });
+        q.filter((i) => ["red", "yellow", "tested"].includes(i.status)).forEach(
+          (i) => {
+            i.status = "pending";
+            i.reason = "";
+          },
+        );
         saveQueue(q);
         openPanel();
       }
@@ -2606,12 +3506,19 @@
   }
 
   function ensureLauncher() {
-    if (!document.body || document.getElementById("fgw-launch") || /\/app\/assignment\//.test(location.pathname)) return;
+    if (
+      !document.body ||
+      document.getElementById("fgw-launch") ||
+      /\/app\/assignment\//.test(location.pathname)
+    )
+      return;
     ensureStyles();
     const btn = document.createElement("button");
     btn.id = "fgw-launch";
     btn.className = "fgw-launch";
-    const left = loadQueue().filter((q) => q.status === "pending" || q.status === "moved").length;
+    const left = loadQueue().filter(
+      (q) => q.status === "pending" || q.status === "moved",
+    ).length;
     btn.innerHTML = `🔀 OSS → Keluarga${left ? ` <b>${left}</b>` : ""}`;
     btn.title = "Buka panel (Alt+8)";
     btn.onclick = openPanel;
@@ -2634,7 +3541,12 @@
     const now = Date.now();
     if (now - lastPanelRefresh < 1500) return;
     const active = document.activeElement;
-    if (active && overlay.contains(active) && /INPUT|TEXTAREA/.test(active.tagName)) return;
+    if (
+      active &&
+      overlay.contains(active) &&
+      /INPUT|TEXTAREA/.test(active.tagName)
+    )
+      return;
     lastPanelRefresh = now;
     const body = overlay.querySelector(".fgw-body");
     const scrollTop = body ? body.scrollTop : 0;
@@ -2658,5 +3570,5 @@
     refreshPanelLive();
   }, 700);
 
-  console.log("[OSS → Keluarga v2.23] Aktif. Tombol di kiri bawah (Alt+8).");
+  console.log("[OSS → Keluarga v2.24] Aktif. Tombol di kiri bawah (Alt+8).");
 })();
