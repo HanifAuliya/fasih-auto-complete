@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Batch Otomatis - Tahap 1 + 2: Excel -> Cari -> Isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      3.22
+// @version      3.23
 // @description  Membaca Excel penyisiran (Tindak Lanjut Fasih = false), mencari & membuka dokumen dengan filter wilayah, lalu mengisi Blok P + Blok II (usaha lama / tambah baru) dan mengirim tanpa konfirmasi. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -2866,6 +2866,16 @@
     opened: "dibuka",
     filled: "terisi (uji)",
     done: "terkirim",
+  };
+  // Pilihan "Atur status" (cek manual): status yang bisa dipilih + penjelasannya
+  const STATUS_HINT = {
+    pending: "kembali ke antrean, dicek & dicocokkan ulang otomatis",
+    green: "dokumen sudah cocok, siap diisi otomatis",
+    yellow: "perlu dicek lagi",
+    red: "tidak bisa dikerjakan",
+    opened: "sedang/ sudah dibuka & dikerjakan manual",
+    filled: "terisi tapi belum dikirim",
+    done: "sudah beres (dikirim manual di FASIH), tidak diproses lagi",
   };
   const STATUS_COLOR = {
     pending: "#2563eb",
@@ -8087,6 +8097,56 @@
     );
   }
 
+  // Atur status baris secara manual (hasil cek manual); alasannya dicatat & ikut ke Laporan CSV
+  function applyStatus(ids, status, note) {
+    const q = loadQueue();
+    q.filter((i) => ids.includes(i.id)).forEach((i) => {
+      const before = STATUS_LABEL[i.status] || i.status;
+      i.status = status;
+      if (status === "pending") {
+        i.reason = note ? `diatur manual: ${note}` : "";
+        i.candidates = [];
+        delete i.doneAt;
+      } else {
+        i.reason = `diatur manual → ${STATUS_LABEL[status]}${note ? `: ${note}` : ""} (sebelumnya: ${before})`;
+        i.doneAt = new Date().toISOString();
+      }
+    });
+    saveQueue(q);
+  }
+  function openStatusPicker(ids) {
+    document.getElementById("fo-status")?.remove();
+    ensureStyles();
+    const modal = document.createElement("div");
+    modal.id = "fo-status";
+    modal.className = "fo fo-overlay";
+    modal.style.cssText = "align-items:center;justify-content:center;z-index:1000003;";
+    const options = Object.keys(STATUS_LABEL)
+      .map(
+        (k) =>
+          `<button class="fo-btn" data-status="${k}" style="justify-content:flex-start;text-align:left;border-left:4px solid ${STATUS_COLOR[k]};"><span><b>${STATUS_LABEL[k]}</b><br><span class="fo-hint">${STATUS_HINT[k] || ""}</span></span></button>`,
+      )
+      .join("");
+    modal.innerHTML = `<div class="fo-card" style="width:min(440px,92vw);max-height:90vh;overflow:auto;">
+      <div class="fo-section-title">🏷 Atur status · ${ids.length} baris</div>
+      <textarea class="fo-input" data-note rows="2" placeholder="Catatan (opsional), mis. sudah dikerjakan manual di FASIH" style="width:100%;resize:vertical;"></textarea>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px;">${options}<button class="fo-btn" data-status="">Batal</button></div>
+    </div>`;
+    modal.addEventListener("keydown", (e) => e.stopPropagation());
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) return modal.remove();
+      const b = e.target.closest("[data-status]");
+      if (!b) return;
+      const note = modal.querySelector("[data-note]").value.trim();
+      modal.remove();
+      if (!b.dataset.status) return;
+      applyStatus(ids, b.dataset.status, note);
+      openPanel();
+    });
+    document.body.appendChild(modal);
+    modal.querySelector("[data-note]").focus();
+  }
+
   function openPanel(filter) {
     document.getElementById("fasih-t1-panel")?.remove();
     const queue = loadQueue();
@@ -8280,6 +8340,7 @@
               <button class="fo-btn sm" data-act="selall">☑ Centang semua</button>
               <button class="fo-btn sm" data-act="selnone">Hapus centang</button>
               <button class="fo-btn sm" data-act="setdesa-sel" title="Atur desa untuk semua baris yang dicentang">📍 Set desa (dicentang)</button>
+              <button class="fo-btn sm" data-act="setstatus-sel" title="Hasil cek manual: tentukan status baris yang dicentang (ikut ke Laporan CSV)">🏷 Atur status (dicentang)</button>
             </div>
             <div class="fo-list">${rowsHtml || '<div class="fo-empty">Tidak ada baris di kategori ini.</div>'}</div>
             ${shown.length >= 200 ? '<div class="fo-hint" style="margin-top:8px;text-align:center;">Menampilkan 200 baris pertama · lengkapnya di Laporan CSV</div>' : ""}
@@ -8473,6 +8534,15 @@
           );
         }
         openPanel();
+        return;
+      }
+      if (act === "setstatus-sel") {
+        const ids = loadState().selected || [];
+        if (!ids.length) {
+          alert("Centang dulu baris yang statusnya mau diatur.");
+          return;
+        }
+        openStatusPicker(ids);
         return;
       }
       if (act === "setdesa-sel") {

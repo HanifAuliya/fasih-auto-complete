@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH OSS -> Keluarga: Pindah + Tautkan
 // @namespace    hanif-bps-hst
-// @version      2.24
+// @version      2.27
 // @description  OSS dipindah ke SLS keluarga (⋮ > Ganti Wilayah), lalu dokumen keluarga dibuka: salin Blok P (alamat, no bangunan, geotag) dan pilih OSS di "Pilih UMKM dalam satu SLS". Ada -> OSS Ditemukan + alamat & geotag keluarga; tidak ada / keluarga tanpa usaha -> OSS Tutup. Keduanya dikirim & di-approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -196,21 +196,25 @@
   })();
 
   let stopRequested = false;
+  const onHold = () => !!loadRun().hold; // tombol Jeda
+  // Hasil: lama tertahan (jeda / 429), supaya batas waktu tunggu tidak ikut termakan
   async function sleep(ms) {
     await new Promise((r) => setTimeout(r, ms));
-    while (rateLimited() && !stopRequested) {
+    const t0 = Date.now();
+    while ((rateLimited() || onHold()) && !stopRequested) {
       updateBar();
       await new Promise((r) => setTimeout(r, 1000));
     }
+    return Date.now() - t0;
   }
 
   async function waitFor(check, timeoutMs) {
-    const start = Date.now();
+    let start = Date.now();
     while (Date.now() - start < timeoutMs) {
       if (stopRequested) return null;
       const result = check();
       if (result) return result;
-      await sleep(T().poll);
+      start += await sleep(T().poll);
     }
     return null;
   }
@@ -474,11 +478,13 @@
   async function waitTableSettled(before) {
     if (before !== undefined)
       await waitFor(() => tableText() !== before || isLoading(), 6000);
-    const start = Date.now();
+    let start = Date.now();
     let last = tableText();
     let stableSince = Date.now();
     while (Date.now() - start < 30000 && !stopRequested) {
-      await sleep(250);
+      const held = await sleep(250);
+      start += held;
+      stableSince += held;
       const now = tableText();
       if (now !== last || isLoading()) {
         last = now;
@@ -2122,9 +2128,10 @@
       return loadQueue().find(
         (q) => needsGandaCheck(q) && (!only || only.has(q.id)),
       );
+    // Baris yang dicentang secara eksplisit selalu diselesaikan sampai tautan, walau "setelah dipindah" dimatikan
     const want = run.onlyLink
       ? ["moved"]
-      : run.doLink
+      : run.doLink || only
         ? ["moved", "pending"]
         : ["pending"];
     const ready = loadQueue().filter(
@@ -2158,7 +2165,7 @@
 
   async function tick() {
     const run = loadRun();
-    if (!run.running || busy || rateLimited() || run.paused) return;
+    if (!run.running || busy || rateLimited() || run.paused || run.hold) return;
     busy = true;
     stopRequested = false;
     try {
@@ -2486,6 +2493,7 @@
     r.running = false;
     r.waiting = false;
     r.paused = null;
+    r.hold = null;
     saveRun(r);
     stopRequested = true;
     userDecision = userDecision || "skip";
@@ -2669,6 +2677,8 @@
       bar.addEventListener("click", (e) => {
         const act = e.target.closest("[data-bar]")?.dataset.bar;
         if (act === "stop") stopRun();
+        if (act === "hold") setHold(true);
+        if (act === "resume") setHold(false);
         if (act === "panel") openPanel();
         if (act === "send") userDecision = "send";
         if (act === "skip") userDecision = "skip";
@@ -2714,7 +2724,7 @@
         : run.onlyLink || (!sisaPindah && run.doLink)
           ? `Fase 2/2 · Tautkan · sisa ${sisaTaut}`
           : `Fase 1/2 · Pindah wilayah · sisa ${sisaPindah}${run.doLink ? ` (lalu tautkan ${sisaTaut + sisaPindah})` : ""}`;
-    const waiting = !!(run.paused || run.waiting);
+    const waiting = !!(run.paused || run.waiting || run.hold);
     const steps = it
       ? `<div class="steps">${STEPS.filter(([k]) =>
           stepNow === "move" ? k === "move" : k !== "move",
@@ -2756,6 +2766,7 @@
       nMoved,
       T().name,
       run.testMode,
+      run.hold,
     ]);
     if (sig === barSig) {
       const tm = bar.querySelector("[data-timer]");
@@ -2767,14 +2778,16 @@
       <div class="top">
         <span class="dot${waiting || rate ? " paused" : ""}"></span>
         <div class="t">OSS → Keluarga</div>
-        <div class="m">${esc(fase)} · ${T().name}${run.testMode ? " · Mode uji" : ""}</div>
+        <div class="m">${run.hold ? "⏸ DIJEDA · " : ""}${esc(fase)} · ${T().name}${run.testMode ? " · Mode uji" : ""}</div>
         <span style="flex:1"></span>
         ${run.paused ? `<button class="fgw-btn go" data-bar="go">✓ Kirim sekarang</button><button class="fgw-btn" data-bar="pass">Lewati</button>` : ""}
         ${run.waiting ? `<button class="fgw-btn go" data-bar="send">✓ Kirim sekarang</button><button class="fgw-btn" data-bar="skip">Lewati</button>` : ""}
+        ${run.hold ? `<button class="fgw-btn go" data-bar="resume">▶ Lanjut</button>` : `<button class="fgw-btn" data-bar="hold" title="Tahan sementara; langkah yang sedang jalan dilanjutkan dari titik yang sama">⏸ Jeda</button>`}
         <button class="fgw-btn" data-bar="panel" title="Buka panel (Alt+8)">☰</button>
         <button class="fgw-btn stop" data-bar="stop">■ Stop</button>
       </div>
       ${rate ? `<div class="notice">${esc(rate)}</div>` : ""}
+      ${run.hold ? `<div class="notice">⏸ Dijeda sejak ${new Date(run.hold.at).toLocaleTimeString()}. Boleh lihat-lihat halaman, tapi jangan pindah halaman / klik isian supaya bisa dilanjutkan dengan aman.</div>` : ""}
       ${it ? `<div class="doc">▶ ${esc(it.namaUsaha)} <span class="m">· ${esc(it.desa.name)} · SLS ${it.slsAsal} → ${it.slsTujuan}/${it.subslsTujuan}</span></div>` : ""}
       ${steps}
       <div class="log">
@@ -2790,6 +2803,20 @@
         ${c.red ? `<span class="chip" style="--c:#fca5a5">${c.red} gagal</span>` : ""}
         <span class="pct">${Math.round(pct(nDone))}%</span>
       </div>`;
+  }
+
+  // Jeda: berhenti di titik tunggu berikutnya (langkah yang sedang jalan ditahan, bukan dibatalkan)
+  function setHold(on) {
+    const r = loadRun();
+    if (!r.running) return;
+    if (on && !r.hold) r.hold = { at: Date.now() };
+    if (!on && r.hold) {
+      // Lama jeda tidak dihitung ke batas macet 4 menit
+      if (r.phaseAt) r.phaseAt += Date.now() - r.hold.at;
+      r.hold = null;
+    }
+    saveRun(r);
+    runLog(on ? "⏸ Dijeda — klik Lanjut untuk meneruskan" : "▶ Dilanjutkan");
   }
 
   function counts() {
@@ -2943,13 +2970,23 @@
       label: "✍ Selesaikan sendiri",
       hint: "tidak masuk Ditautkan/Tutup/Ganda, diselesaikan manual di FASIH",
     },
+    yellow: { label: "⚠ Perlu cek", hint: "masih perlu dicek lagi" },
+    red: { label: "✖ Gagal", hint: "tidak bisa dikerjakan" },
+    moved: {
+      label: "🔀 Dipindah, belum ditautkan",
+      hint: "wilayah sudah benar, ikut ditautkan otomatis berikutnya",
+    },
+    pending: {
+      label: "↺ Belum dipindah",
+      hint: "kembali ke antrean, dikerjakan otomatis dari awal",
+    },
   };
-  function applyFinalStatus(ids, choice) {
+  function applyFinalStatus(ids, choice, extra) {
     const queue = loadQueue();
     queue
       .filter((i) => ids.includes(i.id))
       .forEach((i) => {
-        const note = `dipilih manual (sebelumnya: ${STATUS_LABEL[i.status] || i.status})`;
+        const note = `dipilih manual${extra ? ` — ${extra}` : ""} (sebelumnya: ${STATUS_LABEL[i.status] || i.status})`;
         if (choice === "linked")
           Object.assign(i, {
             status: "linked",
@@ -2969,7 +3006,16 @@
             linkResult: "ganda",
             reason: `${i.namaUsaha}: ${note} → OSS ganda`,
           });
-        else
+        else if (["yellow", "red", "moved", "pending"].includes(choice)) {
+          Object.assign(i, {
+            status: choice,
+            reason:
+              choice === "pending" && !extra
+                ? ""
+                : `${i.namaUsaha}: ${note} → ${STATUS_LABEL[choice]}`,
+          });
+          if (choice === "pending" || choice === "moved") delete i.linkResult;
+        } else
           Object.assign(i, {
             status: "manual",
             reason: `${i.namaUsaha}: ${note} → diselesaikan sendiri`,
@@ -2992,9 +3038,11 @@
           `<button class="fgw-btn" data-final="${key}" style="text-align:left;"><b>${o.label}</b><div class="fgw-hint">${o.hint}</div></button>`,
       )
       .join("");
-    modal.innerHTML = `<div style="background:#fff;color:#0f172a;border-radius:12px;padding:18px;width:min(440px,92vw);box-shadow:0 20px 50px rgba(15,23,42,.3);">
-      <div style="font-weight:700;font-size:15px;margin-bottom:4px;">Pilih status akhir</div>
-      <div class="fgw-hint" style="margin-bottom:12px;">${ids.length} baris yang dicentang akan diberi status ini. Hasilnya ikut terbaca di Laporan CSV (kolom status & hasil_tautan).</div>
+    modal.addEventListener("keydown", (e) => e.stopPropagation());
+    modal.innerHTML = `<div style="background:#fff;color:#0f172a;border-radius:12px;padding:18px;width:min(440px,92vw);max-height:90vh;overflow:auto;box-shadow:0 20px 50px rgba(15,23,42,.3);">
+      <div style="font-weight:700;font-size:15px;margin-bottom:4px;">🏷 Atur status</div>
+      <div class="fgw-hint" style="margin-bottom:10px;">${ids.length} baris yang dicentang akan diberi status ini. Hasilnya ikut terbaca di Laporan CSV (kolom status, alasan & hasil_tautan).</div>
+      <textarea class="fgw-input" data-note rows="2" placeholder="Catatan (opsional), mis. sudah dicek manual di FASIH" style="resize:vertical;margin-bottom:10px;"></textarea>
       <div style="display:flex;flex-direction:column;gap:8px;">${options}<button class="fgw-btn ghost" data-final="cancel">Batal</button></div>
     </div>`;
     modal.addEventListener("click", (e) => {
@@ -3002,9 +3050,10 @@
       const btn = e.target.closest("[data-final]");
       if (!btn) return;
       const choice = btn.dataset.final;
+      const extra = modal.querySelector("[data-note]").value.trim();
       modal.remove();
       if (choice === "cancel") return;
-      applyFinalStatus(ids, choice);
+      applyFinalStatus(ids, choice, extra);
       selected.clear();
       openPanel();
     });
@@ -3224,7 +3273,7 @@
             <button class="fgw-btn sm ghost" data-act="selnone">Kosongkan</button>
           </div>
           <div class="fgw-row" style="margin-bottom:10px;">
-            <button class="fgw-btn sm ok" data-act="markdone" title="Pilih status akhir (Ditautkan / Tutup / Ganda / Selesaikan sendiri) untuk baris yang dicentang">✓ Pilih status akhir <span class="n" data-selcount2>${selected.size}</span></button>
+            <button class="fgw-btn sm ok" data-act="markdone" title="Hasil cek manual: tentukan status baris yang dicentang (Ditautkan / Tutup / Ganda / Selesai manual / Perlu cek / Gagal / Dipindah / Belum)">🏷 Atur status <span class="n" data-selcount2>${selected.size}</span></button>
             <button class="fgw-btn sm" data-act="reset">↻ Gagal/perlu cek → belum</button>
             <span style="flex:1"></span>
             <button class="fgw-btn sm ghost danger" data-act="clear">🗑 Hapus antrean</button>
@@ -3469,23 +3518,21 @@
         openFinalPicker(ids);
       }
       if (act === "sel") {
-        const ids = loadQueue()
-          .filter(
-            (q) =>
-              selected.has(q.id) && !["linked", "closed"].includes(q.status),
-          )
-          .map((q) => q.id);
+        const DONE = ["linked", "closed", "manual"];
+        const checked = loadQueue().filter((q) => selected.has(q.id));
+        if (!checked.length) return alert("Belum ada baris yang dicentang.");
+        const ids = checked.filter((q) => !DONE.includes(q.status)).map((q) => q.id);
+        const sudah = checked.length - ids.length;
         if (!ids.length)
-          return alert("Belum ada baris (belum dipindah) yang dicentang.");
+          return alert(`Semua ${checked.length} baris yang dicentang sudah selesai, jadi tidak ada yang dijalankan.`);
+        if (!isListPage())
+          return alert('Buka halaman daftar assignment dulu (tabel dengan kotak "Cari..."), lalu klik lagi.');
+        if (!confirm(`Kerjakan ${ids.length} baris yang dicentang tanpa berhenti?${sudah ? `\n(${sudah} baris yang sudah selesai dilewati)` : ""}`))
+          return;
         const q = loadQueue();
-        q.filter((i) => ids.includes(i.id) && i.status !== "moved").forEach(
-          (i) => (i.status = "pending"),
-        );
+        q.filter((i) => ids.includes(i.id) && i.status !== "moved").forEach((i) => (i.status = "pending"));
         saveQueue(q);
-        if (
-          confirm(`Kerjakan ${ids.length} baris yang dicentang tanpa berhenti?`)
-        )
-          startRun({ onlyIds: ids });
+        startRun({ onlyIds: ids });
       }
       if (act === "reset") {
         const q = loadQueue();
@@ -3570,5 +3617,5 @@
     refreshPanelLive();
   }, 700);
 
-  console.log("[OSS → Keluarga v2.24] Aktif. Tombol di kiri bawah (Alt+8).");
+  console.log("[OSS → Keluarga v2.27] Aktif. Tombol di kiri bawah (Alt+8).");
 })();

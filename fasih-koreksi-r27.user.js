@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi R.27 - Pendapatan (27.a / 27.b)
 // @namespace    hanif-bps-hst
-// @version      1.1
+// @version      1.3
 // @description  Baca Excel koreksi, buka tiap dokumen, ganti 27.a (nilai_pendapatan) = R.27a dan 27.b (pendapatan_lain) = R.27b di kartu usaha yang tepat, lalu Kirim & Approve. Dokumen keluarga: kartu dicari di Blok II; dokumen usaha tunggal: langsung ke kartunya.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -41,6 +41,18 @@
     tested: { label: "Terisi (uji)", color: "#0891b2" },
     yellow: { label: "Perlu cek", color: "#d97706" },
     red: { label: "Gagal", color: "#dc2626" },
+    manual: { label: "Selesai manual", color: "#7c3aed" },
+  };
+  const FINISHED = ["done", "already", "manual"];
+
+  const STATUS_HINT = {
+    pending: "kembali ke antrean, dikerjakan otomatis lagi",
+    done: "sudah dikoreksi, dikirim & approve",
+    already: "nilai di FASIH memang sudah sesuai Excel",
+    tested: "terisi tapi belum dikirim",
+    yellow: "perlu dicek lagi",
+    red: "tidak bisa dikerjakan",
+    manual: "dikoreksi sendiri di FASIH",
   };
 
   // =========================================================================
@@ -119,20 +131,24 @@
   })();
 
   let stopRequested = false;
+  const onHold = () => !!loadRun().hold; // tombol Jeda
+  // Hasil: lama tertahan (jeda / 429), supaya batas waktu tunggu tidak ikut termakan
   async function sleep(ms) {
     await new Promise((r) => setTimeout(r, ms));
-    while (rateLimited() && !stopRequested) {
+    const t0 = Date.now();
+    while ((rateLimited() || onHold()) && !stopRequested) {
       updateHud();
       await new Promise((r) => setTimeout(r, 1000));
     }
+    return Date.now() - t0;
   }
   async function waitFor(check, timeoutMs) {
-    const start = Date.now();
+    let start = Date.now();
     while (Date.now() - start < timeoutMs) {
       if (stopRequested) return null;
       const result = check();
       if (result) return result;
-      await sleep(T().poll);
+      start += await sleep(T().poll);
     }
     return null;
   }
@@ -872,7 +888,7 @@
     const gap = T().gap;
     r.nextAt = Date.now() + gap[0] + Math.random() * (gap[1] - gap[0]);
     saveRun(r);
-    log(`${/done|already/.test(status) ? "✅" : status === "tested" ? "🧪" : "⚠️"} ${reason}`);
+    log(`${FINISHED.includes(status) ? "✅" : status === "tested" ? "🧪" : "⚠️"} ${reason}`);
     refreshPanel();
   }
 
@@ -883,7 +899,7 @@
 
   async function tick() {
     const run = loadRun();
-    if (!run.running || busy || rateLimited() || run.paused) return;
+    if (!run.running || busy || rateLimited() || run.paused || run.hold) return;
     busy = true;
     stopRequested = false;
     try {
@@ -1014,10 +1030,25 @@
     log(`Mulai${opts.testMode ? " · MODE UJI" : ""}`);
   }
 
+  // Jeda: berhenti di titik tunggu berikutnya (langkah yang sedang jalan ditahan, bukan dibatalkan)
+  function setHold(on) {
+    const r = loadRun();
+    if (!r.running) return;
+    if (on && !r.hold) r.hold = { at: Date.now() };
+    if (!on && r.hold) {
+      if (r.phaseAt) r.phaseAt += Date.now() - r.hold.at; // lama jeda tidak dihitung ke batas macet
+      if (r.nextAt) r.nextAt += Date.now() - r.hold.at;
+      r.hold = null;
+    }
+    saveRun(r);
+    log(on ? "⏸ Dijeda — klik Lanjut untuk meneruskan" : "▶ Dilanjutkan");
+  }
+
   function stopRun(msg) {
     const r = loadRun();
     r.running = false;
     r.paused = null;
+    r.hold = null;
     saveRun(r);
     stopRequested = true;
     log(msg || "Dihentikan.");
@@ -1059,7 +1090,7 @@
       .k27-card { background:var(--bg); border:1px solid var(--line); border-radius:16px; padding:16px; box-shadow:0 1px 2px rgba(15,18,34,.04); }
       .k27-sec { display:flex; align-items:center; gap:8px; font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--mut); margin-bottom:12px; }
       .k27-grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
-      @media (max-width:720px){ .k27-grid2{grid-template-columns:1fr} .k27-stats{grid-template-columns:repeat(3,1fr)!important} }
+      @media (max-width:720px){ .k27-grid2{grid-template-columns:1fr} .k27-stats{grid-template-columns:repeat(4,1fr)!important} }
       .k27-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
       .k27-btn { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); background:var(--bg); color:var(--tx); border-radius:10px; padding:8px 13px; font-size:13px; font-weight:600; cursor:pointer; transition:all .15s; }
       .k27-btn:hover { border-color:#c7c9d9; background:#fafaff; transform:translateY(-1px); }
@@ -1086,7 +1117,7 @@
       .k27-tog input:checked + .sw { background:var(--acc); }
       .k27-tog input:checked + .sw:after { transform:translateX(15px); }
       .k27-tog small { display:block; color:var(--mut); font-size:11.5px; margin-top:1px; }
-      .k27-stats { display:grid; grid-template-columns:repeat(7,1fr); gap:8px; }
+      .k27-stats { display:grid; grid-template-columns:repeat(8,1fr); gap:8px; }
       .k27-stat { border:1px solid var(--line); border-radius:12px; padding:10px 11px; cursor:pointer; background:var(--bg); text-align:left; transition:all .15s; }
       .k27-stat:hover { transform:translateY(-1px); }
       .k27-stat.on { border-color:var(--c); box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 16%,transparent); }
@@ -1203,12 +1234,13 @@
 
   function renderDynamic(root) {
     const c = counts();
-    const doneN = c.done + c.already;
+    const doneN = c.done + c.already + c.manual;
     const pct = (n) => (c.all ? (100 * n) / c.all : 0);
     root.querySelector("[data-prog]").innerHTML = `
       <div class="track">
         <div class="seg" style="width:${pct(c.done)}%;background:#86efac"></div>
         <div class="seg" style="width:${pct(c.already)}%;background:#5eead4"></div>
+        <div class="seg" style="width:${pct(c.manual)}%;background:#c4b5fd"></div>
         <div class="seg" style="width:${pct(c.yellow + c.red + c.tested)}%;background:#fcd34d"></div>
       </div>
       <div class="lbl"><span>${doneN} dari ${c.all} dokumen beres</span><span>${c.all ? Math.round(pct(doneN)) : 0}%</span></div>`;
@@ -1226,7 +1258,7 @@
     root.querySelector("[data-selinfo]").textContent = ui.selected.size ? `${ui.selected.size} dicentang` : "";
     const pend = c.pending;
     root.querySelectorAll("[data-needpend]").forEach((b) => (b.disabled = !pend));
-    root.querySelector("[data-runsel]").disabled = !ui.selected.size;
+    root.querySelectorAll("[data-runsel]").forEach((b) => (b.disabled = !ui.selected.size));
   }
 
   function refreshPanel() {
@@ -1314,6 +1346,7 @@
             <input class="k27-search" placeholder="Cari nama usaha, desa, kecamatan, idsbr…" value="${esc(ui.search)}">
             <button class="k27-btn sm" data-act="selall">☑ Centang yang tampil</button>
             <button class="k27-btn sm ghost" data-act="selnone">Kosongkan</button>
+            <button class="k27-btn sm" data-act="setstatus" data-runsel title="Hasil cek manual: tentukan status dokumen yang dicentang (ikut ke Laporan CSV)">🏷 Atur status</button>
             <span class="k27-hint" data-selinfo></span>
           </div>
           <div class="k27-list" data-list></div>
@@ -1399,7 +1432,7 @@
       if (act === "runsel") {
         const ids = Array.from(ui.selected);
         const q = loadQueue();
-        q.forEach((x) => ids.includes(x.id) && x.status !== "done" && x.status !== "already" && Object.assign(x, { status: "pending", reason: "" }));
+        q.forEach((x) => ids.includes(x.id) && !FINISHED.includes(x.status) && Object.assign(x, { status: "pending", reason: "" }));
         saveQueue(q);
         startRun({ onlyIds: ids.filter((id) => q.find((x) => x.id === id && x.status === "pending")) });
       }
@@ -1421,6 +1454,11 @@
         filteredItems().forEach((q) => ui.selected.add(q.id));
         renderDynamic(overlay);
       }
+      if (act === "setstatus" && ui.selected.size)
+        openStatusPicker(Array.from(ui.selected), () => {
+          ui.selected.clear();
+          renderDynamic(overlay);
+        });
       if (act === "selnone") {
         ui.selected.clear();
         renderDynamic(overlay);
@@ -1435,6 +1473,55 @@
         openPanel();
       }
     });
+  }
+
+  // Atur status dokumen secara manual (hasil cek manual); alasannya dicatat & ikut ke Laporan CSV
+  function applyStatus(ids, status, note) {
+    const q = loadQueue();
+    q.filter((x) => ids.includes(x.id)).forEach((x) => {
+      const before = (STATUS[x.status] || {}).label || x.status;
+      x.status = status;
+      if (status === "pending") {
+        x.reason = note ? `diatur manual: ${note}` : "";
+        delete x.doneAt;
+      } else {
+        x.reason = `diatur manual → ${STATUS[status].label}${note ? `: ${note}` : ""} (sebelumnya: ${before})`;
+        x.doneAt = new Date().toISOString();
+      }
+    });
+    saveQueue(q);
+  }
+  function openStatusPicker(ids, onDone) {
+    document.getElementById("k27-status")?.remove();
+    ensureStyles();
+    const modal = document.createElement("div");
+    modal.id = "k27-status";
+    modal.className = "k27 k27-overlay";
+    modal.style.cssText = "align-items:center;justify-content:center;z-index:1000003;";
+    const options = Object.entries(STATUS)
+      .map(
+        ([k, v]) =>
+          `<button class="k27-btn" data-status="${k}" style="justify-content:flex-start;text-align:left;border-left:4px solid ${v.color}"><span><b>${v.label}</b><br><span class="k27-hint">${STATUS_HINT[k] || ""}</span></span></button>`,
+      )
+      .join("");
+    modal.innerHTML = `<div class="k27-card" style="width:min(440px,92vw);max-height:90vh;overflow:auto">
+      <div class="k27-sec">🏷 Atur status · ${ids.length} dokumen</div>
+      <textarea class="k27-search" data-note rows="2" placeholder="Catatan (opsional), mis. sudah dikoreksi manual di FASIH" style="width:100%;resize:vertical"></textarea>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px">${options}<button class="k27-btn ghost" data-status="">Batal</button></div>
+    </div>`;
+    modal.addEventListener("keydown", (e) => e.stopPropagation());
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) return modal.remove();
+      const b = e.target.closest("[data-status]");
+      if (!b) return;
+      const note = modal.querySelector("[data-note]").value.trim();
+      modal.remove();
+      if (!b.dataset.status) return;
+      applyStatus(ids, b.dataset.status, note);
+      if (onDone) onDone();
+    });
+    document.body.appendChild(modal);
+    modal.querySelector("[data-note]").focus();
   }
 
   async function loadExcel(file) {
@@ -1525,6 +1612,8 @@
       hud.addEventListener("click", (e) => {
         const act = e.target.closest("[data-hud]")?.dataset.hud;
         if (act === "stop") stopRun("Dihentikan.");
+        if (act === "hold") setHold(true);
+        if (act === "resume") setHold(false);
         if (act === "panel") openPanel();
         if (act === "go") {
           const r = loadRun();
@@ -1546,19 +1635,21 @@
     const limited = rateLimited();
     const total = run.total || 0;
     const done = run.processed || 0;
-    const sig = JSON.stringify([run.cur, run.paused, run.logs, limited, done, run.testMode]);
+    const sig = JSON.stringify([run.cur, run.paused, run.logs, limited, done, run.testMode, run.hold]);
     if (sig === hudSig) return;
     hudSig = sig;
     hud.innerHTML = `
       <div class="top">
-        <div class="spin ${run.paused || limited ? "wait" : ""}"></div>
+        <div class="spin ${run.paused || run.hold || limited ? "wait" : ""}"></div>
         <div class="ttl">Koreksi R.27</div>
-        <div class="dim">${T().name}${run.testMode ? " · Mode uji" : ""} · ${done}/${total} dokumen</div>
+        <div class="dim">${run.hold ? "⏸ DIJEDA · " : ""}${T().name}${run.testMode ? " · Mode uji" : ""} · ${done}/${total} dokumen</div>
         <span style="flex:1"></span>
         ${run.paused ? `<button class="k27-btn go" data-hud="go">✓ Kirim sekarang</button><button class="k27-btn" data-hud="pass">Lewati</button>` : ""}
+        ${run.hold ? `<button class="k27-btn go" data-hud="resume">▶ Lanjut</button>` : `<button class="k27-btn" data-hud="hold" title="Tahan sementara; langkah yang sedang jalan dilanjutkan dari titik yang sama">⏸ Jeda</button>`}
         <button class="k27-btn" data-hud="panel" title="Buka panel">☰</button>
         <button class="k27-btn stop" data-hud="stop">■ Stop</button>
       </div>
+      ${run.hold ? `<div class="doc wait">⏸ Dijeda sejak ${new Date(run.hold.at).toLocaleTimeString("id-ID")} — jangan pindah halaman / klik isian supaya bisa dilanjutkan dengan aman</div>` : ""}
       ${limited ? `<div class="doc wait">⛔ Server membatasi (429) — lanjut otomatis ${new Date(rateInfo().until).toLocaleTimeString("id-ID")}</div>` : ""}
       ${it ? `<div class="doc">▶ ${esc(it.targets.map((t) => t.nama).join(" + "))} <span class="dim">· ${esc([it.desa, it.sls].filter(Boolean).join(" · "))}</span></div>` : ""}
       ${it ? `<div class="steps">${STEPS.map(([k, l], i) => `<div class="st ${i < iNow ? "done" : i === iNow ? "now" : ""}">${i < iNow ? "✓ " : ""}${l}</div>`).join("")}</div>` : ""}
@@ -1598,5 +1689,5 @@
     }
   }, 700);
 
-  console.log("[Koreksi R.27 v1.1] Aktif. Tombol di kiri bawah (Alt+9).");
+  console.log("[Koreksi R.27 v1.3] Aktif. Tombol di kiri bawah (Alt+9).");
 })();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi Gaji + R.27 (gaji / 27.a / 27.b)
 // @namespace    hanif-bps-hst
-// @version      1.0
+// @version      1.2
 // @description  Baca Excel koreksi upah/gaji, buka tiap dokumen, ganti gaji = kolom "Gaji", 27.a (nilai_pendapatan) = R.27a dan 27.b (pendapatan_lain) = R.27b di kartu usaha yang tepat, lalu Kirim & Approve. Yang gagal bisa dikerjakan manual dengan bantuan panel kecil di halaman dokumen.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -45,6 +45,16 @@
     manual: { label: "Selesai manual", color: "#7c3aed" },
   };
   const FINISHED = ["done", "already", "manual"];
+
+  const STATUS_HINT = {
+    pending: "kembali ke antrean, dikerjakan otomatis lagi",
+    done: "sudah dikoreksi, dikirim & approve",
+    already: "nilai di FASIH memang sudah sesuai Excel",
+    tested: "terisi tapi belum dikirim",
+    yellow: "perlu dicek lagi",
+    red: "tidak bisa dikerjakan",
+    manual: "dikoreksi sendiri di FASIH",
+  };
 
   // =========================================================================
   // UTILITAS
@@ -122,20 +132,24 @@
   })();
 
   let stopRequested = false;
+  const onHold = () => !!loadRun().hold; // tombol Jeda
+  // Hasil: lama tertahan (jeda / 429), supaya batas waktu tunggu tidak ikut termakan
   async function sleep(ms) {
     await new Promise((r) => setTimeout(r, ms));
-    while (rateLimited() && !stopRequested) {
+    const t0 = Date.now();
+    while ((rateLimited() || onHold()) && !stopRequested) {
       updateHud();
       await new Promise((r) => setTimeout(r, 1000));
     }
+    return Date.now() - t0;
   }
   async function waitFor(check, timeoutMs) {
-    const start = Date.now();
+    let start = Date.now();
     while (Date.now() - start < timeoutMs) {
       if (stopRequested) return null;
       const result = check();
       if (result) return result;
-      await sleep(T().poll);
+      start += await sleep(T().poll);
     }
     return null;
   }
@@ -915,7 +929,7 @@
 
   async function tick() {
     const run = loadRun();
-    if (!run.running || busy || rateLimited() || run.paused) return;
+    if (!run.running || busy || rateLimited() || run.paused || run.hold) return;
     busy = true;
     stopRequested = false;
     try {
@@ -1046,10 +1060,25 @@
     log(`Mulai${opts.testMode ? " · MODE UJI" : ""}`);
   }
 
+  // Jeda: berhenti di titik tunggu berikutnya (langkah yang sedang jalan ditahan, bukan dibatalkan)
+  function setHold(on) {
+    const r = loadRun();
+    if (!r.running) return;
+    if (on && !r.hold) r.hold = { at: Date.now() };
+    if (!on && r.hold) {
+      if (r.phaseAt) r.phaseAt += Date.now() - r.hold.at; // lama jeda tidak dihitung ke batas macet
+      if (r.nextAt) r.nextAt += Date.now() - r.hold.at;
+      r.hold = null;
+    }
+    saveRun(r);
+    log(on ? "⏸ Dijeda — klik Lanjut untuk meneruskan" : "▶ Dilanjutkan");
+  }
+
   function stopRun(msg) {
     const r = loadRun();
     r.running = false;
     r.paused = null;
+    r.hold = null;
     saveRun(r);
     stopRequested = true;
     log(msg || "Dihentikan.");
@@ -1358,7 +1387,7 @@
             <input class="kgj-search" placeholder="Cari nama usaha, desa, kecamatan, idsbr…" value="${esc(ui.search)}">
             <button class="kgj-btn sm" data-act="selall">☑ Centang yang tampil</button>
             <button class="kgj-btn sm ghost" data-act="selnone">Kosongkan</button>
-            <button class="kgj-btn sm" data-act="markmanual" data-runsel title="Dokumen yang dicentang sudah kamu kerjakan sendiri di FASIH">✍ Tandai selesai manual</button>
+            <button class="kgj-btn sm" data-act="setstatus" data-runsel title="Hasil cek manual: tentukan status dokumen yang dicentang (ikut ke Laporan CSV)">🏷 Atur status</button>
             <span class="kgj-hint" data-selinfo></span>
           </div>
           <div class="kgj-list" data-list></div>
@@ -1476,14 +1505,11 @@
         filteredItems().forEach((q) => ui.selected.add(q.id));
         renderDynamic(overlay);
       }
-      if (act === "markmanual") {
-        const ids = Array.from(ui.selected);
-        if (ids.length && confirm(`Tandai ${ids.length} dokumen yang dicentang sebagai "Selesai manual"? Dokumen ini tidak akan diproses otomatis lagi.`)) {
-          ids.forEach((id) => markManual(id));
+      if (act === "setstatus" && ui.selected.size)
+        openStatusPicker(Array.from(ui.selected), () => {
           ui.selected.clear();
           renderDynamic(overlay);
-        }
-      }
+        });
       if (act === "selnone") {
         ui.selected.clear();
         renderDynamic(overlay);
@@ -1498,6 +1524,55 @@
         openPanel();
       }
     });
+  }
+
+  // Atur status dokumen secara manual (hasil cek manual); alasannya dicatat & ikut ke Laporan CSV
+  function applyStatus(ids, status, note) {
+    const q = loadQueue();
+    q.filter((x) => ids.includes(x.id)).forEach((x) => {
+      const before = (STATUS[x.status] || {}).label || x.status;
+      x.status = status;
+      if (status === "pending") {
+        x.reason = note ? `diatur manual: ${note}` : "";
+        delete x.doneAt;
+      } else {
+        x.reason = `diatur manual → ${STATUS[status].label}${note ? `: ${note}` : ""} (sebelumnya: ${before})`;
+        x.doneAt = new Date().toISOString();
+      }
+    });
+    saveQueue(q);
+  }
+  function openStatusPicker(ids, onDone) {
+    document.getElementById("kgj-status")?.remove();
+    ensureStyles();
+    const modal = document.createElement("div");
+    modal.id = "kgj-status";
+    modal.className = "kgj kgj-overlay";
+    modal.style.cssText = "align-items:center;justify-content:center;z-index:1000003;";
+    const options = Object.entries(STATUS)
+      .map(
+        ([k, v]) =>
+          `<button class="kgj-btn" data-status="${k}" style="justify-content:flex-start;text-align:left;border-left:4px solid ${v.color}"><span><b>${v.label}</b><br><span class="kgj-hint">${STATUS_HINT[k] || ""}</span></span></button>`,
+      )
+      .join("");
+    modal.innerHTML = `<div class="kgj-card" style="width:min(440px,92vw);max-height:90vh;overflow:auto">
+      <div class="kgj-sec">🏷 Atur status · ${ids.length} dokumen</div>
+      <textarea class="kgj-search" data-note rows="2" placeholder="Catatan (opsional), mis. sudah dikoreksi manual di FASIH" style="width:100%;resize:vertical"></textarea>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px">${options}<button class="kgj-btn ghost" data-status="">Batal</button></div>
+    </div>`;
+    modal.addEventListener("keydown", (e) => e.stopPropagation());
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) return modal.remove();
+      const b = e.target.closest("[data-status]");
+      if (!b) return;
+      const note = modal.querySelector("[data-note]").value.trim();
+      modal.remove();
+      if (!b.dataset.status) return;
+      applyStatus(ids, b.dataset.status, note);
+      if (onDone) onDone();
+    });
+    document.body.appendChild(modal);
+    modal.querySelector("[data-note]").focus();
   }
 
   async function loadExcel(file) {
@@ -1669,6 +1744,7 @@
       <div class="kgj-row" style="margin-top:10px">
         <button class="kgj-btn go" data-help="fill" ${editing && card && !helpBusy ? "" : "disabled"}>✏ Isi ke kartu ini</button>
         <button class="kgj-btn" data-help="done">✓ Tandai selesai manual</button>
+        <button class="kgj-btn" data-help="status" title="Pilih status lain (Perlu cek, Gagal, Sudah sesuai, …)">🏷 Status…</button>
         <button class="kgj-btn" data-help="auto" title="Kembalikan ke Belum & jalankan otomatis dokumen ini">↻ Otomatis</button>
       </div>`;
   }
@@ -1686,6 +1762,11 @@
       toast("Ditandai Selesai manual.");
       return updateHelper();
     }
+    if (act === "status")
+      return openStatusPicker([id], () => {
+        helpSig = "";
+        updateHelper();
+      });
     if (act === "auto") {
       updateItem(id, { status: "pending", reason: "" });
       return startRun({ onlyIds: [id] });
@@ -1734,6 +1815,8 @@
       hud.addEventListener("click", (e) => {
         const act = e.target.closest("[data-hud]")?.dataset.hud;
         if (act === "stop") stopRun("Dihentikan.");
+        if (act === "hold") setHold(true);
+        if (act === "resume") setHold(false);
         if (act === "panel") openPanel();
         if (act === "go") {
           const r = loadRun();
@@ -1755,19 +1838,21 @@
     const limited = rateLimited();
     const total = run.total || 0;
     const done = run.processed || 0;
-    const sig = JSON.stringify([run.cur, run.paused, run.logs, limited, done, run.testMode]);
+    const sig = JSON.stringify([run.cur, run.paused, run.logs, limited, done, run.testMode, run.hold]);
     if (sig === hudSig) return;
     hudSig = sig;
     hud.innerHTML = `
       <div class="top">
-        <div class="spin ${run.paused || limited ? "wait" : ""}"></div>
+        <div class="spin ${run.paused || run.hold || limited ? "wait" : ""}"></div>
         <div class="ttl">Koreksi Gaji</div>
-        <div class="dim">${T().name}${run.testMode ? " · Mode uji" : ""} · ${done}/${total} dokumen</div>
+        <div class="dim">${run.hold ? "⏸ DIJEDA · " : ""}${T().name}${run.testMode ? " · Mode uji" : ""} · ${done}/${total} dokumen</div>
         <span style="flex:1"></span>
         ${run.paused ? `<button class="kgj-btn go" data-hud="go">✓ Kirim sekarang</button><button class="kgj-btn" data-hud="pass">Lewati</button>` : ""}
+        ${run.hold ? `<button class="kgj-btn go" data-hud="resume">▶ Lanjut</button>` : `<button class="kgj-btn" data-hud="hold" title="Tahan sementara; langkah yang sedang jalan dilanjutkan dari titik yang sama">⏸ Jeda</button>`}
         <button class="kgj-btn" data-hud="panel" title="Buka panel">☰</button>
         <button class="kgj-btn stop" data-hud="stop">■ Stop</button>
       </div>
+      ${run.hold ? `<div class="doc wait">⏸ Dijeda sejak ${new Date(run.hold.at).toLocaleTimeString("id-ID")} — jangan pindah halaman / klik isian supaya bisa dilanjutkan dengan aman</div>` : ""}
       ${limited ? `<div class="doc wait">⛔ Server membatasi (429) — lanjut otomatis ${new Date(rateInfo().until).toLocaleTimeString("id-ID")}</div>` : ""}
       ${it ? `<div class="doc">▶ ${esc(it.targets.map((t) => t.nama).join(" + "))} <span class="dim">· ${esc([it.desa, it.sls].filter(Boolean).join(" · "))}</span></div>` : ""}
       ${it ? `<div class="steps">${STEPS.map(([k, l], i) => `<div class="st ${i < iNow ? "done" : i === iNow ? "now" : ""}">${i < iNow ? "✓ " : ""}${l}</div>`).join("")}</div>` : ""}
@@ -1808,5 +1893,5 @@
     }
   }, 700);
 
-  console.log("[Koreksi Gaji v1.0] Aktif. Tombol di kiri bawah (Alt+6).");
+  console.log("[Koreksi Gaji v1.2] Aktif. Tombol di kiri bawah (Alt+6).");
 })();
