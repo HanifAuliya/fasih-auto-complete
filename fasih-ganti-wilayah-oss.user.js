@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH OSS -> Keluarga: Pindah + Tautkan
 // @namespace    hanif-bps-hst
-// @version      2.27
+// @version      2.28
 // @description  OSS dipindah ke SLS keluarga (⋮ > Ganti Wilayah), lalu dokumen keluarga dibuka: salin Blok P (alamat, no bangunan, geotag) dan pilih OSS di "Pilih UMKM dalam satu SLS". Ada -> OSS Ditemukan + alamat & geotag keluarga; tidak ada / keluarga tanpa usaha -> OSS Tutup. Keduanya dikirim & di-approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -1902,6 +1902,8 @@
   let userDecision = null; // mode uji dialog Ganti Wilayah: "send" | "skip"
   const STAGE_TIMEOUT_MS = 4 * 60 * 1000;
   const STAGE_LABEL = {
+    cek_kel: "Cek keluarga (tanpa edit)",
+    cek_oss: "Cek OSS (tanpa edit)",
     gcheck_scan: "Cek Review keluarga (tanpa edit)",
     kel_open: "Membuka keluarga",
     kel_fill: "Cek usaha keluarga",
@@ -2128,6 +2130,12 @@
       return loadQueue().find(
         (q) => needsGandaCheck(q) && (!only || only.has(q.id)),
       );
+    if (run.cekStatus)
+      return loadQueue().find(
+        (q) =>
+          (run.cekIds || []).includes(q.id) &&
+          !(run.cekDone || []).includes(q.id),
+      );
     // Baris yang dicentang secara eksplisit selalu diselesaikan sampai tautan, walau "setelah dipindah" dimatikan
     const want = run.onlyLink
       ? ["moved"]
@@ -2163,6 +2171,46 @@
     return false;
   }
 
+  // Cek status tanpa edit: kondisi keluarga (dari kartu usaha) + Keberadaan di Blok P OSS -> hasil
+  const CEK_KEL_TXT = {
+    found: "sudah tertaut",
+    ganda: "tanpa isian Pilih UMKM (Ganda)",
+    nomatch: "ada isian Pilih UMKM tapi tidak cocok",
+    pick: "belum tertaut (ada slot kosong)",
+    nousaha: "tidak punya usaha",
+  };
+  const CEK_OSS_TXT = { 1: "Ditemukan", 3: "Tutup", 4: "Ganda", 0: "Tidak Ditemukan" };
+  function cekVerdict(kel, oss) {
+    if (!oss) return "belum";
+    if (!kel) return "perlu";
+    if (oss === "1") return kel === "found" ? "tertaut" : "perlu";
+    if (oss === "4") return kel === "ganda" ? "ganda" : "perlu";
+    if (oss === "3" && ["nomatch", "pick", "nousaha"].includes(kel)) return "tutup";
+    return "perlu";
+  }
+  function cekFinish(item, verdict, note) {
+    const cur = loadQueue().find((q) => q.id === item.id) || item;
+    const kelTxt = CEK_KEL_TXT[cur.cekKel] || "tidak terbaca";
+    const ossTxt = cur.cekOss ? CEK_OSS_TXT[cur.cekOss] || cur.cekOss : "belum diisi";
+    const vTxt = { tertaut: "sudah tertaut (linked)", ganda: "Ganda", tutup: "Tutup", perlu: "perlu cek manual", belum: "belum diisi di OSS" }[verdict];
+    const statusNext = { tertaut: "linked", ganda: "closed", tutup: "closed", perlu: "yellow", belum: cur.status }[verdict];
+    const extra = {
+      tertaut: { linkResult: "found", forced: true, linkCard: cur.cekKelCard || "" },
+      ganda: { linkResult: "ganda", gandaChecked: true },
+      tutup: { linkResult: cur.cekKel === "nousaha" ? "nousaha" : "nomatch", gandaChecked: true },
+      perlu: {},
+      belum: {},
+    }[verdict];
+    updateItem(item.id, extra);
+    const reason = `${item.namaUsaha}: cek ${new Date().toLocaleString("id-ID")} — keluarga: ${kelTxt}; OSS: ${ossTxt} → ${vTxt}${note ? ` (${note})` : ""}`;
+    const r = loadRun();
+    r.cekDone = [...(r.cekDone || []), item.id];
+    saveRun(r);
+    finishItem(item.id, statusNext, reason);
+    const sisa = (r.cekIds || []).filter((id) => !r.cekDone.includes(id));
+    if (!sisa.length) goList();
+  }
+
   async function tick() {
     const run = loadRun();
     if (!run.running || busy || rateLimited() || run.paused || run.hold) return;
@@ -2183,6 +2231,11 @@
         if (run.forceRedo) {
           setStage("oss_open", { id: item.id, force: true });
           runLog(`Force submit ulang OSS ${item.namaUsaha}`);
+          return;
+        }
+        if (run.cekStatus) {
+          setStage("cek_kel", { id: item.id });
+          runLog(`Cek status (tanpa revoke): ${item.namaUsaha}`);
           return;
         }
         if (run.recheckGanda) {
@@ -2245,6 +2298,35 @@
   async function runStage(run, cur, item) {
     const kelId = item.kelId;
     switch (cur.stage) {
+      case "cek_kel": {
+        if (!kelId) return cekFinish(item, "perlu", "kel_assignment_id kosong di Excel");
+        if (!(await ensureReview(kelId, "kel"))) return;
+        runLog(`Cek keluarga (Review, tanpa edit): ${item.namaUsaha}`);
+        try {
+          const scan = await scanUsahaCards(item);
+          updateItem(item.id, { cekKel: scan.result, cekKelCard: scan.card || "" });
+        } catch (e) {
+          updateItem(item.id, { cekKel: "", cekKelErr: e.message });
+        }
+        return setStage("cek_oss", { id: item.id });
+      }
+      case "cek_oss": {
+        if (!(await ensureReview(item.id, "oss"))) return;
+        runLog(`Cek OSS (Review, tanpa edit): ${item.namaUsaha}`);
+        let oss = "";
+        let note = "";
+        try {
+          await goToField("ada_bang_usaha", () => visible(box("ada_bang_usaha")));
+          oss = radioValue(box("ada_bang_usaha"));
+        } catch (e) {
+          note = `Blok P tidak terbaca: ${e.message}`;
+        }
+        updateItem(item.id, { cekOss: oss });
+        const cur = loadQueue().find((q) => q.id === item.id) || item;
+        const verdict = note ? "perlu" : cekVerdict(cur.cekKel, oss);
+        const why = note || (cur.cekKelErr ? `keluarga: ${cur.cekKelErr}` : "");
+        return cekFinish(item, verdict, why);
+      }
       case "gcheck_scan": {
         // Baca dulu di halaman Review keluarga (TANPA klik Edit / revoke) -- cuma lanjut ke cara lama
         // (revoke) kalau ternyata ada yang perlu ditulis (OSS baru ketemu cocok).
@@ -2477,6 +2559,9 @@
       onlyLink: !!opts.onlyLink,
       forceRedo: !!opts.forceRedo,
       recheckGanda: !!opts.recheckGanda,
+      cekStatus: !!opts.cekStatus,
+      cekIds: opts.cekIds || null,
+      cekDone: [],
       onlyIds,
       processed: 0,
       listUrl: location.href,
@@ -2717,7 +2802,9 @@
     const scope = loadQueue().filter((q) => !only || only.has(q.id));
     const sisaPindah = scope.filter((q) => q.status === "pending").length;
     const sisaTaut = scope.filter((q) => q.status === "moved").length;
-    const fase = run.recheckGanda
+    const fase = run.cekStatus
+      ? `Cek status (tanpa revoke) · sisa ${(run.cekIds || []).filter((id) => !(run.cekDone || []).includes(id)).length}`
+      : run.recheckGanda
       ? `Cek ulang Ganda · sisa ${scope.filter(needsGandaCheck).length}`
       : run.forceRedo
         ? `Force submit ulang OSS · sisa ${scope.filter(needsForce).length}`
@@ -3259,6 +3346,7 @@
             <button class="fgw-btn" data-act="link">🔗 Tautkan yang sudah dipindah <span class="n">${c.moved}</span></button>
             <button class="fgw-btn warn" data-act="force">⚡ Force submit ulang OSS ditemukan <span class="n">${queue.filter(needsForce).length}</span></button>
             <button class="fgw-btn warn" data-act="gandaCheck">🔎 Cek ulang Ganda dari OSS Tutup <span class="n">${queue.filter(needsGandaCheck).length}</span></button>
+            <button class="fgw-btn" data-act="cekstatus" title="Baca Review keluarga & OSS (tanpa revoke), lalu tulis hasilnya ke keterangan dan status baris">🔍 Cek status (tanpa revoke)</button>
           </div>
           <details class="fgw-details">
             <summary>ⓘ Cara kerja "Cek ulang Ganda"</summary>
@@ -3461,6 +3549,21 @@
         )
           startRun({ forceRedo: true });
       }
+      if (act === "cekstatus") {
+        const ids = loadQueue()
+          .filter((q) => selected.has(q.id))
+          .map((q) => q.id);
+        if (!ids.length)
+          return alert("Centang dulu baris yang mau dicek statusnya (tanpa revoke).");
+        if (!isListPage())
+          return alert('Buka halaman daftar assignment dulu (tabel dengan kotak "Cari..."), lalu klik lagi.');
+        if (
+          confirm(
+            `Cek status ${ids.length} baris (sudah tertaut / Ganda / Tutup?) dengan membaca halaman Review keluarga & OSS. Tidak revoke dan tidak mengubah isian dokumen. Hasilnya ditulis ke keterangan dan status baris. Lanjutkan?`,
+          )
+        )
+          startRun({ cekStatus: true, cekIds: ids });
+      }
       if (act === "gandaCheck") {
         const n = loadQueue().filter(needsGandaCheck).length;
         if (!n)
@@ -3617,5 +3720,5 @@
     refreshPanelLive();
   }, 700);
 
-  console.log("[OSS → Keluarga v2.27] Aktif. Tombol di kiri bawah (Alt+8).");
+  console.log("[OSS → Keluarga v2.28] Aktif. Tombol di kiri bawah (Alt+8).");
 })();
