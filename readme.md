@@ -2,12 +2,13 @@
 
 Kumpulan userscript Tampermonkey untuk membantu pengisian dokumen FASIH SE2026 (fasih-sm.bps.go.id) secara otomatis. Semua skrip jalan 100% di browser sendiri — file Excel dibaca langsung di memori browser, datanya tidak pernah dikirim ke server mana pun selain FASIH itu sendiri.
 
-Ada dua skrip di folder ini, untuk dua tahap pekerjaan yang berbeda:
+Ada beberapa skrip di folder ini, untuk dua tahap pekerjaan yang berbeda:
 
 | File | Nama di Tampermonkey | Buat apa |
 |---|---|---|
 | [`script`](script) | FASIH Batch Otomatis - Tahap 1 + 2 | Transkripsi hasil penyisiran Excel ke dokumen FASIH: cari dokumen rumah tangga yang cocok, isi Blok P + Blok II (usaha lama/baru), tentukan KBLI, kirim & approve. |
 | [`fasih-koreksi-r27.user.js`](fasih-koreksi-r27.user.js) | FASIH Koreksi R.27 - Pendapatan (27.a / 27.b) | Ganti isian 27.a (`nilai_pendapatan`) = R.27a dan 27.b (`pendapatan_lain`) = R.27b di kartu usaha yang tepat, lalu kirim & approve. |
+| [`fasih-koreksi-gaji.user.js`](fasih-koreksi-gaji.user.js) | FASIH Koreksi Gaji + R.27 (gaji / 27.a / 27.b) | Dari Excel upah/gaji: ganti isian `gaji` = kolom Gaji, 27.a = R.27a, 27.b = R.27b, lalu kirim & approve. Yang gagal bisa dikerjakan manual lewat tombol ✍ (panel bantu di halaman dokumen) lalu ditandai "Selesai manual". Ekspor CSV/JSON. Pintasan Alt+6. |
 | [`fasih-ganti-wilayah-oss.user.js`](fasih-ganti-wilayah-oss.user.js) | FASIH OSS -> Keluarga: Pindah + Tautkan | Pindahkan assignment OSS ke SLS keluarganya (Ganti Wilayah), lalu tautkan ke usaha keluarga lewat "Pilih UMKM dalam satu SLS" — atau tutup/gandakan kalau memang tidak ada yang cocok. |
 
 Semuanya independen — bisa dipasang salah satu atau dua-duanya sekaligus.
@@ -46,7 +47,7 @@ Untuk Chrome/Edge:
 ### 4. Pastikan jalan di FASIH
 
 1. Buka halaman `https://fasih-sm.bps.go.id/...` (halaman **DATA survei**, bukan halaman login).
-2. Tombol pelontar mengambang akan muncul di pojok kiri bawah — ikonnya tergantung skrip mana yang aktif: **⚡ FASIH Otomatis** (Batch Otomatis), **🔀 OSS → Keluarga** (Ganti Wilayah OSS), atau **27 Koreksi Pendapatan** (R.27). Kalau lebih dari satu skrip dipasang, semua tombolnya numpuk di situ.
+2. Tombol pelontar mengambang akan muncul di pojok kiri bawah — ikonnya tergantung skrip mana yang aktif: **⚡ FASIH Otomatis** (Batch Otomatis), **🔀 OSS → Keluarga** (Ganti Wilayah OSS), **27 Koreksi Pendapatan** (R.27), atau **Rp Koreksi Gaji** (Koreksi Gaji). Kalau lebih dari satu skrip dipasang, semua tombolnya numpuk di situ.
 3. Buka Console browser (tekan **F12** → tab **Console**) dan refresh halaman. Harus ada baris log seperti `[FASIH Batch Otomatis v2.0] Skrip termuat di ...` (teksnya beda-beda tergantung skrip). **Kalau log ini tidak muncul sama sekali**, skrip belum benar-benar jalan — balik cek langkah 2 (Allow User Scripts) dan langkah 3.5 (status Enabled).
 4. Kalau muncul izin browser semacam "Izinkan ekstensi ini membaca dan mengubah data Anda di situs ini" saat halaman FASIH pertama kali dibuka, klik **Allow/Izinkan** — tanpa ini skrip tidak bisa membaca/mengisi form.
 
@@ -121,6 +122,7 @@ Buka lewat tombol mengambang **"⚡ FASIH Otomatis"** di kiri bawah, atau **Alt+
 - **"⬇ Laporan CSV"** — laporan hasil kerja yang bisa dibaca orang (status, alasan, KBLI, dsb). Ini laporan, bukan buat dimuat balik.
 - **"💾 Export data"** — ekspor **seluruh state kerja** (antrean + daftar wilayah yang sudah dibaca + kamus KBLI) jadi satu file JSON, supaya bisa lanjut kerja di laptop lain tanpa baca ulang Excel / baca ulang daftar wilayah dari nol.
 - **"📂 Import data"** — muat file itu balik. Ini **menimpa** data yang ada di laptop/browser saat itu (selalu dikonfirmasi dulu sebelum menimpa).
+- **"🧩 Gabung rekap JSON"** (di kartu ① Data Excel & wilayah, sebelah Muat Excel) — kalau Excel sudah dimuat tapi rekap JSON lama tertinggal, pilih file export itu. Baris dicocokkan per `id` + nama KRT; yang sudah terkirim di rekap ditandai dan tidak dikerjakan ulang. Ringkasannya ditampilkan dulu sebelum diterapkan.
 
 ### Kecepatan & rate limit (429)
 
@@ -180,6 +182,7 @@ Cara kerjanya **dirancang hemat revoke**: dicek dulu dari halaman **Review kelua
 - **"⬇ Laporan CSV"** — laporan status untuk dibaca manusia (alasan, hasil tautan, alamat yang disalin, dll).
 - **"⬇ Ekspor Antrean"** — unduh **seluruh antrean mentah** (semua field + progres + pengaturan) sebagai JSON. Tidak perlu lagi bawa file Excel aslinya untuk lanjut kerja, karena semua data Excel sudah ikut tersimpan di sini.
 - **"📤 Impor Antrean"** — muat file itu di laptop lain untuk lanjut persis dari titik terakhir (dikonfirmasi dulu sebelum menimpa antrean yang ada).
+- **"🧩 Gabung rekap JSON"** (di Persiapan, setelah Muat Excel target) — kalau file Excel-nya sudah dimuat tapi rekap JSON lama tertinggal, pilih file rekap itu. Baris dicocokkan per `assignment_id`; baris yang sudah punya progres di rekap disalin statusnya (ditautkan / tutup / ganda / selesai manual / gagal / perlu cek), jadi tidak perlu dijalankan ulang. Sebelum diterapkan muncul ringkasan: berapa yang cocok, berapa yang belum ada progres, dan berapa baris rekap yang tidak ada di Excel ini.
 - **Nama file ekspor** otomatis memakai nama wilayah dari antrean, misalnya `laporan-oss-keluarga-<KECAMATAN>-<DESA>-<tanggal-jam>.csv` atau `antrean-oss-keluarga-<DESA>-<tanggal-jam>.json`. Kalau antrean berisi beberapa desa dalam satu kecamatan, yang dipakai nama kecamatannya; kalau beberapa kecamatan, dipakai jumlah kecamatannya (mis. `3-kecamatan`).
 
 ### Status & label
