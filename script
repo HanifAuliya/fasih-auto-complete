@@ -5931,9 +5931,6 @@
     if (base === "pengusaha_var") {
       return fillPengusaha(inst, item, []);
     }
-    if (base === "kbli") {
-      return selectKbli(target, item.kbli);
-    }
     if (base === "keberadaan_usaha") {
       const isNew = !target.querySelector('input[type="radio"][value="1"]');
       return (
@@ -5994,6 +5991,7 @@
   // Pilih kode dari Master KBLI. Modal ini berat (±1.559 kode) & pencariannya kadang belum siap saat
   // baru dibuka -> kalau gagal atau nilainya tidak lengket, ulangi sekali lagi sebelum menyerah.
   async function selectKbli(kbliBox, code) {
+    if (!code) return false;
     const pick = (opts) => opts.find((o) => o.innerText.includes(code));
     for (let attempt = 0; attempt < 3; attempt++) {
       if (attempt) {
@@ -7020,6 +7018,17 @@
       runLog(`Galat dikosongkan: ${label}`);
       return;
     }
+    // KBLI kosong: pakai KBLI dari Excel, kalau usahanya tidak ada di Excel pakai produk yang tertulis di form
+    if (base === "kbli" && inst) {
+      const code = (item && item.kbli) || itemKbli(pseudo);
+      if (!code) {
+        warn(`KBLI belum bisa ditentukan untuk ${label}: pilih manual dari Master KBLI`);
+        return;
+      }
+      if (await selectKbli(target, code)) runLog(`Galat diperbaiki: ${label} → KBLI ${code}`);
+      else warn(`KBLI ${code} gagal dipilih untuk ${label}`);
+      return;
+    }
 
     const maxLen =
       Number(
@@ -7979,6 +7988,104 @@
     alert(`Rekap digabung.\n\nSekarang antrean: ${tally(next)}`);
   }
 
+  const EXPORT_MARK_KEY = "fasih_export_mark";
+  const hashStr = (s) => {
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+    return (h >>> 0).toString(36);
+  };
+  const rowKey = (r) => `${r.id}|${r.krt}`;
+  function snapshotData() {
+    const keys = {};
+    const rows = {};
+    Object.entries(EXPORT_KEYS).forEach(([key, storageKey]) => {
+      const val = loadJson(storageKey, key === "queue" ? [] : {});
+      keys[key] = hashStr(JSON.stringify(val));
+      if (key === "queue")
+        val.forEach((r) => (rows[rowKey(r)] = hashStr(JSON.stringify(r))));
+    });
+    return { keys, rows };
+  }
+  function markExported() {
+    try {
+      localStorage.setItem(
+        EXPORT_MARK_KEY,
+        JSON.stringify({ at: new Date().toISOString(), ...snapshotData() }),
+      );
+    } catch (e) {
+      console.error("[Tahap 1] Gagal mencatat waktu export.", e);
+    }
+  }
+  function checkDataChanges() {
+    const mark = loadJson(EXPORT_MARK_KEY, null);
+    if (!mark) {
+      alert("Belum ada catatan export/import di browser ini.\n\nKlik 💾 Export untuk menyimpan JSON, lalu cek lagi nanti.");
+      return;
+    }
+    const now = snapshotData();
+    const names = { queue: "antrean", state: "status panel", wilayah: "daftar wilayah", kamusKbli: "kamus KBLI" };
+    const beda = Object.keys(EXPORT_KEYS).filter((k) => now.keys[k] !== mark.keys[k]).map((k) => names[k]);
+    const when = new Date(mark.at).toLocaleString();
+    if (!beda.length) {
+      alert(`✅ Sudah ter-export.\n\nTidak ada perubahan sejak export/import terakhir (${when}).`);
+      return;
+    }
+    const rows = Object.keys(now.rows);
+    const added = rows.filter((k) => !(k in mark.rows)).length;
+    const changed = rows.filter((k) => k in mark.rows && mark.rows[k] !== now.rows[k]).length;
+    const removed = Object.keys(mark.rows).filter((k) => !(k in now.rows)).length;
+    alert(
+      `⚠ Ada perubahan BELUM ter-export\n\nTerakhir export/import: ${when}\n\n` +
+        `• Baris antrean baru: ${added}\n• Baris antrean berubah: ${changed}\n• Baris antrean hilang: ${removed}\n` +
+        `• Yang berubah: ${beda.join(", ")}\n\nKlik 💾 Export untuk menyimpan.`,
+    );
+  }
+
+  // Cek ke FASIH (daftar dokumen) baris antrean yang belum tercatat terkirim di laptop ini. Hanya membaca, tidak mengubah status.
+  async function checkFasihStatus() {
+    if (!isListPage()) {
+      alert("Buka dulu halaman daftar data FASIH (yang ada kotak \"Cari...\"), lalu klik lagi.");
+      return;
+    }
+    if (loadRun().running) {
+      alert("Stop dulu proses otomatis yang sedang berjalan.");
+      return;
+    }
+    const todo = loadQueue().filter((i) => i.status !== "done");
+    const hasil = { selesai: 0, belumSelesai: 0, manual: 0, tidakKetemu: 0 };
+    const tally = {};
+    runLog(`Cek status FASIH: ${todo.length} baris`);
+    for (const item of todo) {
+      if (rateLimited() || netDown()) await sleep(1000);
+      let r;
+      try {
+        r = await findDocument(item);
+      } catch (e) {
+        r = { status: "red", reason: e.message };
+      }
+      if (r.status === "green") {
+        const st = r.row.status || "(kosong)";
+        updateItem(item.id, { fasihStatus: st });
+        tally[st] = (tally[st] || 0) + 1;
+        if (LOCKED_STATUS_PATTERN.test(st)) hasil.selesai++;
+        else hasil.belumSelesai++;
+      } else if (r.status === "yellow") hasil.manual++;
+      else hasil.tidakKetemu++;
+      await sleep(400);
+    }
+    const detail = Object.entries(tally).map(([k, v]) => `${k}: ${v}`).join(", ") || "-";
+    runLog(`Cek status FASIH selesai: ${JSON.stringify(hasil)}`);
+    alert(
+      `Cek status FASIH selesai (${todo.length} baris dicek).\n\n` +
+        `✓ Sudah selesai di FASIH: ${hasil.selesai}\n` +
+        `• Ada di FASIH, belum selesai: ${hasil.belumSelesai}\n` +
+        `• Perlu dicek manual (nama mirip / lebih dari satu): ${hasil.manual}\n` +
+        `• Tidak ketemu di daftar: ${hasil.tidakKetemu}\n\n` +
+        `Status FASIH per baris: ${detail}\n\n` +
+        `Status baris di laptop ini tidak diubah.`,
+    );
+  }
+
   function exportAllData() {
     const data = { version: 1, exportedAt: new Date().toISOString() };
     Object.entries(EXPORT_KEYS).forEach(([key, storageKey]) => {
@@ -7991,6 +8098,7 @@
     a.href = URL.createObjectURL(blob);
     a.download = `fasih-data-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}.json`;
     a.click();
+    markExported();
   }
 
   async function importAllData(file) {
@@ -8020,6 +8128,7 @@
     s.importedFileName = file.name;
     s.importedAt = new Date().toISOString();
     saveState(s);
+    markExported();
     alert(`Data dimuat: ${qLen} baris antrean, ${wLen} desa.`);
     openPanel();
   }
@@ -8273,6 +8382,8 @@
               <div class="fo-divider"></div>
               <div class="fo-rowflex">
                 ${queue.length ? `<button class="fo-btn sm" data-act="report">⬇ Laporan CSV</button>` : ""}
+                ${queue.length ? `<button class="fo-btn sm" data-act="check-fasih" title="Cek di daftar FASIH (halaman daftar data) baris mana yang sudah selesai. Hanya membaca.">🔎 Cek status FASIH</button>` : ""}
+                ${queue.length || wilayahCount ? `<button class="fo-btn sm" data-act="check-changes" title="Cek apakah ada perubahan yang belum di-export">🔍 Cek perubahan</button>` : ""}
                 ${queue.length || wilayahCount ? `<button class="fo-btn sm" data-act="export-data" title="Simpan antrean + daftar wilayah + kamus KBLI jadi satu file, untuk dibawa ke laptop lain">💾 Export</button>` : ""}
                 <button class="fo-btn sm" data-act="import-data" title="Muat file export dari laptop lain (data di laptop ini akan ditimpa)">📂 Import</button>
                 ${queue.length ? `<button class="fo-btn sm danger" data-act="clear">🗑 Hapus antrean</button>` : ""}
@@ -8770,6 +8881,8 @@
       if (act === "load") fileInput.click();
       if (act === "report") downloadReport();
       if (act === "export-data") exportAllData();
+      if (act === "check-changes") checkDataChanges();
+      if (act === "check-fasih") checkFasihStatus();
       if (act === "import-data") importInput.click();
       if (act === "rekap") rekapInput.click();
       if (act === "newtab") {
