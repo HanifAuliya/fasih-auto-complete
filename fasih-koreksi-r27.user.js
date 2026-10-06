@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi R.27 - Pendapatan (27.a / 27.b)
 // @namespace    hanif-bps-hst
-// @version      1.3
+// @version      1.6
 // @description  Baca Excel koreksi, buka tiap dokumen, ganti 27.a (nilai_pendapatan) = R.27a dan 27.b (pendapatan_lain) = R.27b di kartu usaha yang tepat, lalu Kirim & Approve. Dokumen keluarga: kartu dicari di Blok II; dokumen usaha tunggal: langsung ke kartunya.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -16,6 +16,7 @@
   const CONF_KEY = "k27_conf";
   const RUN_KEY = "k27_run";
   const AREA_KEY = "k27_area_titles";
+  const LIST_KEY = "k27_list_url"; // halaman daftar assignment terakhir yang dibuka (untuk cari lewat filter)
   const RATE_KEY = "fasih_rate_limit"; // sama dengan skrip FASIH lain: jeda 429 berlaku bersama
 
   const DEFAULT_CONF = {
@@ -42,6 +43,7 @@
     yellow: { label: "Perlu cek", color: "#d97706" },
     red: { label: "Gagal", color: "#dc2626" },
     manual: { label: "Selesai manual", color: "#7c3aed" },
+    forbidden: { label: "Forbidden", color: "#64748b" },
   };
   const FINISHED = ["done", "already", "manual"];
 
@@ -53,6 +55,7 @@
     yellow: "perlu dicek lagi",
     red: "tidak bisa dikerjakan",
     manual: "dikoreksi sendiri di FASIH",
+    forbidden: "halaman Forbidden (akun tidak punya akses), dilewati",
   };
 
   // =========================================================================
@@ -142,10 +145,25 @@
     }
     return Date.now() - t0;
   }
+  let forbiddenAt = 0;
+  let forbiddenLast = false;
+  function forbiddenPage() {
+    if (Date.now() - forbiddenAt < 1000) return forbiddenLast;
+    forbiddenAt = Date.now();
+    if (!document.body || document.querySelector(".fasih-form-sidebar")) return (forbiddenLast = false);
+    const text = Array.from(document.body.children)
+      .filter((el) => !/^k27-/.test(el.id || "") && !/^(SCRIPT|STYLE)$/.test(el.tagName))
+      .map((el) => el.innerText || "")
+      .join(" ");
+    return (forbiddenLast = /\b403\b.{0,20}(forbidden|akses)|forbidden|akses ditolak|access denied|tidak (memiliki|punya) (hak )?akses/i.test(text));
+  }
+  const forbiddenError = () => Object.assign(new Error("halaman Forbidden (tidak ada akses)"), { forbidden: true });
+
   async function waitFor(check, timeoutMs) {
     let start = Date.now();
     while (Date.now() - start < timeoutMs) {
       if (stopRequested) return null;
+      if (forbiddenPage()) throw forbiddenError();
       const result = check();
       if (result) return result;
       start += await sleep(T().poll);
@@ -245,6 +263,56 @@
     }
     return best;
   }
+
+  // Nama usaha di dokumen harus sesuai nama_usaha Excel (bukan cuma nilainya yang cocok).
+  // Dibanding tanpa bagian (PEMILIK); nomor harus sama (SDN 1 ≠ SDN 2), jenjang sekolah harus sama
+  // (SD ≠ SMP), dan kalau keduanya mencantumkan pemilik, pemiliknya harus sama ("SAIPUL" = "SAIPUL RAHMAN").
+  const ABBR = [
+    [/\bSDN\b/g, "SD NEGERI"],
+    [/\bSMPN\b/g, "SMP NEGERI"],
+    [/\bSMAN\b/g, "SMA NEGERI"],
+    [/\bSMKN\b/g, "SMK NEGERI"],
+    [/\bSEKOLAH DASAR\b/g, "SD"],
+    [/\bSEKOLAH MENENGAH PERTAMA\b/g, "SMP"],
+    [/\bSEKOLAH MENENGAH ATAS\b/g, "SMA"],
+    [/\bSEKOLAH MENENGAH KEJURUAN\b/g, "SMK"],
+    [/\bTAMAN KANAK KANAK\b/g, "TK"],
+    [/\bMADRASAH IBTIDAIYAH\b/g, "MI"],
+    [/\bNEGERI\b/g, "N"],
+  ];
+  const LEVELS = ["TK", "PAUD", "SD", "MI", "SMP", "MTS", "SMA", "MA", "SMK"];
+  const baseName = (t) => {
+    let s = normalize(String(t || "").replace(/\([^)]*\)/g, " "));
+    for (const [re, to] of ABBR) s = s.replace(re, to);
+    return s.replace(/\bN\b/g, "").replace(/\s+/g, " ").trim();
+  };
+  const digitsOf = (s) => (s.match(/\d+/g) || []).map(Number).join(",");
+  const ownerOf = (t) => normalize((String(t || "").match(/\(([^)]+)\)/) || [])[1]);
+  const levelOf = (s) => s.split(" ").find((w) => LEVELS.includes(w)) || "";
+  function sameOwner(a, b) {
+    if (levenshteinRatio(a, b) >= 0.8) return true;
+    const [x, y] = a.length <= b.length ? [a, b] : [b, a];
+    const yt = new Set(y.split(" "));
+    return x.split(" ").every((w) => yt.has(w));
+  }
+  function nameMatch(doc, excel) {
+    const c = baseName(doc) || normalize(doc);
+    const e = baseName(excel) || normalize(excel);
+    if (!c || !e) return 0;
+    if (digitsOf(c) !== digitsOf(e)) return 0;
+    const lc = levelOf(c);
+    const le = levelOf(e);
+    if (lc && le && lc !== le) return 0;
+    const oc = ownerOf(doc);
+    const oe = ownerOf(excel);
+    if (oc && oe && !sameOwner(oc, oe)) return 0;
+    const ct = new Set(c.split(" "));
+    const et = e.split(" ");
+    const common = et.filter((w) => ct.has(w)).length;
+    const overlap = common / Math.max(1, Math.min(ct.size, et.length));
+    return Math.max(levenshteinRatio(c, e), overlap * 0.95);
+  }
+  const NAME_OK = 0.6;
 
   // =========================================================================
   // MEMBACA EXCEL (.xlsx = zip berisi XML; tanpa pustaka luar)
@@ -518,37 +586,61 @@
     const results = targets.map(() => null);
     const notes = [];
 
-    const decide = (cur, name, onlyOne) => {
-      for (let i = 0; i < targets.length; i++)
-        if (!results[i] && eqPair(cur, targets[i].neu)) return { i, kind: "new" };
-      for (let i = 0; i < targets.length; i++)
-        if (!results[i] && eqPair(cur, targets[i].old)) return { i, kind: "old" };
+    // Nama-nama usaha yang terbaca di kartu/isian yang sedang terbuka
+    const namesAt = (inst, cardName) =>
+      Array.from(
+        new Set(
+          [cardName, ...["nama_komersial", "nama_usaha_edit", "nama_usaha"].map((id) => {
+            const b = box(id, inst);
+            const i = b && b.querySelector("input, textarea");
+            return i ? i.value : "";
+          })]
+            .map((x) => String(x || "").trim())
+            .filter(Boolean),
+        ),
+      );
+
+    // Kartu cocok = nilainya cocok (lama / baru / jumlahnya sama) DAN nama usahanya sesuai Excel
+    const decide = (cur, names) => {
+      const sim = targets.map((t) => Math.max(0, ...names.map((n) => nameMatch(n, t.nama))));
+      const nameOk = (i) => sim[i] >= NAME_OK;
+      const open = (i) => !results[i];
+      for (let i = 0; i < targets.length; i++) if (open(i) && nameOk(i) && eqPair(cur, targets[i].neu)) return { i, kind: "new" };
+      for (let i = 0; i < targets.length; i++) if (open(i) && nameOk(i) && eqPair(cur, targets[i].old)) return { i, kind: "old" };
       let best = null;
       for (let i = 0; i < targets.length; i++) {
         const t = targets[i];
-        if (results[i] || cur.a + cur.b !== t.neu.a + t.neu.b) continue;
-        const sim = nameSim(name, t.nama);
-        if ((onlyOne || sim >= 0.55) && (!best || sim > best.sim)) best = { i, kind: "sum", sim };
+        if (!open(i) || !nameOk(i) || cur.a + cur.b !== t.neu.a + t.neu.b) continue;
+        if (!best || sim[i] > best.sim) best = { i, kind: "sum", sim: sim[i] };
       }
-      return best;
+      if (best) return best;
+      // Nilainya cocok tapi namanya beda -> jangan disentuh, beri tahu kenapa
+      const byValue = targets.findIndex((t, i) => open(i) && (eqPair(cur, t.neu) || eqPair(cur, t.old)));
+      return byValue >= 0 ? { mismatch: targets[byValue].nama } : null;
     };
 
-    const handle = async (inst, name, onlyOne) => {
+    const handle = async (inst, cardName) => {
       const pend = await waitBox("nilai_pendapatan", inst, 5000);
-      if (!pend) return notes.push(`kartu "${name || "-"}": isian 27.a tidak muncul`);
+      if (!pend) return notes.push(`kartu "${cardName || "-"}": isian 27.a tidak muncul`);
+      await waitFor(() => namesAt(inst, cardName).length, 2000);
+      const names = namesAt(inst, cardName);
+      const name = cardName || names[0] || "";
+      if (!names.length) return notes.push(`kartu "${name || "-"}": nama usaha tidak terbaca, tidak bisa dipastikan`);
       const cur = { a: norm0(readBox(pend)), b: norm0(readBox(box("pendapatan_lain", inst))) };
-      const d = decide(cur, name, onlyOne);
-      if (!d) return notes.push(`kartu "${name || "-"}": 27.a ${rupiah(cur.a)} / 27.b ${rupiah(cur.b)} tidak cocok dengan Excel`);
+      const d = decide(cur, names);
+      if (d && d.mismatch)
+        return notes.push(`kartu "${name}": nilainya cocok, tapi nama usahanya beda dengan Excel "${d.mismatch}"`);
+      if (!d) return notes.push(`kartu "${name}": 27.a ${rupiah(cur.a)} / 27.b ${rupiah(cur.b)} tidak cocok dengan Excel`);
       const t = targets[d.i];
       if (d.kind === "new") {
         results[d.i] = { state: "already", card: name, cur };
-        return log(`✓ "${name || t.nama}" sudah sesuai`);
+        return log(`✓ "${name}" sudah sesuai`);
       }
       if (!write) {
         results[d.i] = { state: "todo", card: name, cur };
-        return log(`"${name || t.nama}" perlu diganti: 27.a ${rupiah(cur.a)} → ${rupiah(t.neu.a)}`);
+        return log(`"${name}" perlu diganti: 27.a ${rupiah(cur.a)} → ${rupiah(t.neu.a)}`);
       }
-      log(`Ganti "${name || t.nama}": 27.a ${rupiah(cur.a)} → ${rupiah(t.neu.a)}, 27.b ${rupiah(cur.b)} → ${rupiah(t.neu.b)}`);
+      log(`Ganti "${name}" (= Excel "${t.nama}"): 27.a ${rupiah(cur.a)} → ${rupiah(t.neu.a)}, 27.b ${rupiah(cur.b)} → ${rupiah(t.neu.b)}`);
       // Urutan: yang turun dulu baru yang naik, supaya total sementara tidak melonjak
       const steps = [["nilai_pendapatan", t.neu.a, cur.a], ["pendapatan_lain", t.neu.b, cur.b]];
       steps.sort((x, y) => (x[1] - x[2]) - (y[1] - y[2]));
@@ -558,16 +650,15 @@
 
     if (area.kind === "direct") {
       const el = visiblePend();
-      await handle(instOf(el), "", targets.length === 1);
+      await handle(instOf(el), "");
     } else {
       const cards = usahaCards();
       if (!cards.length) throw new Error("tidak ada kartu usaha di Blok II");
-      const onlyOne = cards.length === 1 && targets.length === 1;
       const hints = (item.cardHints || []).map(normalize);
       const order = cards
         .map((c, idx) => ({
           idx,
-          score: Math.max(...targets.map((t) => nameSim(c.name, t.nama))) + (hints.includes(normalize(c.name)) ? 10 : 0),
+          score: Math.max(...targets.map((t) => Math.max(nameMatch(c.name, t.nama), nameSim(c.name, t.nama) / 2))) + (hints.includes(normalize(c.name)) ? 10 : 0),
         }))
         .sort((x, y) => y.score - x.score);
       log(`${cards.length} kartu usaha di "${area.title}"`);
@@ -579,11 +670,186 @@
         const card = usahaCards()[o.idx];
         if (!card) continue;
         const inst = await openCard(card);
-        await handle(inst, card.name, onlyOne);
+        await handle(inst, card.name);
       }
     }
     return { results, notes };
   }
+
+  // =========================================================================
+  // CARI LEWAT FILTER di halaman daftar assignment (kalau link Excel tidak membuka dokumen yang benar)
+  // =========================================================================
+  const REVIEW_HREF = /\/app\/assignment\/[0-9a-f-]{36}\/[0-9a-f-]{36}/i;
+  const searchInput = () => document.querySelector('input[placeholder^="Cari"]:not([cmdk-input])');
+  const tableText = () => (document.querySelector("table tbody") || {}).innerText || "";
+  const isListPage = () =>
+    !REVIEW_HREF.test(location.pathname) &&
+    !/\/app\/assignment-detail\//i.test(location.pathname) &&
+    !!searchInput() &&
+    !!document.querySelector("table thead");
+  function setInputValue(input, value) {
+    input.focus();
+    const proto = input.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, "value").set.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  function isLoading() {
+    const spin = Array.from(document.querySelectorAll('[class*="animate-spin"], [class*="skeleton"], [aria-busy="true"]')).some(
+      (el) => visible(el) && !el.closest(OWN),
+    );
+    return spin || /loading|memuat/i.test(tableText());
+  }
+  async function waitTableSettled(before) {
+    if (before !== undefined) await waitFor(() => tableText() !== before || isLoading(), 6000);
+    let start = Date.now();
+    let last = tableText();
+    let stableSince = Date.now();
+    while (Date.now() - start < 30000 && !stopRequested) {
+      const held = await sleep(250);
+      start += held;
+      stableSince += held;
+      const now = tableText();
+      if (now !== last || isLoading()) {
+        last = now;
+        stableSince = Date.now();
+      } else if (Date.now() - stableSince >= W(1200)) break;
+    }
+    await sleep(W(300));
+  }
+
+  // "[040] HARUYAN" -> { code: "040", name: "HARUYAN" }
+  function parseOption(text) {
+    const m = String(text || "").trim().match(/^\[?(\d+)\]?\s*(.*)$/);
+    return m ? { code: m[1], name: m[2].trim() } : { code: "", name: String(text || "").trim() };
+  }
+  const filterButton = () =>
+    Array.from(document.querySelectorAll('button[aria-haspopup="dialog"]')).find(
+      (b) => b.querySelector(".tabler-icon-filter") && !b.closest("th"),
+    );
+  function fieldButton(label) {
+    const lab = Array.from(document.querySelectorAll("label")).find((l) => squash(l.innerText) === squash(label) && !l.closest(OWN));
+    return lab ? lab.parentElement.querySelector('button[role="combobox"]') : null;
+  }
+  const visibleOptions = () =>
+    Array.from(document.querySelectorAll('[cmdk-item], [role="option"]')).filter((el) => visible(el) && !el.closest(OWN) && el.innerText.trim());
+  const optionText = (el) => el.getAttribute("data-value") || el.innerText;
+  const shownText = (btn) => ((btn && (btn.querySelector("span") || btn).innerText) || "").trim();
+
+  // Pilih opsi filter berdasarkan NAMA (Excel berisi nama kecamatan/desa/SLS, bukan kode)
+  async function pickByName(getBtn, name, label) {
+    if (!name) return false;
+    const btn = getBtn() || (await waitFor(getBtn, 8000));
+    if (!btn) return false;
+    const want = normalize(name);
+    const same = (t) => normalize(parseOption(t).name) === want || normalize(t) === want;
+    if (same(shownText(btn))) return true;
+    triggerClick(btn);
+    await waitFor(() => visibleOptions().length, 6000);
+    let count = -1;
+    for (let i = 0; i < 8 && visibleOptions().length !== count; i++) {
+      count = visibleOptions().length; // tunggu daftar selesai dimuat
+      await sleep(W(200));
+    }
+    const find = () => visibleOptions().find((el) => same(optionText(el)) || same(el.innerText));
+    let target = find();
+    const input = document.querySelector("input[cmdk-input]");
+    if (!target && input) {
+      setInputValue(input, name);
+      target = await waitFor(find, 4000);
+    }
+    if (!target) {
+      pressKey("Escape");
+      await sleep(300);
+      log(`⚠ filter ${label} "${name}" tidak ada di pilihan, dilewati`);
+      return false;
+    }
+    triggerClick(target);
+    await waitFor(() => same(shownText(getBtn())), 5000);
+    await sleep(W(500)); // isian di bawahnya dimuat ulang
+    return true;
+  }
+
+  async function applyFilterNames(item) {
+    const btn = filterButton();
+    if (!btn) return log("⚠ tombol Filter tidak ada, langsung cari nama");
+    const before = tableText();
+    if (!fieldButton("KECAMATAN")) {
+      triggerClick(btn);
+      if (!(await waitFor(() => fieldButton("KECAMATAN"), 6000))) return log("⚠ isian Filter tidak muncul, langsung cari nama");
+    }
+    if (await pickByName(() => fieldButton("KECAMATAN"), item.kec, "Kecamatan"))
+      if (await pickByName(() => fieldButton("DESA"), item.desa, "Desa"))
+        if (fieldButton("SLS")) await pickByName(() => fieldButton("SLS"), item.sls, "SLS");
+    const field = fieldButton("KECAMATAN");
+    const scope = (field && field.closest('[role="dialog"]')) || document;
+    const apply = Array.from(scope.querySelectorAll("button")).find((b) => /^(TERAPKAN|APPLY|SIMPAN|TAMPILKAN|OK)$/i.test(b.innerText.trim()));
+    if (apply) triggerClick(apply);
+    else pressKey("Escape");
+    await sleep(400);
+    if (fieldButton("KECAMATAN") && filterButton()) triggerClick(filterButton());
+    await waitTableSettled(before);
+  }
+
+  async function searchList(query) {
+    const input = searchInput();
+    if (!input) throw new Error('kotak "Cari..." tidak ditemukan');
+    if (input.value.trim().toUpperCase() !== query.toUpperCase()) {
+      const before = tableText();
+      setInputValue(input, query);
+      await sleep(W(300));
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
+      await waitTableSettled(before);
+    }
+    return Array.from(document.querySelectorAll("table tbody tr")).filter((tr) => tr.querySelectorAll("td").length > 2);
+  }
+
+  // Link Review dokumen pada satu baris tabel (langsung di baris, atau muncul setelah kodenya diklik)
+  async function rowLink(tr) {
+    const direct = Array.from(tr.querySelectorAll("a[href]")).find((a) => REVIEW_HREF.test(a.href));
+    if (direct) return direct.href;
+    const links = () => Array.from(document.querySelectorAll("a[href]")).filter((a) => REVIEW_HREF.test(a.href) && !a.closest(OWN));
+    const before = new Set(links().map((a) => a.href));
+    const kodeBtn = tr.querySelector("td button:not([title]):not([aria-haspopup])");
+    if (!kodeBtn) return null;
+    triggerClick(kodeBtn);
+    const a = await waitFor(() => links().find((x) => visible(x) && !before.has(x.href)), 4000);
+    return a ? a.href : null;
+  }
+
+  // Nama yang dicari: nama usaha utuh, bagian sebelum kurung, dan nama di dalam kurung (biasanya KRT)
+  function nameQueries(item) {
+    const out = [];
+    for (const t of item.targets) {
+      const nm = String(t.nama || "").trim();
+      const inner = (nm.match(/\(([^)]+)\)/) || [])[1];
+      out.push(nm, nm.split("(")[0], inner);
+    }
+    return Array.from(new Set(out.map((x) => String(x || "").replace(/\s+/g, " ").trim()).filter((x) => x.length >= 3)));
+  }
+
+  async function findInList(item) {
+    await waitTableSettled();
+    log(`Cari lewat filter: ${[item.kec, item.desa, item.sls].filter(Boolean).join(" › ") || "(tanpa wilayah)"}`);
+    await applyFilterNames(item);
+    const names = nameQueries(item);
+    for (const q of names) {
+      const want = normalize(q);
+      const rows = await searchList(q);
+      const exact = rows.filter((tr) => Array.from(tr.querySelectorAll("td")).some((td) => normalize(td.innerText) === want));
+      if (exact.length > 1)
+        throw Object.assign(new Error(`ada ${exact.length} dokumen bernama "${q}" di daftar, tidak bisa dipastikan — cek manual`), { soft: true });
+      if (exact.length === 1) {
+        const href = await rowLink(exact[0]);
+        if (!href) throw Object.assign(new Error(`"${q}" ketemu di daftar, tapi link Review-nya tidak terbaca`), { soft: true });
+        log(`Ketemu "${q}" di daftar`);
+        return href;
+      }
+    }
+    throw Object.assign(new Error(`tidak ketemu di daftar (cari: ${names.join(" / ")})`), { soft: true });
+  }
+
+  const needFind = (why) => Object.assign(new Error(why), { needFind: true });
 
   // ---------- Review -> Edit (revoke bila perlu) ----------
   async function reviewToEdit() {
@@ -816,7 +1082,7 @@
     ["submit", "Kirim"],
     ["approve", "Approve"],
   ];
-  const STEP_LABEL = Object.fromEntries(STEPS);
+  const STEP_LABEL = { ...Object.fromEntries(STEPS), find: "Cari via filter" };
   const STAGE_TIMEOUT_MS = 4 * 60 * 1000;
   let busy = false;
 
@@ -836,29 +1102,33 @@
     updateHud();
   }
 
+  const did = (item) => item.docId || item.id;
   const docUrl = (item) => item.url || `${location.origin}/app/assignment/${item.prefix}/${item.id}`;
   const onReviewOf = (id) => new RegExp(`/app/assignment/[^/]+/${id}/?$`, "i").test(location.pathname);
   const onEditOf = (id) => new RegExp(`/app/assignment/[^/]+/${id}/edit`, "i").test(location.pathname);
 
   // Hasil true jika sudah di halaman Review dokumen ini (kalau belum: pindah halaman, tick berikutnya lanjut)
   function ensureReview(item) {
-    if (onReviewOf(item.id)) return true;
+    if (onReviewOf(did(item))) return true;
     const r = loadRun();
     if (Date.now() - (r.navAt || 0) < 4000) return false;
     const tries = (r.cur && r.cur.navTries) || 0;
-    if (tries >= 4) throw new Error("dokumen tidak bisa dibuka (cek link / akses akun)");
+    if (tries >= 4) {
+      if (!item.searched) throw needFind("link tidak membuka dokumen");
+      throw new Error("dokumen tidak bisa dibuka (cek link / akses akun)");
+    }
     r.cur.navTries = tries + 1;
     r.navAt = Date.now();
     saveRun(r);
     log(`Membuka dokumen${tries ? ` (percobaan ${tries + 1})` : ""}`);
-    location.href = tries % 2 === 0 ? docUrl(item) : `${location.origin}/app/assignment-detail/${item.id}`;
+    location.href = tries % 2 === 0 ? docUrl(item) : `${location.origin}/app/assignment-detail/${did(item)}`;
     return false;
   }
   // Dari halaman assignment-detail: ikuti link Review-nya
   function followDetailLink(item) {
-    if (!new RegExp(`/app/assignment-detail/${item.id}`, "i").test(location.pathname)) return false;
+    if (!new RegExp(`/app/assignment-detail/${did(item)}`, "i").test(location.pathname)) return false;
     const a = Array.from(document.querySelectorAll('a[href*="/app/assignment/"]')).find((x) =>
-      x.getAttribute("href").toLowerCase().includes(item.id),
+      x.getAttribute("href").toLowerCase().includes(did(item)),
     );
     if (!a) return false;
     const r = loadRun();
@@ -880,6 +1150,8 @@
       .join(" · ");
 
   function finishItem(id, status, reason) {
+    const it = loadQueue().find((q) => q.id === id);
+    if (it && it.foundBy === "filter") reason += " · dokumen dicari lewat filter";
     updateItem(id, { status, reason, doneAt: new Date().toISOString() });
     const r = loadRun();
     r.cur = null;
@@ -917,9 +1189,19 @@
       if (Date.now() - (run.phaseAt || 0) > STAGE_TIMEOUT_MS)
         return finishItem(item.id, "red", `macet di tahap "${STEP_LABEL[cur.stage] || cur.stage}"`);
       try {
+        if (cur.stage !== "find" && forbiddenPage()) throw forbiddenError();
         await runStage(run, cur, item);
       } catch (e) {
         console.error("[Koreksi R.27]", e);
+        const untouched = !cur.revoked && ["open", "check", "edit"].includes(cur.stage);
+        if ((e.needFind || e.forbidden) && untouched && !item.searched) {
+          log(`⚠ ${e.forbidden ? "halaman Forbidden" : e.message} → cari dokumen lewat filter`);
+          return setStage("find");
+        }
+        if (e.forbidden) {
+          const edited = cur.revoked || ["fill", "submit"].includes(cur.stage) ? " (dokumen sempat dibuka edit, cek manual)" : "";
+          return finishItem(item.id, "forbidden", `halaman Forbidden (tidak ada akses), dilewati${edited}`);
+        }
         pressKey("Escape");
         const where = STEP_LABEL[cur.stage] || cur.stage;
         const after = cur.revoked || cur.stage === "fill" || cur.stage === "submit" ? " — dokumen sudah dibuka edit, cek manual" : "";
@@ -934,10 +1216,42 @@
     const conf = loadConf();
     switch (cur.stage) {
       case "open": {
-        if (onEditOf(item.id)) return setStage("fill", { revoked: true });
+        if (onEditOf(did(item))) return setStage("fill", { revoked: true });
         if (followDetailLink(item)) return;
         if (!ensureReview(item)) return;
         return setStage(conf.checkFirst ? "check" : "edit");
+      }
+      case "find": {
+        const listUrl = loadJson(LIST_KEY, "");
+        if (!isListPage()) {
+          if (!listUrl)
+            throw Object.assign(
+              new Error("link Excel tidak membuka dokumen yang benar & halaman daftar assignment belum dikenal — buka halaman daftar assignment sekali, lalu ulangi"),
+              { soft: true },
+            );
+          if (location.pathname !== new URL(listUrl).pathname) {
+            const r = loadRun();
+            if (Date.now() - (r.navAt || 0) < 8000) return;
+            r.navAt = Date.now();
+            saveRun(r);
+            log("Buka halaman daftar assignment");
+            location.href = listUrl;
+            return;
+          }
+          if (!(await waitFor(isListPage, 20000))) throw new Error("halaman daftar assignment tidak termuat");
+        }
+        updateItem(item.id, { searched: true });
+        const href = await findInList(item);
+        const m = href.match(/\/app\/assignment\/([0-9a-f-]{36})\/([0-9a-f-]{36})/i);
+        const docId = m[2].toLowerCase();
+        updateItem(item.id, { docId, prefix: m[1].toLowerCase(), url: href, foundBy: "filter" });
+        log(docId === item.id ? "Dokumen hasil filter sama dengan link Excel" : "Dokumen lain ditemukan lewat filter, dibuka");
+        setStage("open");
+        const r = loadRun();
+        r.navAt = Date.now();
+        saveRun(r);
+        location.href = href;
+        return;
       }
       case "check": {
         // Baca di halaman Review (tanpa Edit/revoke). Kalau semua sudah benar -> selesai tanpa menyentuh dokumen
@@ -946,22 +1260,29 @@
           const { results, notes } = await scanDoc(item, false);
           if (results.every((r) => r && r.state === "already"))
             return finishItem(item.id, "already", `tidak diubah, sudah sesuai · ${summary(item, results)}`);
+          // Tidak ada satu kartu pun yang cocok: kemungkinan link membuka dokumen lain -> cari dulu, jangan revoke
+          if (results.every((r) => !r)) {
+            const why = `tidak ada kartu yang sesuai nama_usaha & nilai Excel (${notes.join("; ") || "-"})`;
+            if (!item.searched) throw needFind(why);
+            throw Object.assign(new Error(`${why} — tidak di-revoke, cek manual`), { soft: true });
+          }
           if (results.some((r) => !r))
             log(`⚠ cek Review: ${notes.join("; ") || "sebagian kartu belum ketemu"}, lanjut ke Edit`);
           updateItem(item.id, { cardHints: results.filter(Boolean).map((r) => r.card) });
         } catch (e) {
+          if (e.needFind || e.forbidden || e.soft) throw e;
           log(`⚠ cek Review gagal (${e.message}), lanjut ke Edit`);
         }
         return setStage("edit");
       }
       case "edit": {
-        if (onEditOf(item.id)) return setStage("fill");
+        if (onEditOf(did(item))) return setStage("fill");
         if (!ensureReview(item)) return;
         const revoked = await reviewToEdit();
         return setStage("fill", { revoked });
       }
       case "fill": {
-        if (!onEditOf(item.id)) return setStage("edit");
+        if (!onEditOf(did(item))) return setStage("edit");
         const { results, notes } = await scanDoc(item, true);
         updateItem(item.id, { result: summary(item, results) });
         if (results.some((r) => !r))
@@ -969,8 +1290,8 @@
         return setStage("submit", { submitClicked: false, changed: results.some((r) => r.state === "set") });
       }
       case "submit": {
-        if (!onEditOf(item.id)) {
-          if (cur.submitClicked && onReviewOf(item.id)) return setStage("approve");
+        if (!onEditOf(did(item))) {
+          if (cur.submitClicked && onReviewOf(did(item))) return setStage("approve");
           throw new Error("halaman edit tertutup sebelum dikirim");
         }
         if (cur.submitClicked) {
@@ -1117,7 +1438,7 @@
       .k27-tog input:checked + .sw { background:var(--acc); }
       .k27-tog input:checked + .sw:after { transform:translateX(15px); }
       .k27-tog small { display:block; color:var(--mut); font-size:11.5px; margin-top:1px; }
-      .k27-stats { display:grid; grid-template-columns:repeat(8,1fr); gap:8px; }
+      .k27-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(82px,1fr)); gap:8px; }
       .k27-stat { border:1px solid var(--line); border-radius:12px; padding:10px 11px; cursor:pointer; background:var(--bg); text-align:left; transition:all .15s; }
       .k27-stat:hover { transform:translateY(-1px); }
       .k27-stat.on { border-color:var(--c); box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 16%,transparent); }
@@ -1243,7 +1564,7 @@
         <div class="seg" style="width:${pct(c.manual)}%;background:#c4b5fd"></div>
         <div class="seg" style="width:${pct(c.yellow + c.red + c.tested)}%;background:#fcd34d"></div>
       </div>
-      <div class="lbl"><span>${doneN} dari ${c.all} dokumen beres</span><span>${c.all ? Math.round(pct(doneN)) : 0}%</span></div>`;
+      <div class="lbl"><span>${doneN} dari ${c.all} dokumen beres${c.forbidden ? ` · ${c.forbidden} forbidden dilewati` : ""}</span><span>${c.all ? Math.round(pct(doneN)) : 0}%</span></div>`;
     root.querySelector("[data-stats]").innerHTML = [["all", "Semua", "#4f46e5"], ...Object.entries(STATUS).map(([k, v]) => [k, v.label, v.color])]
       .map(
         ([k, l, col]) =>
@@ -1337,7 +1658,7 @@
               <span style="flex:1"></span>
               <button class="k27-btn sm ghost" data-act="retry" title="Perlu cek, Gagal & Terisi (uji) dikembalikan ke Belum">↻ Ulangi yang bermasalah</button>
             </div>
-            <div class="k27-hint" style="margin-top:10px">Bisa dimulai dari halaman FASIH mana saja — tiap dokumen dibuka lewat link di Excel. Mode uji berhenti tepat sebelum Kirim. Pintasan panel: <b>Alt+9</b>.</div>
+            <div class="k27-hint" style="margin-top:10px">Bisa dimulai dari halaman FASIH mana saja — tiap dokumen dibuka lewat link di Excel. Kalau link-nya tidak membuka dokumen yang benar, dokumen dicari lewat Filter di halaman daftar assignment (buka halaman daftar itu sekali dulu). Mode uji berhenti tepat sebelum Kirim. Pintasan panel: <b>Alt+9</b>.</div>
           </div>
 
           <div class="k27-stats" data-stats></div>
@@ -1437,12 +1758,14 @@
         startRun({ onlyIds: ids.filter((id) => q.find((x) => x.id === id && x.status === "pending")) });
       }
       if (act === "retry") {
+        // Forbidden tidak ikut diulang (aksesnya tetap tidak ada); kalau mau, pakai 🏷 Atur status → Belum
         const q = loadQueue();
         let n = 0;
         q.forEach((x) => {
           if (/yellow|red|tested/.test(x.status)) {
             x.status = "pending";
             x.reason = "";
+            x.searched = false;
             n++;
           }
         });
@@ -1680,6 +2003,7 @@
   let lastPanelRefresh = 0;
   setInterval(() => {
     ensureLauncher();
+    if (isListPage() && loadJson(LIST_KEY, "") !== location.href) saveJson(LIST_KEY, location.href);
     const run = loadRun();
     if (run.running && !busy) tick();
     if (run.running) updateHud();
@@ -1689,5 +2013,5 @@
     }
   }, 700);
 
-  console.log("[Koreksi R.27 v1.3] Aktif. Tombol di kiri bawah (Alt+9).");
+  console.log("[Koreksi R.27 v1.6] Aktif. Tombol di kiri bawah (Alt+9).");
 })();
