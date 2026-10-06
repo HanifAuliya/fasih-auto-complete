@@ -7,8 +7,8 @@ Ada beberapa skrip di folder ini, untuk dua tahap pekerjaan yang berbeda:
 | File | Nama di Tampermonkey | Buat apa |
 |---|---|---|
 | [`script`](script) | FASIH Batch Otomatis - Tahap 1 + 2 | Transkripsi hasil penyisiran Excel ke dokumen FASIH: cari dokumen rumah tangga yang cocok, isi Blok P + Blok II (usaha lama/baru), tentukan KBLI, kirim & approve. |
-| [`fasih-koreksi-r27.user.js`](fasih-koreksi-r27.user.js) | FASIH Koreksi R.27 - Pendapatan (27.a / 27.b) | Ganti isian 27.a (`nilai_pendapatan`) = R.27a dan 27.b (`pendapatan_lain`) = R.27b di kartu usaha yang tepat, lalu kirim & approve. |
-| [`fasih-koreksi-gaji.user.js`](fasih-koreksi-gaji.user.js) | FASIH Koreksi Gaji + R.27 (gaji / 27.a / 27.b) | Dari Excel upah/gaji: ganti isian `gaji` = kolom Gaji, 27.a = R.27a, 27.b = R.27b, lalu kirim & approve. Yang gagal bisa dikerjakan manual lewat tombol ✍ (panel bantu di halaman dokumen) lalu ditandai "Selesai manual". Ekspor CSV/JSON. Pintasan Alt+6. |
+| [`fasih-koreksi-r27.user.js`](fasih-koreksi-r27.user.js) | FASIH Koreksi R.27 - Pendapatan (27.a / 27.b) | Ganti isian 27.a (`nilai_pendapatan`) = R.27a dan 27.b (`pendapatan_lain`) = R.27b di kartu usaha yang tepat, lalu kirim & approve. Pintasan Alt+9. |
+| [`fasih-koreksi-gaji.user.js`](fasih-koreksi-gaji.user.js) | FASIH Koreksi Gaji + R.27 (gaji / 27.a / 27.b) | Sama persis dengan Koreksi R.27 (semua fitur di bagian 3), ditambah isian `gaji` = kolom Gaji dari Excel upah/gaji. Pintasan Alt+6. |
 | [`fasih-ganti-wilayah-oss.user.js`](fasih-ganti-wilayah-oss.user.js) | FASIH OSS -> Keluarga: Pindah + Tautkan | Pindahkan assignment OSS ke SLS keluarganya (Ganti Wilayah), lalu tautkan ke usaha keluarga lewat "Pilih UMKM dalam satu SLS" — atau tutup/gandakan kalau memang tidak ada yang cocok. |
 
 Semuanya independen — bisa dipasang salah satu atau dua-duanya sekaligus.
@@ -204,22 +204,35 @@ Sama seperti skrip Batch Otomatis — memakai key `localStorage` yang sama (`fas
 
 ---
 
-## 3. `fasih-koreksi-r27.user.js` — Koreksi Pendapatan R.27
+## 3. `fasih-koreksi-r27.user.js` & `fasih-koreksi-gaji.user.js` — Koreksi R.27 / Koreksi Gaji
 
-Panel: tombol **"27 Koreksi Pendapatan"** di kiri bawah, atau **Alt+9**. Bisa mulai dari halaman FASIH mana saja, karena tiap dokumen dibuka lewat kolom `link` di Excel.
+Kedua skrip ini **isinya sama persis**; yang beda cuma blok `KONFIGURASI` di bagian atas file (isian yang diganti, kolom Excel, nama, pintasan). Antrean & progres keduanya terpisah, jadi boleh dipasang bersamaan.
 
-**Kolom Excel**: `link`, `nilai_pendapatan`, `pendapatan_lain` (nilai lama), `R.27a`, `R.27b` (nilai baru). Kolom opsional yang ikut ditampilkan: `nama_usaha`, `idsbr`, `kec`, `desa`, `nm_sls`, `assignment_status_alias`. Baris dengan link yang sama digabung jadi satu dokumen (keluarga dengan beberapa usaha).
+| | Koreksi R.27 | Koreksi Gaji |
+|---|---|---|
+| Tombol / pintasan | **27 Koreksi Pendapatan** · Alt+9 | **Rp Koreksi Gaji** · Alt+6 |
+| Isian yang diganti | 27.a ← `R.27a`, 27.b ← `R.27b` | `gaji` ← `Gaji`, 27.a ← `R.27a`, 27.b ← `R.27b` |
+| Kolom nilai lama | `nilai_pendapatan`, `pendapatan_lain` | `gaji` (kolom gaji yang di depan), `nilai_pendapatan`, `pendapatan_lain` |
 
-**Alur per dokumen**: Buka → (opsional) cek di Review → Edit/Revoke → ganti 27.a & 27.b → Kirim → Approve.
-- **Dokumen keluarga**: masuk Blok II, kartu usaha dicek satu per satu. **Dokumen usaha tunggal**: langsung ke satu-satunya kartu.
-- Kartu yang benar dikenali dari **nilai lamanya** (27.a & 27.b sama persis dengan Excel). Kalau nilainya sudah sama dengan nilai baru, kartu itu dianggap sudah sesuai. Kalau tidak ada yang persis sama, dipakai jumlah 27.a+27.b yang sama ditambah nama yang mirip (atau memang cuma ada satu kartu). Kalau tetap tidak cocok, kartu **tidak diubah** dan dokumennya ditandai "Perlu cek".
-- **Cek dulu di Review** (default aktif): dokumen yang nilainya sudah benar tidak di-revoke sama sekali.
+**Kolom Excel**: `link`, `nama_usaha`, kolom nilai lama & baru seperti tabel di atas. Opsional: `idsbr`, `kec`, `desa`, `nm_sls`, `assignment_status_alias`. Baris dengan link yang sama digabung jadi satu dokumen (keluarga dengan beberapa usaha). Di Excel gaji ada dua kolom "gaji": yang **paling dekat dengan R.27a** dibaca sebagai nilai baru, yang lain nilai lama.
+
+**Alur per dokumen**: Buka → (opsional) cek di Review → Edit/Revoke → ganti nilai → Kirim → Approve.
+- **Kartu yang benar** harus cocok **nilainya** (sama dengan nilai lama/baru di Excel; R.27 juga boleh jumlah 27.a+27.b yang sama) **dan nama usahanya** (`nama_usaha` Excel). Nama dibanding tanpa bagian (PEMILIK); nomor harus sama (SDN 1 ≠ SDN 2), jenjang sekolah harus sama (SD ≠ SMP), pemilik harus sama. Nilainya cocok tapi namanya beda → kartu tidak disentuh.
+- **Cek dulu di Review** (default aktif): dokumen yang nilainya sudah benar tidak di-revoke sama sekali; dokumen yang tidak memuat kartu yang cocok juga tidak di-revoke.
+- **Link salah / Forbidden / tidak bisa dibuka** → dicari di halaman daftar assignment lewat **Filter Kecamatan → Desa → SLS** (dari Excel): BKU (nama usaha) dulu, lalu dokumen keluarga (nama pemilik di dalam kurung); kalau di SLS kosong, dicari di seluruh desa. Kandidat dicoba satu per satu sampai ada yang memuat semua usahanya. **Buka halaman daftar assignment sekali** sebelum mulai supaya alamatnya diingat. Tetap Forbidden → status "Forbidden", dilewati.
 - **Galat**: default-nya berhenti dan ditandai "Perlu cek". Aktifkan "Submit Paksa kalau ada galat" kalau galatnya memang boleh diabaikan.
 - **Mode uji** (🧪 Uji 1 dokumen): berhenti tepat sebelum Kirim, lalu pilih "✓ Kirim sekarang" atau "Lewati".
+- **⏸ Jeda / ▶ Lanjut** di bar bawah saat berjalan.
+
+**Kerjakan manual** (tombol **✍** di tiap baris): dokumen dibuka di tab ini dan muncul panel bantu di kanan bawah — nilai lama → baru, isi kartu yang sedang terbuka, tombol **✏ Isi ke kartu ini**, **✓ Tandai selesai manual**, **🏷 Status…**, **↻ Otomatis**.
+
+**🏷 Atur status** (baris dicentang): pilih status hasil cek manual (Selesai, Sudah sesuai, Selesai manual, Perlu cek, Gagal, Forbidden, Belum) + catatan; ikut ke Laporan CSV.
+
+**Ekspor**: ⬇ Laporan CSV (nilai lama/baru tiap isian, status, keterangan, hasil, link dokumen yang dipakai) dan 💾 Ekspor / 📂 Impor JSON; nama file memuat nama wilayah.
 
 ## Catatan
 
-- Kedua skrip menyimpan semua progres di `localStorage` browser (per-perangkat, per-browser). Pakai fitur Ekspor/Impor di masing-masing panel kalau mau pindah laptop.
+- Semua skrip menyimpan semua progres di `localStorage` browser (per-perangkat, per-browser). Pakai fitur Ekspor/Impor di masing-masing panel kalau mau pindah laptop.
 - Mode uji di kedua skrip ada supaya baris pertama bisa diperiksa manual dulu sebelum menjalankan sisanya tanpa berhenti.
 - Jangan refresh halaman berulang-ulang saat kena rate limit (429) — skrip sudah menangani jeda otomatis dan akan lanjut sendiri.
 

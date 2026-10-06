@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         FASIH Koreksi Gaji + R.27 (gaji / 27.a / 27.b)
 // @namespace    hanif-bps-hst
-// @version      1.2
-// @description  Baca Excel koreksi upah/gaji, buka tiap dokumen, ganti gaji = kolom "Gaji", 27.a (nilai_pendapatan) = R.27a dan 27.b (pendapatan_lain) = R.27b di kartu usaha yang tepat, lalu Kirim & Approve. Yang gagal bisa dikerjakan manual dengan bantuan panel kecil di halaman dokumen.
+// @version      1.3
+// @description  Baca Excel koreksi upah/gaji, buka tiap dokumen, ganti gaji = kolom "Gaji", 27.a (nilai_pendapatan) = R.27a dan 27.b (pendapatan_lain) = R.27b di kartu usaha yang tepat (nama usaha wajib cocok), lalu Kirim & Approve. Link salah/Forbidden: dicari lewat filter desa/SLS (BKU lalu keluarga). Yang gagal bisa dikerjakan manual lewat panel bantu.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
 // @grant        none
@@ -16,8 +16,35 @@
   const CONF_KEY = "kgj_conf";
   const RUN_KEY = "kgj_run";
   const AREA_KEY = "kgj_area_titles";
+  const LIST_KEY = "kgj_list_url"; // halaman daftar assignment terakhir yang dibuka (untuk cari lewat filter)
   const HELPER_KEY = "kgj_helper_hidden";
   const RATE_KEY = "fasih_rate_limit"; // sama dengan skrip FASIH lain: jeda 429 berlaku bersama
+
+  // ===== KONFIGURASI =====
+  // Satu-satunya bagian yang beda antara skrip Koreksi R.27 dan Koreksi Gaji; sisanya sama persis.
+  const APP = {
+    name: "Koreksi Gaji",
+    version: "1.3",
+    title: "Koreksi Upah / Gaji",
+    badge: "Rp",
+    launch: "Koreksi Gaji",
+    hotkey: "6",
+    launchBottom: 160,
+    file: "koreksi-gaji",
+  };
+  // Isian yang diganti di kartu usaha:
+  // [kunci, id isian FASIH, label, kolom Excel nilai lama, kolom Excel nilai baru, nama kolom baru di Excel, nama di CSV]
+  // Kolom Excel ditulis tanpa spasi/titik/huruf besar ("R.27a" = "R27A").
+  // Excel gaji punya dua kolom "gaji": yang lama di depan, yang baru ("Gaji") tepat sebelum R.27a.
+  const FIELDS = [
+    ["g", "gaji", "Gaji", ["GAJI", "UPAHGAJI"], ["GAJI", "UPAHGAJI"], "Gaji", "gaji"],
+    ["a", "nilai_pendapatan", "27.a", ["NILAIPENDAPATAN"], ["R27A"], "R.27a", "27a"],
+    ["b", "pendapatan_lain", "27.b", ["PENDAPATANLAIN", "PENDAPATANLAINNYA"], ["R27B"], "R.27b", "27b"],
+  ];
+  // Kartu juga boleh dikenali dari jumlah isian ini (nama usaha tetap wajib cocok). Kosong = tidak dipakai:
+  // gaji ikut mengubah 27.a, jadi jumlahnya tidak bisa jadi patokan.
+  const SUM_KEYS = [];
+  // ===== akhir KONFIGURASI =====
 
   const DEFAULT_CONF = {
     speed: 1, // indeks SPEEDS
@@ -43,6 +70,7 @@
     yellow: { label: "Perlu cek", color: "#d97706" },
     red: { label: "Gagal", color: "#dc2626" },
     manual: { label: "Selesai manual", color: "#7c3aed" },
+    forbidden: { label: "Forbidden", color: "#64748b" },
   };
   const FINISHED = ["done", "already", "manual"];
 
@@ -54,6 +82,7 @@
     yellow: "perlu dicek lagi",
     red: "tidak bisa dikerjakan",
     manual: "dikoreksi sendiri di FASIH",
+    forbidden: "halaman Forbidden (akun tidak punya akses), dilewati",
   };
 
   // =========================================================================
@@ -70,7 +99,7 @@
     try {
       localStorage.setItem(key, JSON.stringify(value));
     } catch (e) {
-      console.error("[Koreksi Gaji] Gagal menyimpan.", e);
+      console.error(`[${APP.name}] Gagal menyimpan.`, e);
     }
   };
   const loadQueue = () => loadJson(QUEUE_KEY, []);
@@ -99,7 +128,7 @@
     const cf = loadConf();
     cf.speed = Math.min(SPEEDS.length - 1, (Number(cf.speed) || 0) + 1);
     saveConf(cf);
-    console.warn(`[Koreksi Gaji] 429 dari server. Berhenti ${minutes} menit, kecepatan turun ke ${SPEEDS[cf.speed].name}.`);
+    console.warn(`[${APP.name}] 429 dari server. Berhenti ${minutes} menit, kecepatan turun ke ${SPEEDS[cf.speed].name}.`);
   }
   (function watch429() {
     const origFetch = window.fetch;
@@ -143,10 +172,25 @@
     }
     return Date.now() - t0;
   }
+  let forbiddenAt = 0;
+  let forbiddenLast = false;
+  function forbiddenPage() {
+    if (Date.now() - forbiddenAt < 1000) return forbiddenLast;
+    forbiddenAt = Date.now();
+    if (!document.body || document.querySelector(".fasih-form-sidebar")) return (forbiddenLast = false);
+    const text = Array.from(document.body.children)
+      .filter((el) => !/^kgj-/.test(el.id || "") && !/^(SCRIPT|STYLE)$/.test(el.tagName))
+      .map((el) => el.innerText || "")
+      .join(" ");
+    return (forbiddenLast = /\b403\b.{0,20}(forbidden|akses)|forbidden|akses ditolak|access denied|tidak (memiliki|punya) (hak )?akses/i.test(text));
+  }
+  const forbiddenError = () => Object.assign(new Error("halaman Forbidden (tidak ada akses)"), { forbidden: true });
+
   async function waitFor(check, timeoutMs) {
     let start = Date.now();
     while (Date.now() - start < timeoutMs) {
       if (stopRequested) return null;
+      if (forbiddenPage()) throw forbiddenError();
       const result = check();
       if (result) return result;
       start += await sleep(T().poll);
@@ -247,6 +291,56 @@
     return best;
   }
 
+  // Nama usaha di dokumen harus sesuai nama_usaha Excel (bukan cuma nilainya yang cocok).
+  // Dibanding tanpa bagian (PEMILIK); nomor harus sama (SDN 1 ≠ SDN 2), jenjang sekolah harus sama
+  // (SD ≠ SMP), dan kalau keduanya mencantumkan pemilik, pemiliknya harus sama ("SAIPUL" = "SAIPUL RAHMAN").
+  const ABBR = [
+    [/\bSDN\b/g, "SD NEGERI"],
+    [/\bSMPN\b/g, "SMP NEGERI"],
+    [/\bSMAN\b/g, "SMA NEGERI"],
+    [/\bSMKN\b/g, "SMK NEGERI"],
+    [/\bSEKOLAH DASAR\b/g, "SD"],
+    [/\bSEKOLAH MENENGAH PERTAMA\b/g, "SMP"],
+    [/\bSEKOLAH MENENGAH ATAS\b/g, "SMA"],
+    [/\bSEKOLAH MENENGAH KEJURUAN\b/g, "SMK"],
+    [/\bTAMAN KANAK KANAK\b/g, "TK"],
+    [/\bMADRASAH IBTIDAIYAH\b/g, "MI"],
+    [/\bNEGERI\b/g, "N"],
+  ];
+  const LEVELS = ["TK", "PAUD", "SD", "MI", "SMP", "MTS", "SMA", "MA", "SMK"];
+  const baseName = (t) => {
+    let s = normalize(String(t || "").replace(/\([^)]*\)/g, " "));
+    for (const [re, to] of ABBR) s = s.replace(re, to);
+    return s.replace(/\bN\b/g, "").replace(/\s+/g, " ").trim();
+  };
+  const digitsOf = (s) => (s.match(/\d+/g) || []).map(Number).join(",");
+  const ownerOf = (t) => normalize((String(t || "").match(/\(([^)]+)\)/) || [])[1]);
+  const levelOf = (s) => s.split(" ").find((w) => LEVELS.includes(w)) || "";
+  function sameOwner(a, b) {
+    if (levenshteinRatio(a, b) >= 0.8) return true;
+    const [x, y] = a.length <= b.length ? [a, b] : [b, a];
+    const yt = new Set(y.split(" "));
+    return x.split(" ").every((w) => yt.has(w));
+  }
+  function nameMatch(doc, excel) {
+    const c = baseName(doc) || normalize(doc);
+    const e = baseName(excel) || normalize(excel);
+    if (!c || !e) return 0;
+    if (digitsOf(c) !== digitsOf(e)) return 0;
+    const lc = levelOf(c);
+    const le = levelOf(e);
+    if (lc && le && lc !== le) return 0;
+    const oc = ownerOf(doc);
+    const oe = ownerOf(excel);
+    if (oc && oe && !sameOwner(oc, oe)) return 0;
+    const ct = new Set(c.split(" "));
+    const et = e.split(" ");
+    const common = et.filter((w) => ct.has(w)).length;
+    const overlap = common / Math.max(1, Math.min(ct.size, et.length));
+    return Math.max(levenshteinRatio(c, e), overlap * 0.95);
+  }
+  const NAME_OK = 0.6;
+
   // =========================================================================
   // MEMBACA EXCEL (.xlsx = zip berisi XML; tanpa pustaka luar)
   // =========================================================================
@@ -325,13 +419,10 @@
   }
 
   // Kolom dicocokkan tanpa spasi/titik/huruf besar: "R.27a" = "r27a" = "R 27 A".
-  // Ada dua kolom "gaji": yang lama (gaji) di depan, yang baru (Gaji) tepat sebelum R.27a.
+  // Baris judul = baris yang memuat kolom R.27a. Kolom nilai (lama/baru) diambil dari FIELDS.
+  const ANCHOR = "R27A";
   const COLS = {
     link: ["LINK", "URL", "LINKFASIH"],
-    oldA: ["NILAIPENDAPATAN"],
-    oldB: ["PENDAPATANLAIN", "PENDAPATANLAINNYA"],
-    newA: ["R27A"],
-    newB: ["R27B"],
     nama: ["NAMAUSAHA"],
     idsbr: ["IDSBR"],
     kec: ["KEC", "KECAMATAN", "NMKEC"],
@@ -340,23 +431,27 @@
     status: ["ASSIGNMENTSTATUSALIAS", "STATUS"],
     no: ["NO"],
   };
-  const REQUIRED = ["link", "oldG", "oldA", "oldB", "newG", "newA", "newB"];
-  const COL_NAME = { oldG: "gaji (lama)", newG: "Gaji (baru, sebelum R.27a)" };
 
   async function parseWorkbook(arrayBuffer) {
     const sheets = await readXlsx(arrayBuffer);
     for (const sheet of sheets) {
-      const hi = sheet.rows.findIndex((r) => r.some((h) => squash(h) === "R27A"));
+      const hi = sheet.rows.findIndex((r) => r.some((h) => squash(h) === ANCHOR));
       if (hi < 0) continue;
       const headers = sheet.rows[hi].map(squash);
+      const anchor = headers.indexOf(ANCHOR);
       const col = {};
       for (const [k, names] of Object.entries(COLS)) col[k] = headers.findIndex((h) => names.includes(h));
-      const gajiCols = headers.map((h, i) => (h === "GAJI" || h === "UPAHGAJI" ? i : -1)).filter((i) => i >= 0);
-      col.newG = gajiCols.filter((i) => i < col.newA).pop() ?? -1;
-      col.oldG = gajiCols.find((i) => i !== col.newG) ?? -1;
-      const missing = REQUIRED.filter((k) => col[k] < 0);
-      if (missing.length)
-        throw new Error(`kolom tidak ada di sheet "${sheet.name}": ${missing.map((k) => COL_NAME[k] || COLS[k][0]).join(", ")}`);
+      const missing = col.link < 0 ? ["link"] : [];
+      // Nilai baru = kolom yang paling dekat dengan R.27a; nilai lama = kolom bernama sama yang lain
+      // (contoh Excel gaji: "gaji" lama di depan, "Gaji" baru tepat sebelum R.27a)
+      for (const [k, , label, oldNames, newNames] of FIELDS) {
+        const at = (names) => headers.map((h, i) => (names.includes(h) ? i : -1)).filter((i) => i >= 0);
+        col[`new_${k}`] = at(newNames).sort((x, y) => Math.abs(x - anchor) - Math.abs(y - anchor))[0] ?? -1;
+        col[`old_${k}`] = at(oldNames).find((i) => i !== col[`new_${k}`]) ?? -1;
+        if (col[`old_${k}`] < 0) missing.push(`${label} lama (${oldNames[0]})`);
+        if (col[`new_${k}`] < 0) missing.push(`${label} baru (${newNames[0]})`);
+      }
+      if (missing.length) throw new Error(`kolom tidak ada di sheet "${sheet.name}": ${missing.join(", ")}`);
       const byDoc = new Map();
       let skipped = 0;
       sheet.rows.slice(hi + 1).forEach((r, i) => {
@@ -374,8 +469,8 @@
           no: get("no"),
           nama: get("nama"),
           idsbr: get("idsbr"),
-          old: { g: parseNum(get("oldG")) || 0, a: parseNum(get("oldA")) || 0, b: parseNum(get("oldB")) || 0 },
-          neu: { g: parseNum(get("newG")) || 0, a: parseNum(get("newA")) || 0, b: parseNum(get("newB")) || 0 },
+          old: Object.fromEntries(FIELDS.map(([k]) => [k, parseNum(get(`old_${k}`)) || 0])),
+          neu: Object.fromEntries(FIELDS.map(([k]) => [k, parseNum(get(`new_${k}`)) || 0])),
         };
         if (!byDoc.has(id))
           byDoc.set(id, {
@@ -512,32 +607,20 @@
     if (now !== n) throw new Error(`isian ${id} tidak mau berubah (sekarang ${rupiah(now)}, seharusnya ${rupiah(n)})`);
   }
 
-  // Tiga isian yang diganti di kartu usaha: kunci di Excel, id isian FASIH, label
-  const FIELDS = [
-    ["g", "gaji", "Gaji"],
-    ["a", "nilai_pendapatan", "27.a"],
-    ["b", "pendapatan_lain", "27.b"],
-  ];
   const norm0 = (v) => (v === null || v === undefined ? 0 : v);
   const eqAll = (x, y) => FIELDS.every(([k]) => x[k] === y[k]);
   // Tiap isian bernilai lama atau baru (bisa campur kalau sebelumnya sempat terisi sebagian)
   const oldOrNew = (cur, t) => FIELDS.every(([k]) => cur[k] === t.old[k] || cur[k] === t.neu[k]);
+  const sumOf = (x) => SUM_KEYS.reduce((n, k) => n + (x[k] || 0), 0);
   const fmtCur = (cur) => FIELDS.map(([k, , l]) => `${l} ${rupiah(cur[k])}`).join(" / ");
   const fmtChange = (cur, t) =>
     FIELDS.filter(([k]) => cur[k] !== t.neu[k])
       .map(([k, , l]) => `${l} ${rupiah(cur[k])} → ${rupiah(t.neu[k])}`)
       .join(", ");
+  const readFields = (inst) => Object.fromEntries(FIELDS.map(([k, id]) => [k, norm0(readBox(box(id, inst)))]));
 
-  async function readCard(inst) {
-    const pend = await waitBox("nilai_pendapatan", inst, 5000);
-    if (!pend) return null;
-    await waitFor(() => box("gaji", inst), 3000);
-    const cur = {};
-    for (const [k, id] of FIELDS) cur[k] = norm0(readBox(box(id, inst)));
-    return cur;
-  }
-
-  // Ganti ketiga isian di kartu yang sedang terbuka. Yang turun dulu baru yang naik.
+  // Ganti semua isian di kartu yang sedang terbuka. Yang turun dulu baru yang naik,
+  // supaya total sementara tidak melonjak
   async function writeCard(inst, t, cur) {
     const steps = FIELDS.map(([k, id]) => [id, t.neu[k], cur[k]]);
     steps.sort((x, y) => x[1] - x[2] - (y[1] - y[2]));
@@ -546,58 +629,84 @@
 
   // Telusuri kartu usaha dokumen ini & cocokkan ke baris Excel.
   // write=false: cuma baca (aman di halaman Review). write=true: ganti nilainya.
-  // Kartu dikenali dari nilainya (gaji, 27.a, 27.b sama dengan nilai lama/baru di Excel),
-  // atau dari nama yang mirip / satu-satunya kartu.
+  // Kartu dikenali dari nilainya (lama / baru / jumlahnya sama) DAN nama usahanya harus sesuai Excel.
   async function scanDoc(item, write) {
     const area = await gotoArea();
     const targets = item.targets;
     const results = targets.map(() => null);
     const notes = [];
 
-    const decide = (cur, name, onlyOne) => {
-      for (let i = 0; i < targets.length; i++) if (!results[i] && eqAll(cur, targets[i].neu)) return { i, kind: "new" };
-      for (let i = 0; i < targets.length; i++) if (!results[i] && oldOrNew(cur, targets[i])) return { i, kind: "old" };
+    // Nama-nama usaha yang terbaca di kartu/isian yang sedang terbuka
+    const namesAt = (inst, cardName) =>
+      Array.from(
+        new Set(
+          [cardName, ...["nama_komersial", "nama_usaha_edit", "nama_usaha"].map((id) => {
+            const b = box(id, inst);
+            const i = b && b.querySelector("input, textarea");
+            return i ? i.value : "";
+          })]
+            .map((x) => String(x || "").trim())
+            .filter(Boolean),
+        ),
+      );
+
+    // Kartu cocok = nilainya cocok (lama / baru / jumlahnya sama) DAN nama usahanya sesuai Excel
+    const decide = (cur, names) => {
+      const sim = targets.map((t) => Math.max(0, ...names.map((n) => nameMatch(n, t.nama))));
+      const nameOk = (i) => sim[i] >= NAME_OK;
+      const open = (i) => !results[i];
+      for (let i = 0; i < targets.length; i++) if (open(i) && nameOk(i) && eqAll(cur, targets[i].neu)) return { i, kind: "new" };
+      for (let i = 0; i < targets.length; i++) if (open(i) && nameOk(i) && oldOrNew(cur, targets[i])) return { i, kind: "old" };
       let best = null;
       for (let i = 0; i < targets.length; i++) {
-        if (results[i]) continue;
-        const sim = nameSim(name, targets[i].nama);
-        if ((onlyOne || sim >= 0.6) && (!best || sim > best.sim)) best = { i, kind: "name", sim };
+        const t = targets[i];
+        if (!SUM_KEYS.length || !open(i) || !nameOk(i) || sumOf(cur) !== sumOf(t.neu)) continue;
+        if (!best || sim[i] > best.sim) best = { i, kind: "sum", sim: sim[i] };
       }
-      return best;
+      if (best) return best;
+      // Nilainya cocok tapi namanya beda -> jangan disentuh, beri tahu kenapa
+      const byValue = targets.findIndex((t, i) => open(i) && oldOrNew(cur, t));
+      return byValue >= 0 ? { mismatch: targets[byValue].nama } : null;
     };
 
-    const handle = async (inst, name, onlyOne) => {
-      const cur = await readCard(inst);
-      if (!cur) return notes.push(`kartu "${name || "-"}": isian 27.a tidak muncul`);
-      const d = decide(cur, name, onlyOne);
-      if (!d) return notes.push(`kartu "${name || "-"}": ${fmtCur(cur)} tidak cocok dengan Excel`);
+    const handle = async (inst, cardName) => {
+      const pend = await waitBox("nilai_pendapatan", inst, 5000);
+      if (!pend) return notes.push(`kartu "${cardName || "-"}": isian 27.a tidak muncul`);
+      await waitFor(() => namesAt(inst, cardName).length, 2000);
+      const names = namesAt(inst, cardName);
+      const name = cardName || names[0] || "";
+      if (!names.length) return notes.push(`kartu "${name || "-"}": nama usaha tidak terbaca, tidak bisa dipastikan`);
+      await waitFor(() => FIELDS.every(([, id]) => box(id, inst)), 3000);
+      const cur = readFields(inst);
+      const d = decide(cur, names);
+      if (d && d.mismatch)
+        return notes.push(`kartu "${name}": nilainya cocok, tapi nama usahanya beda dengan Excel "${d.mismatch}"`);
+      if (!d) return notes.push(`kartu "${name}": ${fmtCur(cur)} tidak cocok dengan Excel`);
       const t = targets[d.i];
       if (d.kind === "new") {
         results[d.i] = { state: "already", card: name, cur };
-        return log(`✓ "${name || t.nama}" sudah sesuai`);
+        return log(`✓ "${name}" sudah sesuai`);
       }
-      if (d.kind === "name") log(`⚠ "${name || t.nama}" nilainya beda dari Excel (${fmtCur(cur)}), dikenali dari nama`);
       if (!write) {
         results[d.i] = { state: "todo", card: name, cur };
-        return log(`"${name || t.nama}" perlu diganti: ${fmtChange(cur, t)}`);
+        return log(`"${name}" perlu diganti: ${fmtChange(cur, t)}`);
       }
-      log(`Ganti "${name || t.nama}": ${fmtChange(cur, t)}`);
+      log(`Ganti "${name}" (= Excel "${t.nama}"): ${fmtChange(cur, t)}`);
       await writeCard(inst, t, cur);
       results[d.i] = { state: "set", card: name, cur };
     };
 
     if (area.kind === "direct") {
       const el = visiblePend();
-      await handle(instOf(el), "", targets.length === 1);
+      await handle(instOf(el), "");
     } else {
       const cards = usahaCards();
       if (!cards.length) throw new Error("tidak ada kartu usaha di Blok II");
-      const onlyOne = cards.length === 1 && targets.length === 1;
       const hints = (item.cardHints || []).map(normalize);
       const order = cards
         .map((c, idx) => ({
           idx,
-          score: Math.max(...targets.map((t) => nameSim(c.name, t.nama))) + (hints.includes(normalize(c.name)) ? 10 : 0),
+          score: Math.max(...targets.map((t) => Math.max(nameMatch(c.name, t.nama), nameSim(c.name, t.nama) / 2))) + (hints.includes(normalize(c.name)) ? 10 : 0),
         }))
         .sort((x, y) => y.score - x.score);
       log(`${cards.length} kartu usaha di "${area.title}"`);
@@ -609,11 +718,227 @@
         const card = usahaCards()[o.idx];
         if (!card) continue;
         const inst = await openCard(card);
-        await handle(inst, card.name, onlyOne);
+        await handle(inst, card.name);
       }
     }
     return { results, notes };
   }
+
+  // =========================================================================
+  // CARI LEWAT FILTER di halaman daftar assignment (kalau link Excel tidak membuka dokumen yang benar)
+  // =========================================================================
+  const REVIEW_HREF = /\/app\/assignment\/[0-9a-f-]{36}\/[0-9a-f-]{36}/i;
+  const searchInput = () => document.querySelector('input[placeholder^="Cari"]:not([cmdk-input])');
+  const tableText = () => (document.querySelector("table tbody") || {}).innerText || "";
+  const isListPage = () =>
+    !REVIEW_HREF.test(location.pathname) &&
+    !/\/app\/assignment-detail\//i.test(location.pathname) &&
+    !!searchInput() &&
+    !!document.querySelector("table thead");
+  function setInputValue(input, value) {
+    input.focus();
+    const proto = input.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, "value").set.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  function isLoading() {
+    const spin = Array.from(document.querySelectorAll('[class*="animate-spin"], [class*="skeleton"], [aria-busy="true"]')).some(
+      (el) => visible(el) && !el.closest(OWN),
+    );
+    return spin || /loading|memuat/i.test(tableText());
+  }
+  async function waitTableSettled(before) {
+    if (before !== undefined) await waitFor(() => tableText() !== before || isLoading(), 6000);
+    let start = Date.now();
+    let last = tableText();
+    let stableSince = Date.now();
+    while (Date.now() - start < 30000 && !stopRequested) {
+      const held = await sleep(250);
+      start += held;
+      stableSince += held;
+      const now = tableText();
+      if (now !== last || isLoading()) {
+        last = now;
+        stableSince = Date.now();
+      } else if (Date.now() - stableSince >= W(1200)) break;
+    }
+    await sleep(W(300));
+  }
+
+  // "[040] HARUYAN" -> { code: "040", name: "HARUYAN" }
+  function parseOption(text) {
+    const m = String(text || "").trim().match(/^\[?(\d+)\]?\s*(.*)$/);
+    return m ? { code: m[1], name: m[2].trim() } : { code: "", name: String(text || "").trim() };
+  }
+  const filterButton = () =>
+    Array.from(document.querySelectorAll('button[aria-haspopup="dialog"]')).find(
+      (b) => b.querySelector(".tabler-icon-filter") && !b.closest("th"),
+    );
+  function fieldButton(label) {
+    const lab = Array.from(document.querySelectorAll("label")).find((l) => squash(l.innerText) === squash(label) && !l.closest(OWN));
+    return lab ? lab.parentElement.querySelector('button[role="combobox"]') : null;
+  }
+  const visibleOptions = () =>
+    Array.from(document.querySelectorAll('[cmdk-item], [role="option"]')).filter((el) => visible(el) && !el.closest(OWN) && el.innerText.trim());
+  const optionText = (el) => el.getAttribute("data-value") || el.innerText;
+  const shownText = (btn) => ((btn && (btn.querySelector("span") || btn).innerText) || "").trim();
+
+  // Pilih opsi filter berdasarkan NAMA (Excel berisi nama kecamatan/desa/SLS, bukan kode)
+  async function pickByName(getBtn, name, label) {
+    if (!name) return false;
+    const btn = getBtn() || (await waitFor(getBtn, 8000));
+    if (!btn) return false;
+    const want = normalize(name);
+    const same = (t) => normalize(parseOption(t).name) === want || normalize(t) === want;
+    if (same(shownText(btn))) return true;
+    triggerClick(btn);
+    await waitFor(() => visibleOptions().length, 6000);
+    let count = -1;
+    for (let i = 0; i < 8 && visibleOptions().length !== count; i++) {
+      count = visibleOptions().length; // tunggu daftar selesai dimuat
+      await sleep(W(200));
+    }
+    const find = () => visibleOptions().find((el) => same(optionText(el)) || same(el.innerText));
+    let target = find();
+    const input = document.querySelector("input[cmdk-input]");
+    if (!target && input) {
+      setInputValue(input, name);
+      target = await waitFor(find, 4000);
+    }
+    if (!target) {
+      pressKey("Escape");
+      await sleep(300);
+      log(`⚠ filter ${label} "${name}" tidak ada di pilihan, dilewati`);
+      return false;
+    }
+    triggerClick(target);
+    await waitFor(() => same(shownText(getBtn())), 5000);
+    await sleep(W(500)); // isian di bawahnya dimuat ulang
+    return true;
+  }
+
+  // Kosongkan pilihan combobox (filter SLS) kalau ada opsi "Semua"/kosong; kalau tidak ada, biarkan
+  async function clearCombo(getBtn) {
+    const btn = getBtn();
+    if (!btn || !parseOption(shownText(btn)).code) return;
+    triggerClick(btn);
+    await waitFor(() => visibleOptions().length, 4000);
+    const all = visibleOptions().find((el) => !parseOption(el.innerText).code || /^(SEMUA|ALL|-+)$/i.test(el.innerText.trim()));
+    if (all) triggerClick(all);
+    else pressKey("Escape");
+    await sleep(W(400));
+  }
+
+  async function applyFilterNames(item, withSls) {
+    const btn = filterButton();
+    if (!btn) return log("⚠ tombol Filter tidak ada, langsung cari nama");
+    const before = tableText();
+    if (!fieldButton("KECAMATAN")) {
+      triggerClick(btn);
+      if (!(await waitFor(() => fieldButton("KECAMATAN"), 6000))) return log("⚠ isian Filter tidak muncul, langsung cari nama");
+    }
+    if (await pickByName(() => fieldButton("KECAMATAN"), item.kec, "Kecamatan"))
+      if (await pickByName(() => fieldButton("DESA"), item.desa, "Desa"))
+        if (fieldButton("SLS")) {
+          if (withSls) await pickByName(() => fieldButton("SLS"), item.sls, "SLS");
+          else await clearCombo(() => fieldButton("SLS"));
+        }
+    const field = fieldButton("KECAMATAN");
+    const scope = (field && field.closest('[role="dialog"]')) || document;
+    const apply = Array.from(scope.querySelectorAll("button")).find((b) => /^(TERAPKAN|APPLY|SIMPAN|TAMPILKAN|OK)$/i.test(b.innerText.trim()));
+    if (apply) triggerClick(apply);
+    else pressKey("Escape");
+    await sleep(400);
+    if (fieldButton("KECAMATAN") && filterButton()) triggerClick(filterButton());
+    await waitTableSettled(before);
+  }
+
+  async function searchList(query) {
+    const input = searchInput();
+    if (!input) throw new Error('kotak "Cari..." tidak ditemukan');
+    if (input.value.trim().toUpperCase() !== query.toUpperCase()) {
+      const before = tableText();
+      setInputValue(input, query);
+      await sleep(W(300));
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
+      await waitTableSettled(before);
+    }
+    return Array.from(document.querySelectorAll("table tbody tr")).filter((tr) => tr.querySelectorAll("td").length > 2);
+  }
+
+  // Link Review dokumen pada satu baris tabel (langsung di baris, atau muncul setelah kodenya diklik)
+  async function rowLink(tr) {
+    const direct = Array.from(tr.querySelectorAll("a[href]")).find((a) => REVIEW_HREF.test(a.href));
+    if (direct) return direct.href;
+    const links = () => Array.from(document.querySelectorAll("a[href]")).filter((a) => REVIEW_HREF.test(a.href) && !a.closest(OWN));
+    const before = new Set(links().map((a) => a.href));
+    const kodeBtn = tr.querySelector("td button:not([title]):not([aria-haspopup])");
+    if (!kodeBtn) return null;
+    triggerClick(kodeBtn);
+    const a = await waitFor(() => links().find((x) => visible(x) && !before.has(x.href)), 4000);
+    return a ? a.href : null;
+  }
+
+  // Nama yang dicari: nama usaha utuh, bagian sebelum kurung, dan nama di dalam kurung (biasanya KRT)
+  // Yang dicari: BKU (nama usaha utuh / tanpa kurung) dulu, lalu dokumen keluarga (nama pemilik di dalam kurung)
+  function nameQueries(item) {
+    const bku = [];
+    const kel = [];
+    for (const t of item.targets) {
+      const nm = String(t.nama || "").trim();
+      bku.push(nm, nm.split("(")[0]);
+      kel.push((nm.match(/\(([^)]+)\)/) || [])[1]);
+    }
+    const clean = (a) => a.map((x) => String(x || "").replace(/\s+/g, " ").trim()).filter((x) => x.length >= 3);
+    const seen = new Set();
+    return [...clean(bku).map((q) => ({ q, kind: "BKU" })), ...clean(kel).map((q) => ({ q, kind: "keluarga" }))].filter(
+      (x) => !seen.has(normalize(x.q)) && seen.add(normalize(x.q)),
+    );
+  }
+
+  // Hasil: daftar kandidat [{ href, q, kind }] berurutan (BKU dulu, lalu keluarga), maks 6
+  async function findInList(item) {
+    await waitTableSettled();
+    const queries = nameQueries(item);
+    const cands = [];
+    for (const withSls of item.sls ? [true, false] : [false]) {
+      log(`Cari lewat filter: ${[item.kec, item.desa, withSls ? item.sls : ""].filter(Boolean).join(" › ") || "(tanpa wilayah)"}`);
+      await applyFilterNames(item, withSls);
+      for (const { q, kind } of queries) {
+        const want = normalize(q);
+        const rows = await searchList(q);
+        const exact = rows.filter((tr) => Array.from(tr.querySelectorAll("td")).some((td) => normalize(td.innerText) === want));
+        for (const tr of exact.slice(0, 4)) {
+          const href = await rowLink(tr);
+          pressKey("Escape");
+          if (href && !cands.some((c) => c.href === href)) cands.push({ href, q, kind });
+        }
+        if (exact.length) log(`"${q}" (${kind}): ${exact.length} dokumen di daftar`);
+      }
+      if (cands.length) break;
+      if (withSls) log(`Tidak ada di ${item.sls}, cari di seluruh desa ${item.desa}`);
+    }
+    if (!cands.length)
+      throw Object.assign(new Error(`tidak ketemu di daftar (BKU maupun keluarga; cari: ${queries.map((x) => x.q).join(" / ")})`), { soft: true });
+    return cands.slice(0, 6);
+  }
+
+  const hasNextCand = (item) => !!item.findCands && (item.findIdx || 0) + 1 < item.findCands.length;
+  // Buka kandidat ke-idx hasil pencarian filter
+  function openCandidate(item, idx) {
+    const c = item.findCands[idx];
+    const m = c.href.match(/\/app\/assignment\/([0-9a-f-]{36})\/([0-9a-f-]{36})/i);
+    updateItem(item.id, { findIdx: idx, docId: m[2].toLowerCase(), prefix: m[1].toLowerCase(), url: c.href, foundBy: "filter", foundAs: `${c.kind} "${c.q}"` });
+    log(`Buka ${c.kind} "${c.q}" (kandidat ${idx + 1}/${item.findCands.length})`);
+    setStage("open");
+    const r = loadRun();
+    r.navAt = Date.now();
+    saveRun(r);
+    location.href = c.href;
+  }
+
+  const needFind = (why) => Object.assign(new Error(why), { needFind: true });
 
   // ---------- Review -> Edit (revoke bila perlu) ----------
   async function reviewToEdit() {
@@ -846,12 +1171,12 @@
     ["submit", "Kirim"],
     ["approve", "Approve"],
   ];
-  const STEP_LABEL = Object.fromEntries(STEPS);
+  const STEP_LABEL = { ...Object.fromEntries(STEPS), find: "Cari via filter" };
   const STAGE_TIMEOUT_MS = 4 * 60 * 1000;
   let busy = false;
 
   function log(msg) {
-    console.log(`[Koreksi Gaji] ${msg}`);
+    console.log(`[${APP.name}] ${msg}`);
     const r = loadRun();
     r.lastLog = msg;
     r.logs = [...(r.logs || []), `${new Date().toLocaleTimeString("id-ID")} ${msg}`].slice(-6);
@@ -866,29 +1191,33 @@
     updateHud();
   }
 
+  const did = (item) => item.docId || item.id;
   const docUrl = (item) => item.url || `${location.origin}/app/assignment/${item.prefix}/${item.id}`;
   const onReviewOf = (id) => new RegExp(`/app/assignment/[^/]+/${id}/?$`, "i").test(location.pathname);
   const onEditOf = (id) => new RegExp(`/app/assignment/[^/]+/${id}/edit`, "i").test(location.pathname);
 
   // Hasil true jika sudah di halaman Review dokumen ini (kalau belum: pindah halaman, tick berikutnya lanjut)
   function ensureReview(item) {
-    if (onReviewOf(item.id)) return true;
+    if (onReviewOf(did(item))) return true;
     const r = loadRun();
     if (Date.now() - (r.navAt || 0) < 4000) return false;
     const tries = (r.cur && r.cur.navTries) || 0;
-    if (tries >= 4) throw new Error("dokumen tidak bisa dibuka (cek link / akses akun)");
+    if (tries >= 4) {
+      if (!item.searched || hasNextCand(item)) throw needFind("link tidak membuka dokumen");
+      throw new Error("dokumen tidak bisa dibuka (cek link / akses akun)");
+    }
     r.cur.navTries = tries + 1;
     r.navAt = Date.now();
     saveRun(r);
     log(`Membuka dokumen${tries ? ` (percobaan ${tries + 1})` : ""}`);
-    location.href = tries % 2 === 0 ? docUrl(item) : `${location.origin}/app/assignment-detail/${item.id}`;
+    location.href = tries % 2 === 0 ? docUrl(item) : `${location.origin}/app/assignment-detail/${did(item)}`;
     return false;
   }
   // Dari halaman assignment-detail: ikuti link Review-nya
   function followDetailLink(item) {
-    if (!new RegExp(`/app/assignment-detail/${item.id}`, "i").test(location.pathname)) return false;
+    if (!new RegExp(`/app/assignment-detail/${did(item)}`, "i").test(location.pathname)) return false;
     const a = Array.from(document.querySelectorAll('a[href*="/app/assignment/"]')).find((x) =>
-      x.getAttribute("href").toLowerCase().includes(item.id),
+      x.getAttribute("href").toLowerCase().includes(did(item)),
     );
     if (!a) return false;
     const r = loadRun();
@@ -910,6 +1239,8 @@
       .join(" · ");
 
   function finishItem(id, status, reason) {
+    const it = loadQueue().find((q) => q.id === id);
+    if (it && it.foundBy === "filter") reason += ` · dokumen dicari lewat filter (${it.foundAs || "-"})`;
     updateItem(id, { status, reason, doneAt: new Date().toISOString() });
     const r = loadRun();
     r.cur = null;
@@ -947,9 +1278,23 @@
       if (Date.now() - (run.phaseAt || 0) > STAGE_TIMEOUT_MS)
         return finishItem(item.id, "red", `macet di tahap "${STEP_LABEL[cur.stage] || cur.stage}"`);
       try {
+        if (cur.stage !== "find" && forbiddenPage()) throw forbiddenError();
         await runStage(run, cur, item);
       } catch (e) {
-        console.error("[Koreksi Gaji]", e);
+        console.error(`[${APP.name}]`, e);
+        const untouched = !cur.revoked && ["open", "check", "edit"].includes(cur.stage);
+        if ((e.needFind || e.forbidden) && untouched && !item.searched) {
+          log(`⚠ ${e.forbidden ? "halaman Forbidden" : e.message} → cari dokumen lewat filter`);
+          return setStage("find");
+        }
+        if ((e.needFind || e.forbidden) && untouched && hasNextCand(item)) {
+          log(`⚠ ${e.forbidden ? "halaman Forbidden" : e.message} → coba kandidat berikutnya`);
+          return openCandidate(item, (item.findIdx || 0) + 1);
+        }
+        if (e.forbidden) {
+          const edited = cur.revoked || ["fill", "submit"].includes(cur.stage) ? " (dokumen sempat dibuka edit, cek manual)" : "";
+          return finishItem(item.id, "forbidden", `halaman Forbidden (tidak ada akses), dilewati${edited}`);
+        }
         pressKey("Escape");
         const where = STEP_LABEL[cur.stage] || cur.stage;
         const after = cur.revoked || cur.stage === "fill" || cur.stage === "submit" ? " — dokumen sudah dibuka edit, cek manual" : "";
@@ -964,10 +1309,34 @@
     const conf = loadConf();
     switch (cur.stage) {
       case "open": {
-        if (onEditOf(item.id)) return setStage("fill", { revoked: true });
+        if (onEditOf(did(item))) return setStage("fill", { revoked: true });
         if (followDetailLink(item)) return;
         if (!ensureReview(item)) return;
         return setStage(conf.checkFirst ? "check" : "edit");
+      }
+      case "find": {
+        const listUrl = loadJson(LIST_KEY, "");
+        if (!isListPage()) {
+          if (!listUrl)
+            throw Object.assign(
+              new Error("link Excel tidak membuka dokumen yang benar & halaman daftar assignment belum dikenal — buka halaman daftar assignment sekali, lalu ulangi"),
+              { soft: true },
+            );
+          if (location.pathname !== new URL(listUrl).pathname) {
+            const r = loadRun();
+            if (Date.now() - (r.navAt || 0) < 8000) return;
+            r.navAt = Date.now();
+            saveRun(r);
+            log("Buka halaman daftar assignment");
+            location.href = listUrl;
+            return;
+          }
+          if (!(await waitFor(isListPage, 20000))) throw new Error("halaman daftar assignment tidak termuat");
+        }
+        updateItem(item.id, { searched: true, findCands: null, findIdx: 0 });
+        const cands = await findInList(item);
+        const fresh = updateItem(item.id, { findCands: cands });
+        return openCandidate(fresh, 0);
       }
       case "check": {
         // Baca di halaman Review (tanpa Edit/revoke). Kalau semua sudah benar -> selesai tanpa menyentuh dokumen
@@ -976,22 +1345,32 @@
           const { results, notes } = await scanDoc(item, false);
           if (results.every((r) => r && r.state === "already"))
             return finishItem(item.id, "already", `tidak diubah, sudah sesuai · ${summary(item, results)}`);
+          // Tidak ada satu kartu pun yang cocok: kemungkinan link membuka dokumen lain -> cari dulu, jangan revoke
+          if (results.every((r) => !r)) {
+            const why = `tidak ada kartu yang sesuai nama_usaha & nilai Excel (${notes.join("; ") || "-"})`;
+            if (!item.searched || hasNextCand(item)) throw needFind(why);
+            throw Object.assign(new Error(`${why} — tidak di-revoke, cek manual`), { soft: true });
+          }
+          // Hasil filter yang cuma memuat sebagian usaha (mis. BKU satu usaha): coba kandidat berikutnya (keluarga)
+          if (results.some((r) => !r) && item.foundBy === "filter" && hasNextCand(item))
+            throw needFind(`sebagian usaha tidak ada di dokumen ini (${notes.join("; ") || "-"})`);
           if (results.some((r) => !r))
             log(`⚠ cek Review: ${notes.join("; ") || "sebagian kartu belum ketemu"}, lanjut ke Edit`);
           updateItem(item.id, { cardHints: results.filter(Boolean).map((r) => r.card) });
         } catch (e) {
+          if (e.needFind || e.forbidden || e.soft) throw e;
           log(`⚠ cek Review gagal (${e.message}), lanjut ke Edit`);
         }
         return setStage("edit");
       }
       case "edit": {
-        if (onEditOf(item.id)) return setStage("fill");
+        if (onEditOf(did(item))) return setStage("fill");
         if (!ensureReview(item)) return;
         const revoked = await reviewToEdit();
         return setStage("fill", { revoked });
       }
       case "fill": {
-        if (!onEditOf(item.id)) return setStage("edit");
+        if (!onEditOf(did(item))) return setStage("edit");
         const { results, notes } = await scanDoc(item, true);
         updateItem(item.id, { result: summary(item, results) });
         if (results.some((r) => !r))
@@ -999,8 +1378,8 @@
         return setStage("submit", { submitClicked: false, changed: results.some((r) => r.state === "set") });
       }
       case "submit": {
-        if (!onEditOf(item.id)) {
-          if (cur.submitClicked && onReviewOf(item.id)) return setStage("approve");
+        if (!onEditOf(did(item))) {
+          if (cur.submitClicked && onReviewOf(did(item))) return setStage("approve");
           throw new Error("halaman edit tertutup sebelum dikirim");
         }
         if (cur.submitClicked) {
@@ -1147,7 +1526,7 @@
       .kgj-tog input:checked + .sw { background:var(--acc); }
       .kgj-tog input:checked + .sw:after { transform:translateX(15px); }
       .kgj-tog small { display:block; color:var(--mut); font-size:11.5px; margin-top:1px; }
-      .kgj-stats { display:grid; grid-template-columns:repeat(8,1fr); gap:8px; }
+      .kgj-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(82px,1fr)); gap:8px; }
       .kgj-stat { border:1px solid var(--line); border-radius:12px; padding:10px 11px; cursor:pointer; background:var(--bg); text-align:left; transition:all .15s; }
       .kgj-stat:hover { transform:translateY(-1px); }
       .kgj-stat.on { border-color:var(--c); box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 16%,transparent); }
@@ -1171,7 +1550,7 @@
       .kgj-item .acts { display:flex; gap:4px; }
       .kgj-empty { text-align:center; padding:36px 10px; color:var(--mut); font-size:13px; }
       .kgj-more { text-align:center; font-size:12px; color:var(--mut); padding:6px; }
-      .kgj-launch { position:fixed; left:16px; bottom:160px; z-index:999999; display:flex; align-items:center; gap:8px; border:none; border-radius:999px; padding:10px 16px 10px 12px; background:linear-gradient(120deg,#4f46e5,#7c3aed); color:#fff; font:650 13px "Inter",ui-sans-serif,system-ui,sans-serif; cursor:pointer; box-shadow:0 10px 28px rgba(79,70,229,.4); transition:transform .15s; }
+      .kgj-launch { position:fixed; left:16px; bottom:112px; z-index:999999; display:flex; align-items:center; gap:8px; border:none; border-radius:999px; padding:10px 16px 10px 12px; background:linear-gradient(120deg,#4f46e5,#7c3aed); color:#fff; font:650 13px "Inter",ui-sans-serif,system-ui,sans-serif; cursor:pointer; box-shadow:0 10px 28px rgba(79,70,229,.4); transition:transform .15s; }
       .kgj-launch:hover { transform:translateY(-2px); }
       .kgj-launch .b { background:rgba(255,255,255,.22); border-radius:7px; padding:2px 6px; font-size:11.5px; font-weight:800; }
       .kgj-hud { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); z-index:1000002; width:min(640px,94vw); background:rgba(17,19,36,.92); backdrop-filter:blur(12px); color:#eef0ff; border-radius:18px; padding:14px 16px; box-shadow:0 20px 50px rgba(10,10,30,.45), inset 0 0 0 1px rgba(255,255,255,.07); font-size:13px; }
@@ -1284,7 +1663,7 @@
         <div class="seg" style="width:${pct(c.manual)}%;background:#c4b5fd"></div>
         <div class="seg" style="width:${pct(c.yellow + c.red + c.tested)}%;background:#fcd34d"></div>
       </div>
-      <div class="lbl"><span>${doneN} dari ${c.all} dokumen beres</span><span>${c.all ? Math.round(pct(doneN)) : 0}%</span></div>`;
+      <div class="lbl"><span>${doneN} dari ${c.all} dokumen beres${c.forbidden ? ` · ${c.forbidden} forbidden dilewati` : ""}</span><span>${c.all ? Math.round(pct(doneN)) : 0}%</span></div>`;
     root.querySelector("[data-stats]").innerHTML = [["all", "Semua", "#4f46e5"], ...Object.entries(STATUS).map(([k, v]) => [k, v.label, v.color])]
       .map(
         ([k, l, col]) =>
@@ -1327,10 +1706,10 @@
       <div class="kgj-sheet">
         <div class="kgj-head">
           <div class="row1">
-            <div class="kgj-logo">Rp</div>
+            <div class="kgj-logo">${esc(APP.badge)}</div>
             <div>
-              <div class="kgj-title">Koreksi Upah / Gaji</div>
-              <div class="kgj-sub"><code>gaji ← Gaji</code> &nbsp; <code>27.a ← R.27a</code> &nbsp; <code>27.b ← R.27b</code> &nbsp;· buka → ganti → kirim → approve</div>
+              <div class="kgj-title">${esc(APP.title)}</div>
+              <div class="kgj-sub">${FIELDS.map(([, , l, , , x]) => `<code>${esc(l)} ← ${esc(x)}</code>`).join(" &nbsp; ")} &nbsp;· buka → ganti → kirim → approve</div>
             </div>
             <button class="kgj-x" data-act="close" title="Tutup (Esc)">×</button>
           </div>
@@ -1344,7 +1723,7 @@
                 <div class="ic">📊</div>
                 <div style="min-width:0">
                   <b>${esc(ui.file || (loadQueue().length ? "Antrean tersimpan di browser" : "Pilih / seret file .xlsx"))}</b>
-                  <div class="kgj-hint">Kolom: <i>link, gaji, nilai_pendapatan, pendapatan_lain, Gaji, R.27a, R.27b</i>. Muat ulang file yang sama tidak menghapus progres.</div>
+                  <div class="kgj-hint">Kolom: <i>link, nama_usaha, ${FIELDS.map(([, id, , , , x]) => `${id} → ${x}`).join(", ")}</i>. Muat ulang file yang sama tidak menghapus progres.</div>
                 </div>
                 <input type="file" accept=".xlsx" data-file hidden>
               </label>
@@ -1378,7 +1757,7 @@
               <span style="flex:1"></span>
               <button class="kgj-btn sm ghost" data-act="retry" title="Perlu cek, Gagal & Terisi (uji) dikembalikan ke Belum">↻ Ulangi yang bermasalah</button>
             </div>
-            <div class="kgj-hint" style="margin-top:10px">Bisa dimulai dari halaman FASIH mana saja — tiap dokumen dibuka lewat link di Excel. Mode uji berhenti tepat sebelum Kirim. Gagal terus? Kerjakan manual lewat tombol ✍ di tiap baris. Pintasan panel: <b>Alt+6</b>.</div>
+            <div class="kgj-hint" style="margin-top:10px">Bisa dimulai dari halaman FASIH mana saja — tiap dokumen dibuka lewat link di Excel. Kalau link-nya tidak membuka dokumen yang benar, dokumen dicari lewat Filter desa/SLS di halaman daftar assignment: BKU dulu, kalau tidak ada dokumen keluarganya (buka halaman daftar itu sekali dulu). Mode uji berhenti tepat sebelum Kirim. Gagal terus? Kerjakan manual lewat tombol ✍ di tiap baris. Pintasan panel: <b>Alt+${APP.hotkey}</b>.</div>
           </div>
 
           <div class="kgj-stats" data-stats></div>
@@ -1488,12 +1867,15 @@
         startRun({ onlyIds: ids.filter((id) => q.find((x) => x.id === id && x.status === "pending")) });
       }
       if (act === "retry") {
+        // Forbidden tidak ikut diulang (aksesnya tetap tidak ada); kalau mau, pakai 🏷 Atur status → Belum
         const q = loadQueue();
         let n = 0;
         q.forEach((x) => {
           if (/yellow|red|tested/.test(x.status)) {
             x.status = "pending";
             x.reason = "";
+            x.searched = false;
+            x.findCands = null;
             n++;
           }
         });
@@ -1627,27 +2009,35 @@
   function exportCsv() {
     const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const lines = [
-      ["no", "baris_excel", "nama_usaha", "idsbr", "kec", "desa", "sls", "gaji_lama", "27a_lama", "27b_lama", "gaji_baru", "27a_baru", "27b_baru", "status", "keterangan", "hasil", "waktu", "link"].join(","),
+      [
+        "no", "baris_excel", "nama_usaha", "idsbr", "kec", "desa", "sls",
+        ...FIELDS.map((f) => `${f[6]}_lama`), ...FIELDS.map((f) => `${f[6]}_baru`),
+        "status", "keterangan", "hasil", "waktu", "link",
+      ].join(","),
     ];
     loadQueue().forEach((q) =>
       q.targets.forEach((t) =>
         lines.push(
-          [t.no, t.row, t.nama, t.idsbr, q.kec, q.desa, q.sls, t.old.g, t.old.a, t.old.b, t.neu.g, t.neu.a, t.neu.b, (STATUS[q.status] || {}).label, q.reason, q.result, q.doneAt, docUrl(q)]
+          [
+            t.no, t.row, t.nama, t.idsbr, q.kec, q.desa, q.sls,
+            ...FIELDS.map(([k]) => t.old[k]), ...FIELDS.map(([k]) => t.neu[k]),
+            (STATUS[q.status] || {}).label, q.reason, q.result, q.doneAt, docUrl(q),
+          ]
             .map(cell)
             .join(","),
         ),
       ),
     );
-    download(`laporan-koreksi-gaji-${wilayahTag()}-${stamp()}.csv`, "﻿" + lines.join("\n"), "text/csv");
+    download(`laporan-${APP.file}-${wilayahTag()}-${stamp()}.csv`, "﻿" + lines.join("\n"), "text/csv");
   }
   function exportJson() {
-    download(`antrean-koreksi-gaji-${wilayahTag()}-${stamp()}.json`, JSON.stringify({ v: 1, queue: loadQueue(), conf: loadConf() }), "application/json");
+    download(`antrean-${APP.file}-${wilayahTag()}-${stamp()}.json`, JSON.stringify({ v: 1, queue: loadQueue(), conf: loadConf() }), "application/json");
   }
   async function importJson(file) {
     try {
       const data = JSON.parse(await file.text());
-      if (!Array.isArray(data.queue) || data.queue.some((q) => !q.targets || q.targets.some((t) => !t.neu || !("g" in t.neu))))
-        throw new Error("bukan file ekspor skrip Koreksi Gaji");
+      if (!Array.isArray(data.queue) || data.queue.some((q) => !q.targets || q.targets.some((t) => !t.neu || FIELDS.some(([k]) => !(k in t.neu)))))
+        throw new Error(`bukan file ekspor skrip ${APP.name}`);
       if (loadQueue().length && !confirm(`Timpa antrean sekarang (${loadQueue().length} dokumen) dengan isi file (${data.queue.length} dokumen)?`)) return;
       saveQueue(data.queue);
       if (data.conf) saveConf({ ...loadConf(), ...data.conf });
@@ -1674,19 +2064,27 @@
     const m = location.pathname.match(/\/app\/assignment\/[^/]+\/([0-9a-f-]{36})/i);
     return m ? m[1].toLowerCase() : null;
   };
-  // Kartu usaha yang sedang terbuka di halaman (isian 27.a kelihatan)
+  // Kartu usaha yang sedang terbuka di halaman (isian 27.a kelihatan) + nama usahanya
   function openCardNow() {
     const pend = visiblePend();
     if (!pend) return null;
     const inst = instOf(pend);
-    const cur = {};
-    for (const [k, id] of FIELDS) cur[k] = norm0(readBox(box(id, inst)));
-    return { inst, cur };
+    const name = ["nama_komersial", "nama_usaha_edit", "nama_usaha"]
+      .map((id) => {
+        const b = box(id, inst);
+        const i = b && b.querySelector("input, textarea");
+        return i ? i.value.trim() : "";
+      })
+      .find(Boolean);
+    return { inst, cur: readFields(inst), name: name || "" };
   }
-  // Kartu terbuka dicocokkan ke target: nilai baru, nilai lama, lalu satu-satunya target
+  // Kartu terbuka dicocokkan ke target: nama usaha dulu, lalu nilai baru / lama, lalu satu-satunya target
   function targetFor(q, card) {
     const t = q.targets;
-    return t.find((x) => eqAll(card.cur, x.neu)) || t.find((x) => oldOrNew(card.cur, x)) || (t.length === 1 ? t[0] : null);
+    const byName = card.name ? t.filter((x) => nameMatch(card.name, x.nama) >= NAME_OK) : [];
+    if (byName.length === 1) return byName[0];
+    const pool = byName.length ? byName : t;
+    return pool.find((x) => eqAll(card.cur, x.neu)) || pool.find((x) => oldOrNew(card.cur, x)) || (t.length === 1 ? t[0] : null);
   }
 
   let helpSig = "";
@@ -1694,7 +2092,7 @@
   function updateHelper() {
     let el = document.getElementById("kgj-help");
     const id = docIdHere();
-    const q = id && !loadRun().running ? loadQueue().find((x) => x.id === id) : null;
+    const q = id && !loadRun().running ? loadQueue().find((x) => did(x) === id || x.id === id) : null;
     if (!q || loadJson(HELPER_KEY, null) === id) {
       if (el) el.remove();
       helpSig = "";
@@ -1710,8 +2108,8 @@
       document.body.appendChild(el);
     }
     const card = openCardNow();
-    const editing = onEditOf(q.id);
-    const sig = JSON.stringify([q.status, q.reason, card && card.cur, editing, helpBusy]);
+    const editing = onEditOf(id);
+    const sig = JSON.stringify([q.status, q.reason, card && card.cur, card && card.name, editing, helpBusy]);
     if (sig === helpSig) return;
     helpSig = sig;
     const st = STATUS[q.status] || STATUS.pending;
@@ -1726,14 +2124,15 @@
         }).join("")}</table>`,
       )
       .join("");
+    const nameWarn = card && t && card.name && nameMatch(card.name, t.nama) < NAME_OK ? ` ⚠ nama di kartu "${esc(card.name)}" beda dengan Excel` : "";
     const hint = !editing
       ? "Klik Edit (revoke kalau perlu), lalu buka kartu usahanya."
       : card
-        ? `Kartu terbuka${t ? ` → ${esc(t.nama)}` : " (tidak cocok dengan Excel)"}. Kolom kanan = isi sekarang.`
+        ? `Kartu terbuka${t ? ` → ${esc(t.nama)}` : " (tidak cocok dengan Excel)"}${nameWarn}. Kolom kanan = isi sekarang.`
         : "Buka kartu usaha yang mau dikoreksi.";
     el.innerHTML = `
       <div class="top">
-        <div class="ttl">✍ Koreksi Gaji — manual</div>
+        <div class="ttl">✍ ${esc(APP.name)} — manual</div>
         <span class="kgj-pill" style="--c:${st.color}">${st.label}</span>
         <span style="flex:1"></span>
         <button class="kgj-btn" data-help="hide" title="Sembunyikan untuk dokumen ini">×</button>
@@ -1750,26 +2149,26 @@
   }
   async function onHelperClick(e) {
     const act = e.target.closest("[data-help]")?.dataset.help;
-    const id = docIdHere();
-    const q = id && loadQueue().find((x) => x.id === id);
+    const here = docIdHere();
+    const q = here && loadQueue().find((x) => did(x) === here || x.id === here);
     if (!act || !q) return;
     if (act === "hide") {
-      saveJson(HELPER_KEY, id);
+      saveJson(HELPER_KEY, here);
       return updateHelper();
     }
     if (act === "done") {
-      markManual(id);
+      markManual(q.id);
       toast("Ditandai Selesai manual.");
       return updateHelper();
     }
     if (act === "status")
-      return openStatusPicker([id], () => {
+      return openStatusPicker([q.id], () => {
         helpSig = "";
         updateHelper();
       });
     if (act === "auto") {
-      updateItem(id, { status: "pending", reason: "" });
-      return startRun({ onlyIds: [id] });
+      updateItem(q.id, { status: "pending", reason: "" });
+      return startRun({ onlyIds: [q.id] });
     }
     if (act === "fill" && !helpBusy) {
       const card = openCardNow();
@@ -1779,12 +2178,15 @@
         t = q.targets[Number(pick) - 1];
       }
       if (!t) return toast("Kartu yang terbuka tidak cocok dengan baris Excel dokumen ini.");
-      if (!eqAll(card.cur, t.neu) && !oldOrNew(card.cur, t) && !confirm(`Nilai di kartu ini (${fmtCur(card.cur)}) beda dari Excel. Tetap ganti ke nilai baru?`)) return;
+      const warn = [];
+      if (card.name && nameMatch(card.name, t.nama) < NAME_OK) warn.push(`nama usaha di kartu "${card.name}" beda dengan Excel "${t.nama}"`);
+      if (!eqAll(card.cur, t.neu) && !oldOrNew(card.cur, t)) warn.push(`nilai di kartu (${fmtCur(card.cur)}) beda dari Excel`);
+      if (warn.length && !confirm(`Perhatian: ${warn.join("; ")}.\n\nTetap ganti ke nilai baru?`)) return;
       helpBusy = true;
       updateHelper();
       try {
         await writeCard(card.inst, t, card.cur);
-        updateItem(id, { result: `${t.nama.split("(")[0].trim()}: ${fmtChange(card.cur, t) || "sudah sesuai"} (manual)` });
+        updateItem(q.id, { result: `${t.nama.split("(")[0].trim()}: ${fmtChange(card.cur, t) || "sudah sesuai"} (manual)` });
         toast("Nilai sudah diganti. Kirim & Approve di FASIH, lalu klik “Tandai selesai manual”.");
       } catch (err) {
         alert(`Gagal mengisi: ${err.message}`);
@@ -1844,7 +2246,7 @@
     hud.innerHTML = `
       <div class="top">
         <div class="spin ${run.paused || run.hold || limited ? "wait" : ""}"></div>
-        <div class="ttl">Koreksi Gaji</div>
+        <div class="ttl">${esc(APP.name)}</div>
         <div class="dim">${run.hold ? "⏸ DIJEDA · " : ""}${T().name}${run.testMode ? " · Mode uji" : ""} · ${done}/${total} dokumen</div>
         <span style="flex:1"></span>
         ${run.paused ? `<button class="kgj-btn go" data-hud="go">✓ Kirim sekarang</button><button class="kgj-btn" data-hud="pass">Lewati</button>` : ""}
@@ -1866,14 +2268,15 @@
     const btn = document.createElement("button");
     btn.id = "kgj-launch";
     btn.className = "kgj-launch";
-    btn.innerHTML = `<span class="b">Rp</span> Koreksi Gaji`;
-    btn.title = "Buka panel (Alt+6)";
+    btn.innerHTML = `<span class="b">${esc(APP.badge)}</span> ${esc(APP.launch)}`;
+    btn.title = `Buka panel (Alt+${APP.hotkey})`;
+    btn.style.bottom = `${APP.launchBottom}px`;
     btn.onclick = openPanel;
     document.body.appendChild(btn);
   }
 
   window.addEventListener("keydown", (e) => {
-    if (e.altKey && e.key === "6") {
+    if (e.altKey && e.key === APP.hotkey) {
       e.preventDefault();
       document.getElementById("kgj-panel") ? closePanel() : openPanel();
     }
@@ -1883,6 +2286,7 @@
   let lastPanelRefresh = 0;
   setInterval(() => {
     ensureLauncher();
+    if (isListPage() && loadJson(LIST_KEY, "") !== location.href) saveJson(LIST_KEY, location.href);
     const run = loadRun();
     if (run.running && !busy) tick();
     if (run.running) updateHud();
@@ -1893,5 +2297,5 @@
     }
   }, 700);
 
-  console.log("[Koreksi Gaji v1.2] Aktif. Tombol di kiri bawah (Alt+6).");
+  console.log(`[${APP.name} v${APP.version}] Aktif. Tombol di kiri bawah (Alt+${APP.hotkey}).`);
 })();

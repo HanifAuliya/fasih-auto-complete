@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi R.27 - Pendapatan (27.a / 27.b)
 // @namespace    hanif-bps-hst
-// @version      1.7
+// @version      1.8
 // @description  Baca Excel koreksi, buka tiap dokumen, ganti 27.a (nilai_pendapatan) = R.27a dan 27.b (pendapatan_lain) = R.27b di kartu usaha yang tepat, lalu Kirim & Approve. Dokumen keluarga: kartu dicari di Blok II; dokumen usaha tunggal: langsung ke kartunya.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -17,7 +17,31 @@
   const RUN_KEY = "k27_run";
   const AREA_KEY = "k27_area_titles";
   const LIST_KEY = "k27_list_url"; // halaman daftar assignment terakhir yang dibuka (untuk cari lewat filter)
+  const HELPER_KEY = "k27_helper_hidden";
   const RATE_KEY = "fasih_rate_limit"; // sama dengan skrip FASIH lain: jeda 429 berlaku bersama
+
+  // ===== KONFIGURASI =====
+  // Satu-satunya bagian yang beda antara skrip Koreksi R.27 dan Koreksi Gaji; sisanya sama persis.
+  const APP = {
+    name: "Koreksi R.27",
+    version: "1.8",
+    title: "Koreksi Pendapatan R.27",
+    badge: "27",
+    launch: "Koreksi Pendapatan",
+    hotkey: "9",
+    launchBottom: 112,
+    file: "koreksi-r27",
+  };
+  // Isian yang diganti di kartu usaha:
+  // [kunci, id isian FASIH, label, kolom Excel nilai lama, kolom Excel nilai baru, nama kolom baru di Excel, nama di CSV]
+  // Kolom Excel ditulis tanpa spasi/titik/huruf besar ("R.27a" = "R27A").
+  const FIELDS = [
+    ["a", "nilai_pendapatan", "27.a", ["NILAIPENDAPATAN"], ["R27A"], "R.27a", "27a"],
+    ["b", "pendapatan_lain", "27.b", ["PENDAPATANLAIN", "PENDAPATANLAINNYA"], ["R27B"], "R.27b", "27b"],
+  ];
+  // Kartu juga boleh dikenali dari jumlah isian ini (nama usaha tetap wajib cocok). Kosong = tidak dipakai.
+  const SUM_KEYS = ["a", "b"];
+  // ===== akhir KONFIGURASI =====
 
   const DEFAULT_CONF = {
     speed: 1, // indeks SPEEDS
@@ -72,7 +96,7 @@
     try {
       localStorage.setItem(key, JSON.stringify(value));
     } catch (e) {
-      console.error("[Koreksi R.27] Gagal menyimpan.", e);
+      console.error(`[${APP.name}] Gagal menyimpan.`, e);
     }
   };
   const loadQueue = () => loadJson(QUEUE_KEY, []);
@@ -101,7 +125,7 @@
     const cf = loadConf();
     cf.speed = Math.min(SPEEDS.length - 1, (Number(cf.speed) || 0) + 1);
     saveConf(cf);
-    console.warn(`[Koreksi R.27] 429 dari server. Berhenti ${minutes} menit, kecepatan turun ke ${SPEEDS[cf.speed].name}.`);
+    console.warn(`[${APP.name}] 429 dari server. Berhenti ${minutes} menit, kecepatan turun ke ${SPEEDS[cf.speed].name}.`);
   }
   (function watch429() {
     const origFetch = window.fetch;
@@ -391,13 +415,11 @@
     return sheets;
   }
 
-  // Kolom dicocokkan tanpa spasi/titik/huruf besar: "R.27a" = "r27a" = "R 27 A"
+  // Kolom dicocokkan tanpa spasi/titik/huruf besar: "R.27a" = "r27a" = "R 27 A".
+  // Baris judul = baris yang memuat kolom R.27a. Kolom nilai (lama/baru) diambil dari FIELDS.
+  const ANCHOR = "R27A";
   const COLS = {
     link: ["LINK", "URL", "LINKFASIH"],
-    oldA: ["NILAIPENDAPATAN"],
-    oldB: ["PENDAPATANLAIN", "PENDAPATANLAINNYA"],
-    newA: ["R27A"],
-    newB: ["R27B"],
     nama: ["NAMAUSAHA"],
     idsbr: ["IDSBR"],
     kec: ["KEC", "KECAMATAN", "NMKEC"],
@@ -406,18 +428,27 @@
     status: ["ASSIGNMENTSTATUSALIAS", "STATUS"],
     no: ["NO"],
   };
-  const REQUIRED = ["link", "oldA", "oldB", "newA", "newB"];
 
   async function parseWorkbook(arrayBuffer) {
     const sheets = await readXlsx(arrayBuffer);
     for (const sheet of sheets) {
-      const hi = sheet.rows.findIndex((r) => r.some((h) => squash(h) === "R27A"));
+      const hi = sheet.rows.findIndex((r) => r.some((h) => squash(h) === ANCHOR));
       if (hi < 0) continue;
       const headers = sheet.rows[hi].map(squash);
+      const anchor = headers.indexOf(ANCHOR);
       const col = {};
       for (const [k, names] of Object.entries(COLS)) col[k] = headers.findIndex((h) => names.includes(h));
-      const missing = REQUIRED.filter((k) => col[k] < 0);
-      if (missing.length) throw new Error(`kolom tidak ada di sheet "${sheet.name}": ${missing.map((k) => COLS[k][0]).join(", ")}`);
+      const missing = col.link < 0 ? ["link"] : [];
+      // Nilai baru = kolom yang paling dekat dengan R.27a; nilai lama = kolom bernama sama yang lain
+      // (contoh Excel gaji: "gaji" lama di depan, "Gaji" baru tepat sebelum R.27a)
+      for (const [k, , label, oldNames, newNames] of FIELDS) {
+        const at = (names) => headers.map((h, i) => (names.includes(h) ? i : -1)).filter((i) => i >= 0);
+        col[`new_${k}`] = at(newNames).sort((x, y) => Math.abs(x - anchor) - Math.abs(y - anchor))[0] ?? -1;
+        col[`old_${k}`] = at(oldNames).find((i) => i !== col[`new_${k}`]) ?? -1;
+        if (col[`old_${k}`] < 0) missing.push(`${label} lama (${oldNames[0]})`);
+        if (col[`new_${k}`] < 0) missing.push(`${label} baru (${newNames[0]})`);
+      }
+      if (missing.length) throw new Error(`kolom tidak ada di sheet "${sheet.name}": ${missing.join(", ")}`);
       const byDoc = new Map();
       let skipped = 0;
       sheet.rows.slice(hi + 1).forEach((r, i) => {
@@ -435,8 +466,8 @@
           no: get("no"),
           nama: get("nama"),
           idsbr: get("idsbr"),
-          old: { a: parseNum(get("oldA")) || 0, b: parseNum(get("oldB")) || 0 },
-          neu: { a: parseNum(get("newA")) || 0, b: parseNum(get("newB")) || 0 },
+          old: Object.fromEntries(FIELDS.map(([k]) => [k, parseNum(get(`old_${k}`)) || 0])),
+          neu: Object.fromEntries(FIELDS.map(([k]) => [k, parseNum(get(`new_${k}`)) || 0])),
         };
         if (!byDoc.has(id))
           byDoc.set(id, {
@@ -453,7 +484,7 @@
           });
         byDoc.get(id).targets.push(target);
       });
-      return { items: Array.from(byDoc.values()), sheet: sheet.name, rows: sheet.rows.length - hi - 1, skipped };
+      return { items: Array.from(byDoc.values()), sheet: sheet.name, rows: sheet.rows.slice(hi + 1).filter((r) => r.some((x) => String(x).trim())).length, skipped };
     }
     throw new Error('tidak ada sheet dengan kolom "R.27a"');
   }
@@ -573,13 +604,29 @@
     if (now !== n) throw new Error(`isian ${id} tidak mau berubah (sekarang ${rupiah(now)}, seharusnya ${rupiah(n)})`);
   }
 
-  const eqPair = (x, y) => x.a === y.a && x.b === y.b;
   const norm0 = (v) => (v === null || v === undefined ? 0 : v);
+  const eqAll = (x, y) => FIELDS.every(([k]) => x[k] === y[k]);
+  // Tiap isian bernilai lama atau baru (bisa campur kalau sebelumnya sempat terisi sebagian)
+  const oldOrNew = (cur, t) => FIELDS.every(([k]) => cur[k] === t.old[k] || cur[k] === t.neu[k]);
+  const sumOf = (x) => SUM_KEYS.reduce((n, k) => n + (x[k] || 0), 0);
+  const fmtCur = (cur) => FIELDS.map(([k, , l]) => `${l} ${rupiah(cur[k])}`).join(" / ");
+  const fmtChange = (cur, t) =>
+    FIELDS.filter(([k]) => cur[k] !== t.neu[k])
+      .map(([k, , l]) => `${l} ${rupiah(cur[k])} → ${rupiah(t.neu[k])}`)
+      .join(", ");
+  const readFields = (inst) => Object.fromEntries(FIELDS.map(([k, id]) => [k, norm0(readBox(box(id, inst)))]));
+
+  // Ganti semua isian di kartu yang sedang terbuka. Yang turun dulu baru yang naik,
+  // supaya total sementara tidak melonjak
+  async function writeCard(inst, t, cur) {
+    const steps = FIELDS.map(([k, id]) => [id, t.neu[k], cur[k]]);
+    steps.sort((x, y) => x[1] - x[2] - (y[1] - y[2]));
+    for (const [id, n] of steps) await writeNum(id, inst, n);
+  }
 
   // Telusuri kartu usaha dokumen ini & cocokkan ke baris Excel.
   // write=false: cuma baca (aman di halaman Review). write=true: ganti nilainya.
-  // Kartu dikenali dari nilai lamanya (27.a,27.b persis seperti Excel), atau sudah bernilai baru,
-  // atau (jumlah 27.a+27.b sama & nama mirip / satu-satunya kartu).
+  // Kartu dikenali dari nilainya (lama / baru / jumlahnya sama) DAN nama usahanya harus sesuai Excel.
   async function scanDoc(item, write) {
     const area = await gotoArea();
     const targets = item.targets;
@@ -605,17 +652,17 @@
       const sim = targets.map((t) => Math.max(0, ...names.map((n) => nameMatch(n, t.nama))));
       const nameOk = (i) => sim[i] >= NAME_OK;
       const open = (i) => !results[i];
-      for (let i = 0; i < targets.length; i++) if (open(i) && nameOk(i) && eqPair(cur, targets[i].neu)) return { i, kind: "new" };
-      for (let i = 0; i < targets.length; i++) if (open(i) && nameOk(i) && eqPair(cur, targets[i].old)) return { i, kind: "old" };
+      for (let i = 0; i < targets.length; i++) if (open(i) && nameOk(i) && eqAll(cur, targets[i].neu)) return { i, kind: "new" };
+      for (let i = 0; i < targets.length; i++) if (open(i) && nameOk(i) && oldOrNew(cur, targets[i])) return { i, kind: "old" };
       let best = null;
       for (let i = 0; i < targets.length; i++) {
         const t = targets[i];
-        if (!open(i) || !nameOk(i) || cur.a + cur.b !== t.neu.a + t.neu.b) continue;
+        if (!SUM_KEYS.length || !open(i) || !nameOk(i) || sumOf(cur) !== sumOf(t.neu)) continue;
         if (!best || sim[i] > best.sim) best = { i, kind: "sum", sim: sim[i] };
       }
       if (best) return best;
       // Nilainya cocok tapi namanya beda -> jangan disentuh, beri tahu kenapa
-      const byValue = targets.findIndex((t, i) => open(i) && (eqPair(cur, t.neu) || eqPair(cur, t.old)));
+      const byValue = targets.findIndex((t, i) => open(i) && oldOrNew(cur, t));
       return byValue >= 0 ? { mismatch: targets[byValue].nama } : null;
     };
 
@@ -626,11 +673,12 @@
       const names = namesAt(inst, cardName);
       const name = cardName || names[0] || "";
       if (!names.length) return notes.push(`kartu "${name || "-"}": nama usaha tidak terbaca, tidak bisa dipastikan`);
-      const cur = { a: norm0(readBox(pend)), b: norm0(readBox(box("pendapatan_lain", inst))) };
+      await waitFor(() => FIELDS.every(([, id]) => box(id, inst)), 3000);
+      const cur = readFields(inst);
       const d = decide(cur, names);
       if (d && d.mismatch)
         return notes.push(`kartu "${name}": nilainya cocok, tapi nama usahanya beda dengan Excel "${d.mismatch}"`);
-      if (!d) return notes.push(`kartu "${name}": 27.a ${rupiah(cur.a)} / 27.b ${rupiah(cur.b)} tidak cocok dengan Excel`);
+      if (!d) return notes.push(`kartu "${name}": ${fmtCur(cur)} tidak cocok dengan Excel`);
       const t = targets[d.i];
       if (d.kind === "new") {
         results[d.i] = { state: "already", card: name, cur };
@@ -638,13 +686,10 @@
       }
       if (!write) {
         results[d.i] = { state: "todo", card: name, cur };
-        return log(`"${name}" perlu diganti: 27.a ${rupiah(cur.a)} → ${rupiah(t.neu.a)}`);
+        return log(`"${name}" perlu diganti: ${fmtChange(cur, t)}`);
       }
-      log(`Ganti "${name}" (= Excel "${t.nama}"): 27.a ${rupiah(cur.a)} → ${rupiah(t.neu.a)}, 27.b ${rupiah(cur.b)} → ${rupiah(t.neu.b)}`);
-      // Urutan: yang turun dulu baru yang naik, supaya total sementara tidak melonjak
-      const steps = [["nilai_pendapatan", t.neu.a, cur.a], ["pendapatan_lain", t.neu.b, cur.b]];
-      steps.sort((x, y) => (x[1] - x[2]) - (y[1] - y[2]));
-      for (const [id, n] of steps) await writeNum(id, inst, n);
+      log(`Ganti "${name}" (= Excel "${t.nama}"): ${fmtChange(cur, t)}`);
+      await writeCard(inst, t, cur);
       results[d.i] = { state: "set", card: name, cur };
     };
 
@@ -1119,7 +1164,7 @@
     ["open", "Buka"],
     ["check", "Cek Review"],
     ["edit", "Edit / Revoke"],
-    ["fill", "Ganti 27.a/b"],
+    ["fill", "Ganti nilai"],
     ["submit", "Kirim"],
     ["approve", "Approve"],
   ];
@@ -1128,7 +1173,7 @@
   let busy = false;
 
   function log(msg) {
-    console.log(`[Koreksi R.27] ${msg}`);
+    console.log(`[${APP.name}] ${msg}`);
     const r = loadRun();
     r.lastLog = msg;
     r.logs = [...(r.logs || []), `${new Date().toLocaleTimeString("id-ID")} ${msg}`].slice(-6);
@@ -1186,7 +1231,7 @@
         const nm = (t.nama || res?.card || "usaha").split("(")[0].trim();
         if (!res) return `${nm}: kartu tidak ketemu`;
         if (res.state === "already") return `${nm}: sudah sesuai`;
-        return `${nm}: 27.a ${rupiah(res.cur.a)}→${rupiah(t.neu.a)}, 27.b ${rupiah(res.cur.b)}→${rupiah(t.neu.b)}`;
+        return `${nm}: ${fmtChange(res.cur, t) || "sudah sesuai"}`;
       })
       .join(" · ");
 
@@ -1233,7 +1278,7 @@
         if (cur.stage !== "find" && forbiddenPage()) throw forbiddenError();
         await runStage(run, cur, item);
       } catch (e) {
-        console.error("[Koreksi R.27]", e);
+        console.error(`[${APP.name}]`, e);
         const untouched = !cur.revoked && ["open", "check", "edit"].includes(cur.stage);
         if ((e.needFind || e.forbidden) && untouched && !item.searched) {
           log(`⚠ ${e.forbidden ? "halaman Forbidden" : e.message} → cari dokumen lewat filter`);
@@ -1525,6 +1570,16 @@
       .k27-hud .k27-btn.go { background:#16a34a; border-color:#16a34a; }
       .k27-hud .k27-btn.stop { background:transparent; border-color:rgba(248,113,113,.45); color:#fca5a5; }
       .k27-hud .wait { color:#fbbf24; animation:k27pulse 1.6s infinite; }
+      .k27-help { left:auto; right:16px; transform:none; width:min(400px,94vw); z-index:1000001; }
+      .k27-help .k27-pill { background:color-mix(in srgb,var(--c) 30%,transparent); color:#fff; }
+      .k27-help .tb { width:100%; border-collapse:collapse; margin-top:4px; font-size:12px; font-variant-numeric:tabular-nums; }
+      .k27-help .tb td { padding:2px 4px; }
+      .k27-help .tb td:first-child { color:#a5b4fc; font-weight:700; width:40px; }
+      .k27-help .tb .o { color:#9aa0c3; text-decoration:line-through; }
+      .k27-help .tb .n { color:#fff; font-weight:650; }
+      .k27-help .tb .ok { color:#86efac; text-align:right; }
+      .k27-help .tb .now { color:#fde68a; text-align:right; }
+      .k27-help .k27-btn:disabled { opacity:.4; }
       .k27-toast { position:fixed; left:50%; top:20px; transform:translateX(-50%); z-index:1000003; background:#111324; color:#fff; padding:10px 16px; border-radius:12px; font:600 13px "Inter",ui-sans-serif,system-ui,sans-serif; box-shadow:0 12px 30px rgba(0,0,0,.3); animation:k27fade .2s; }
     `;
     document.head.appendChild(style);
@@ -1565,7 +1620,7 @@
           o === n
             ? `<span class="k27-chg"><span class="k">${k}</span><span class="u">${rupiah(n)} (tetap)</span></span>`
             : `<span class="k27-chg"><span class="k">${k}</span><span class="o">${rupiah(o)}</span>→<span class="a">${rupiah(n)}</span></span>`;
-        return `${q.targets.length > 1 ? `<span class="k27-chg"><span class="u">${esc((t.nama || "").split("(")[0].trim())}</span></span>` : ""}${ch("27.a", t.old.a, t.neu.a)}${ch("27.b", t.old.b, t.neu.b)}`;
+        return `${q.targets.length > 1 ? `<span class="k27-chg"><span class="u">${esc((t.nama || "").split("(")[0].trim())}</span></span>` : ""}${FIELDS.map(([k, , l]) => ch(l, t.old[k], t.neu[k])).join("")}`;
       })
       .join("");
     const meta = [q.kec, q.desa, q.sls, q.targets.length > 1 ? `${q.targets.length} usaha` : "", q.statusAwal].filter(Boolean).map(esc).join(" · ");
@@ -1579,6 +1634,7 @@
       </div>
       <div class="acts">
         <a class="k27-btn sm ghost" href="${esc(docUrl(q))}" target="_blank" title="Buka dokumen di tab baru">↗</a>
+        <a class="k27-btn sm ghost" href="${esc(docUrl(q))}" data-manual="${q.id}" title="Kerjakan manual: buka dokumen di tab ini, panel bantu muncul di kanan bawah">✍</a>
         <button class="k27-btn sm soft" data-one="${q.id}" title="Jalankan dokumen ini saja">▶</button>
       </div>
     </div>`;
@@ -1647,10 +1703,10 @@
       <div class="k27-sheet">
         <div class="k27-head">
           <div class="row1">
-            <div class="k27-logo">27</div>
+            <div class="k27-logo">${esc(APP.badge)}</div>
             <div>
-              <div class="k27-title">Koreksi Pendapatan R.27</div>
-              <div class="k27-sub"><code>27.a ← R.27a</code> &nbsp; <code>27.b ← R.27b</code> &nbsp;· buka → ganti → kirim → approve</div>
+              <div class="k27-title">${esc(APP.title)}</div>
+              <div class="k27-sub">${FIELDS.map(([, , l, , , x]) => `<code>${esc(l)} ← ${esc(x)}</code>`).join(" &nbsp; ")} &nbsp;· buka → ganti → kirim → approve</div>
             </div>
             <button class="k27-x" data-act="close" title="Tutup (Esc)">×</button>
           </div>
@@ -1664,7 +1720,7 @@
                 <div class="ic">📊</div>
                 <div style="min-width:0">
                   <b>${esc(ui.file || (loadQueue().length ? "Antrean tersimpan di browser" : "Pilih / seret file .xlsx"))}</b>
-                  <div class="k27-hint">Kolom: <i>link, nilai_pendapatan, pendapatan_lain, R.27a, R.27b</i>. Muat ulang file yang sama tidak menghapus progres.</div>
+                  <div class="k27-hint">Kolom: <i>link, nama_usaha, ${FIELDS.map(([, id, , , , x]) => `${id} → ${x}`).join(", ")}</i>. Muat ulang file yang sama tidak menghapus progres.</div>
                 </div>
                 <input type="file" accept=".xlsx" data-file hidden>
               </label>
@@ -1698,7 +1754,7 @@
               <span style="flex:1"></span>
               <button class="k27-btn sm ghost" data-act="retry" title="Perlu cek, Gagal & Terisi (uji) dikembalikan ke Belum">↻ Ulangi yang bermasalah</button>
             </div>
-            <div class="k27-hint" style="margin-top:10px">Bisa dimulai dari halaman FASIH mana saja — tiap dokumen dibuka lewat link di Excel. Kalau link-nya tidak membuka dokumen yang benar, dokumen dicari lewat Filter desa/SLS di halaman daftar assignment: BKU dulu, kalau tidak ada dokumen keluarganya (buka halaman daftar itu sekali dulu). Mode uji berhenti tepat sebelum Kirim. Pintasan panel: <b>Alt+9</b>.</div>
+            <div class="k27-hint" style="margin-top:10px">Bisa dimulai dari halaman FASIH mana saja — tiap dokumen dibuka lewat link di Excel. Kalau link-nya tidak membuka dokumen yang benar, dokumen dicari lewat Filter desa/SLS di halaman daftar assignment: BKU dulu, kalau tidak ada dokumen keluarganya (buka halaman daftar itu sekali dulu). Mode uji berhenti tepat sebelum Kirim. Gagal terus? Kerjakan manual lewat tombol ✍ di tiap baris. Pintasan panel: <b>Alt+${APP.hotkey}</b>.</div>
           </div>
 
           <div class="k27-stats" data-stats></div>
@@ -1775,6 +1831,16 @@
       if (e.target.closest("[data-more]")) {
         ui.limit += 60;
         return renderDynamic(overlay);
+      }
+      const man = e.target.closest("[data-manual]");
+      if (man) {
+        e.preventDefault();
+        if (loadRun().running) stopRun("Dihentikan untuk dikerjakan manual.");
+        try {
+          localStorage.removeItem(HELPER_KEY);
+        } catch (err) {}
+        location.href = man.getAttribute("href");
+        return;
       }
       const one = e.target.closest("[data-one]");
       if (one) {
@@ -1925,27 +1991,50 @@
   }
   const stamp = () => new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
 
+  // Nama wilayah untuk nama file ekspor, dari kecamatan/desa yang ada di antrean
+  function wilayahTag() {
+    const queue = loadQueue();
+    const kecs = [...new Set(queue.map((q) => q.kec).filter(Boolean))];
+    const desas = [...new Set(queue.map((q) => q.desa).filter(Boolean))];
+    let tag = "semua-wilayah";
+    if (desas.length === 1) tag = kecs.length === 1 ? `${kecs[0]}-${desas[0]}` : desas[0];
+    else if (kecs.length === 1) tag = kecs[0];
+    else if (kecs.length > 1) tag = `${kecs.length}-kecamatan`;
+    return tag.replace(/[\\/:*?"<>|\s]+/g, "_").replace(/_+/g, "_").slice(0, 80);
+  }
+
   function exportCsv() {
     const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const lines = [["no", "baris_excel", "nama_usaha", "idsbr", "kec", "desa", "sls", "27a_lama", "27b_lama", "27a_baru", "27b_baru", "status", "keterangan", "waktu", "link"].join(",")];
+    const lines = [
+      [
+        "no", "baris_excel", "nama_usaha", "idsbr", "kec", "desa", "sls",
+        ...FIELDS.map((f) => `${f[6]}_lama`), ...FIELDS.map((f) => `${f[6]}_baru`),
+        "status", "keterangan", "hasil", "waktu", "link",
+      ].join(","),
+    ];
     loadQueue().forEach((q) =>
       q.targets.forEach((t) =>
         lines.push(
-          [t.no, t.row, t.nama, t.idsbr, q.kec, q.desa, q.sls, t.old.a, t.old.b, t.neu.a, t.neu.b, (STATUS[q.status] || {}).label, q.reason, q.doneAt, docUrl(q)]
+          [
+            t.no, t.row, t.nama, t.idsbr, q.kec, q.desa, q.sls,
+            ...FIELDS.map(([k]) => t.old[k]), ...FIELDS.map(([k]) => t.neu[k]),
+            (STATUS[q.status] || {}).label, q.reason, q.result, q.doneAt, docUrl(q),
+          ]
             .map(cell)
             .join(","),
         ),
       ),
     );
-    download(`laporan-koreksi-r27-${stamp()}.csv`, "﻿" + lines.join("\n"), "text/csv");
+    download(`laporan-${APP.file}-${wilayahTag()}-${stamp()}.csv`, "﻿" + lines.join("\n"), "text/csv");
   }
   function exportJson() {
-    download(`antrean-koreksi-r27-${stamp()}.json`, JSON.stringify({ v: 1, queue: loadQueue(), conf: loadConf() }), "application/json");
+    download(`antrean-${APP.file}-${wilayahTag()}-${stamp()}.json`, JSON.stringify({ v: 1, queue: loadQueue(), conf: loadConf() }), "application/json");
   }
   async function importJson(file) {
     try {
       const data = JSON.parse(await file.text());
-      if (!Array.isArray(data.queue)) throw new Error("bukan file ekspor skrip ini");
+      if (!Array.isArray(data.queue) || data.queue.some((q) => !q.targets || q.targets.some((t) => !t.neu || FIELDS.some(([k]) => !(k in t.neu)))))
+        throw new Error(`bukan file ekspor skrip ${APP.name}`);
       if (loadQueue().length && !confirm(`Timpa antrean sekarang (${loadQueue().length} dokumen) dengan isi file (${data.queue.length} dokumen)?`)) return;
       saveQueue(data.queue);
       if (data.conf) saveConf({ ...loadConf(), ...data.conf });
@@ -1954,6 +2043,155 @@
       toast(`${data.queue.length} dokumen diimpor.`);
     } catch (e) {
       alert(`Gagal impor: ${e.message}`);
+    }
+  }
+
+  // ---------- Kerjakan manual: panel bantu di halaman dokumen ----------
+  function markManual(id) {
+    const q = loadQueue().find((x) => x.id === id);
+    if (!q) return;
+    const before = (STATUS[q.status] || {}).label || q.status;
+    updateItem(id, {
+      status: "manual",
+      reason: `dikerjakan manual (sebelumnya: ${before}${q.reason ? ` — ${q.reason}` : ""})`,
+      doneAt: new Date().toISOString(),
+    });
+  }
+  const docIdHere = () => {
+    const m = location.pathname.match(/\/app\/assignment\/[^/]+\/([0-9a-f-]{36})/i);
+    return m ? m[1].toLowerCase() : null;
+  };
+  // Kartu usaha yang sedang terbuka di halaman (isian 27.a kelihatan) + nama usahanya
+  function openCardNow() {
+    const pend = visiblePend();
+    if (!pend) return null;
+    const inst = instOf(pend);
+    const name = ["nama_komersial", "nama_usaha_edit", "nama_usaha"]
+      .map((id) => {
+        const b = box(id, inst);
+        const i = b && b.querySelector("input, textarea");
+        return i ? i.value.trim() : "";
+      })
+      .find(Boolean);
+    return { inst, cur: readFields(inst), name: name || "" };
+  }
+  // Kartu terbuka dicocokkan ke target: nama usaha dulu, lalu nilai baru / lama, lalu satu-satunya target
+  function targetFor(q, card) {
+    const t = q.targets;
+    const byName = card.name ? t.filter((x) => nameMatch(card.name, x.nama) >= NAME_OK) : [];
+    if (byName.length === 1) return byName[0];
+    const pool = byName.length ? byName : t;
+    return pool.find((x) => eqAll(card.cur, x.neu)) || pool.find((x) => oldOrNew(card.cur, x)) || (t.length === 1 ? t[0] : null);
+  }
+
+  let helpSig = "";
+  let helpBusy = false;
+  function updateHelper() {
+    let el = document.getElementById("k27-help");
+    const id = docIdHere();
+    const q = id && !loadRun().running ? loadQueue().find((x) => did(x) === id || x.id === id) : null;
+    if (!q || loadJson(HELPER_KEY, null) === id) {
+      if (el) el.remove();
+      helpSig = "";
+      return;
+    }
+    if (!document.body) return;
+    ensureStyles();
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "k27-help";
+      el.className = "k27 k27-hud k27-help";
+      el.addEventListener("click", onHelperClick);
+      document.body.appendChild(el);
+    }
+    const card = openCardNow();
+    const editing = onEditOf(id);
+    const sig = JSON.stringify([q.status, q.reason, card && card.cur, card && card.name, editing, helpBusy]);
+    if (sig === helpSig) return;
+    helpSig = sig;
+    const st = STATUS[q.status] || STATUS.pending;
+    const t = card ? targetFor(q, card) : null;
+    const rows = q.targets
+      .map(
+        (x) => `<div class="doc" style="margin-top:8px">${esc(x.nama)}</div>
+        <table class="tb">${FIELDS.map(([k, , l]) => {
+          const now = card && t === x ? card.cur[k] : null;
+          const ok = now !== null && now === x.neu[k];
+          return `<tr><td>${l}</td><td class="o">${rupiah(x.old[k])}</td><td>→</td><td class="n">${rupiah(x.neu[k])}</td><td class="${ok ? "ok" : "now"}">${now === null ? "" : ok ? "✓" : rupiah(now)}</td></tr>`;
+        }).join("")}</table>`,
+      )
+      .join("");
+    const nameWarn = card && t && card.name && nameMatch(card.name, t.nama) < NAME_OK ? ` ⚠ nama di kartu "${esc(card.name)}" beda dengan Excel` : "";
+    const hint = !editing
+      ? "Klik Edit (revoke kalau perlu), lalu buka kartu usahanya."
+      : card
+        ? `Kartu terbuka${t ? ` → ${esc(t.nama)}` : " (tidak cocok dengan Excel)"}${nameWarn}. Kolom kanan = isi sekarang.`
+        : "Buka kartu usaha yang mau dikoreksi.";
+    el.innerHTML = `
+      <div class="top">
+        <div class="ttl">✍ ${esc(APP.name)} — manual</div>
+        <span class="k27-pill" style="--c:${st.color}">${st.label}</span>
+        <span style="flex:1"></span>
+        <button class="k27-btn" data-help="hide" title="Sembunyikan untuk dokumen ini">×</button>
+      </div>
+      ${q.reason ? `<div class="dim" style="margin-top:6px">${esc(q.reason)}</div>` : ""}
+      ${rows}
+      <div class="dim" style="margin-top:8px">${hint}</div>
+      <div class="k27-row" style="margin-top:10px">
+        <button class="k27-btn go" data-help="fill" ${editing && card && !helpBusy ? "" : "disabled"}>✏ Isi ke kartu ini</button>
+        <button class="k27-btn" data-help="done">✓ Tandai selesai manual</button>
+        <button class="k27-btn" data-help="status" title="Pilih status lain (Perlu cek, Gagal, Sudah sesuai, …)">🏷 Status…</button>
+        <button class="k27-btn" data-help="auto" title="Kembalikan ke Belum & jalankan otomatis dokumen ini">↻ Otomatis</button>
+      </div>`;
+  }
+  async function onHelperClick(e) {
+    const act = e.target.closest("[data-help]")?.dataset.help;
+    const here = docIdHere();
+    const q = here && loadQueue().find((x) => did(x) === here || x.id === here);
+    if (!act || !q) return;
+    if (act === "hide") {
+      saveJson(HELPER_KEY, here);
+      return updateHelper();
+    }
+    if (act === "done") {
+      markManual(q.id);
+      toast("Ditandai Selesai manual.");
+      return updateHelper();
+    }
+    if (act === "status")
+      return openStatusPicker([q.id], () => {
+        helpSig = "";
+        updateHelper();
+      });
+    if (act === "auto") {
+      updateItem(q.id, { status: "pending", reason: "" });
+      return startRun({ onlyIds: [q.id] });
+    }
+    if (act === "fill" && !helpBusy) {
+      const card = openCardNow();
+      let t = card && targetFor(q, card);
+      if (!t && card && q.targets.length > 1) {
+        const pick = prompt(`Kartu ini untuk usaha yang mana?\n${q.targets.map((x, i) => `${i + 1}. ${x.nama}`).join("\n")}`, "1");
+        t = q.targets[Number(pick) - 1];
+      }
+      if (!t) return toast("Kartu yang terbuka tidak cocok dengan baris Excel dokumen ini.");
+      const warn = [];
+      if (card.name && nameMatch(card.name, t.nama) < NAME_OK) warn.push(`nama usaha di kartu "${card.name}" beda dengan Excel "${t.nama}"`);
+      if (!eqAll(card.cur, t.neu) && !oldOrNew(card.cur, t)) warn.push(`nilai di kartu (${fmtCur(card.cur)}) beda dari Excel`);
+      if (warn.length && !confirm(`Perhatian: ${warn.join("; ")}.\n\nTetap ganti ke nilai baru?`)) return;
+      helpBusy = true;
+      updateHelper();
+      try {
+        await writeCard(card.inst, t, card.cur);
+        updateItem(q.id, { result: `${t.nama.split("(")[0].trim()}: ${fmtChange(card.cur, t) || "sudah sesuai"} (manual)` });
+        toast("Nilai sudah diganti. Kirim & Approve di FASIH, lalu klik “Tandai selesai manual”.");
+      } catch (err) {
+        alert(`Gagal mengisi: ${err.message}`);
+      } finally {
+        helpBusy = false;
+        helpSig = "";
+        updateHelper();
+      }
     }
   }
 
@@ -2005,7 +2243,7 @@
     hud.innerHTML = `
       <div class="top">
         <div class="spin ${run.paused || run.hold || limited ? "wait" : ""}"></div>
-        <div class="ttl">Koreksi R.27</div>
+        <div class="ttl">${esc(APP.name)}</div>
         <div class="dim">${run.hold ? "⏸ DIJEDA · " : ""}${T().name}${run.testMode ? " · Mode uji" : ""} · ${done}/${total} dokumen</div>
         <span style="flex:1"></span>
         ${run.paused ? `<button class="k27-btn go" data-hud="go">✓ Kirim sekarang</button><button class="k27-btn" data-hud="pass">Lewati</button>` : ""}
@@ -2027,14 +2265,15 @@
     const btn = document.createElement("button");
     btn.id = "k27-launch";
     btn.className = "k27-launch";
-    btn.innerHTML = `<span class="b">27</span> Koreksi Pendapatan`;
-    btn.title = "Buka panel (Alt+9)";
+    btn.innerHTML = `<span class="b">${esc(APP.badge)}</span> ${esc(APP.launch)}`;
+    btn.title = `Buka panel (Alt+${APP.hotkey})`;
+    btn.style.bottom = `${APP.launchBottom}px`;
     btn.onclick = openPanel;
     document.body.appendChild(btn);
   }
 
   window.addEventListener("keydown", (e) => {
-    if (e.altKey && e.key === "9") {
+    if (e.altKey && e.key === APP.hotkey) {
       e.preventDefault();
       document.getElementById("k27-panel") ? closePanel() : openPanel();
     }
@@ -2048,11 +2287,12 @@
     const run = loadRun();
     if (run.running && !busy) tick();
     if (run.running) updateHud();
+    updateHelper();
     if (Date.now() - lastPanelRefresh > 1500) {
       lastPanelRefresh = Date.now();
       refreshPanel();
     }
   }, 700);
 
-  console.log("[Koreksi R.27 v1.7] Aktif. Tombol di kiri bawah (Alt+9).");
+  console.log(`[${APP.name} v${APP.version}] Aktif. Tombol di kiri bawah (Alt+${APP.hotkey}).`);
 })();
