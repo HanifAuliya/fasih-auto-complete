@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi R.27 - Pendapatan (27.a / 27.b)
 // @namespace    hanif-bps-hst
-// @version      1.8
+// @version      1.9
 // @description  Baca Excel koreksi, buka tiap dokumen, ganti 27.a (nilai_pendapatan) = R.27a dan 27.b (pendapatan_lain) = R.27b di kartu usaha yang tepat, lalu Kirim & Approve. Dokumen keluarga: kartu dicari di Blok II; dokumen usaha tunggal: langsung ke kartunya.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -18,13 +18,15 @@
   const AREA_KEY = "k27_area_titles";
   const LIST_KEY = "k27_list_url"; // halaman daftar assignment terakhir yang dibuka (untuk cari lewat filter)
   const HELPER_KEY = "k27_helper_hidden";
+  const HELPER_POS_KEY = "k27_helper_pos"; // posisi panel bantu yang digeser
+  const HELPER_MIN_KEY = "k27_helper_min"; // panel bantu diperkecil
   const RATE_KEY = "fasih_rate_limit"; // sama dengan skrip FASIH lain: jeda 429 berlaku bersama
 
   // ===== KONFIGURASI =====
   // Satu-satunya bagian yang beda antara skrip Koreksi R.27 dan Koreksi Gaji; sisanya sama persis.
   const APP = {
     name: "Koreksi R.27",
-    version: "1.8",
+    version: "1.9",
     title: "Koreksi Pendapatan R.27",
     badge: "27",
     launch: "Koreksi Pendapatan",
@@ -1580,6 +1582,11 @@
       .k27-help .tb .ok { color:#86efac; text-align:right; }
       .k27-help .tb .now { color:#fde68a; text-align:right; }
       .k27-help .k27-btn:disabled { opacity:.4; }
+      .k27-help .top { cursor:move; user-select:none; touch-action:none; }
+      .k27-help .top .grip { color:#7d83a8; font-size:14px; line-height:1; }
+      .k27-help.drag { opacity:.85; box-shadow:0 24px 60px rgba(10,10,30,.6); }
+      .k27-help.min { width:auto; max-width:94vw; padding:9px 12px; }
+      .k27-help.min > :not(.top) { display:none; }
       .k27-toast { position:fixed; left:50%; top:20px; transform:translateX(-50%); z-index:1000003; background:#111324; color:#fff; padding:10px 16px; border-radius:12px; font:600 13px "Inter",ui-sans-serif,system-ui,sans-serif; box-shadow:0 12px 30px rgba(0,0,0,.3); animation:k27fade .2s; }
     `;
     document.head.appendChild(style);
@@ -2084,6 +2091,49 @@
     return pool.find((x) => eqAll(card.cur, x.neu)) || pool.find((x) => oldOrNew(card.cur, x)) || (t.length === 1 ? t[0] : null);
   }
 
+  // Panel bantu bisa digeser (tarik bagian judul) & posisinya diingat; klik dua kali judul = kembali ke pojok
+  function placeHelper(el) {
+    const pos = loadJson(HELPER_POS_KEY, null);
+    if (!pos) return Object.assign(el.style, { left: "", top: "", right: "", bottom: "" });
+    const w = Math.min(el.offsetWidth || 400, window.innerWidth);
+    const x = Math.min(Math.max(0, pos.x), window.innerWidth - w);
+    const y = Math.min(Math.max(0, pos.y), window.innerHeight - 48);
+    Object.assign(el.style, { left: `${x}px`, top: `${y}px`, right: "auto", bottom: "auto" });
+  }
+  function makeDraggable(el) {
+    el.addEventListener("pointerdown", (e) => {
+      if (!e.target.closest(".top") || e.target.closest("button") || e.button !== 0) return;
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      const dx = e.clientX - r.left;
+      const dy = e.clientY - r.top;
+      el.classList.add("drag");
+      const move = (ev) => {
+        const x = Math.min(Math.max(0, ev.clientX - dx), window.innerWidth - r.width);
+        const y = Math.min(Math.max(0, ev.clientY - dy), window.innerHeight - 48);
+        Object.assign(el.style, { left: `${x}px`, top: `${y}px`, right: "auto", bottom: "auto" });
+      };
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        el.classList.remove("drag");
+        const b = el.getBoundingClientRect();
+        saveJson(HELPER_POS_KEY, { x: Math.round(b.left), y: Math.round(b.top) });
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+    });
+    el.addEventListener("dblclick", (e) => {
+      if (!e.target.closest(".top") || e.target.closest("button")) return;
+      saveJson(HELPER_POS_KEY, null);
+      placeHelper(el);
+    });
+  }
+  window.addEventListener("resize", () => {
+    const el = document.getElementById("k27-help");
+    if (el) placeHelper(el);
+  });
+
   let helpSig = "";
   let helpBusy = false;
   function updateHelper() {
@@ -2102,11 +2152,15 @@
       el.id = "k27-help";
       el.className = "k27 k27-hud k27-help";
       el.addEventListener("click", onHelperClick);
+      makeDraggable(el);
       document.body.appendChild(el);
+      requestAnimationFrame(() => placeHelper(el)); // setelah isinya tergambar (lebarnya sudah diketahui)
     }
+    const mini = !!loadJson(HELPER_MIN_KEY, false);
+    el.classList.toggle("min", mini);
     const card = openCardNow();
     const editing = onEditOf(id);
-    const sig = JSON.stringify([q.status, q.reason, card && card.cur, card && card.name, editing, helpBusy]);
+    const sig = JSON.stringify([q.status, q.reason, card && card.cur, card && card.name, editing, helpBusy, mini]);
     if (sig === helpSig) return;
     helpSig = sig;
     const st = STATUS[q.status] || STATUS.pending;
@@ -2128,10 +2182,12 @@
         ? `Kartu terbuka${t ? ` → ${esc(t.nama)}` : " (tidak cocok dengan Excel)"}${nameWarn}. Kolom kanan = isi sekarang.`
         : "Buka kartu usaha yang mau dikoreksi.";
     el.innerHTML = `
-      <div class="top">
+      <div class="top" title="Tarik untuk memindah · klik dua kali untuk kembali ke pojok">
+        <span class="grip">⠿</span>
         <div class="ttl">✍ ${esc(APP.name)} — manual</div>
         <span class="k27-pill" style="--c:${st.color}">${st.label}</span>
         <span style="flex:1"></span>
+        <button class="k27-btn" data-help="min" title="${mini ? "Perbesar" : "Perkecil"}">${mini ? "▢" : "–"}</button>
         <button class="k27-btn" data-help="hide" title="Sembunyikan untuk dokumen ini">×</button>
       </div>
       ${q.reason ? `<div class="dim" style="margin-top:6px">${esc(q.reason)}</div>` : ""}
@@ -2152,6 +2208,11 @@
     if (act === "hide") {
       saveJson(HELPER_KEY, here);
       return updateHelper();
+    }
+    if (act === "min") {
+      saveJson(HELPER_MIN_KEY, !loadJson(HELPER_MIN_KEY, false));
+      updateHelper();
+      return placeHelper(document.getElementById("k27-help"));
     }
     if (act === "done") {
       markManual(q.id);
