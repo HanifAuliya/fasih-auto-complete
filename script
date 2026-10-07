@@ -6472,18 +6472,12 @@
           missing = requiredLabels(inst);
           wrong = checkUsaha(inst, item, isNew);
         }
-        const pengusaha = box("pengusaha_var", inst);
         const nameNow =
           (
             (box("nama_komersial", inst) || document).querySelector(
               "input, textarea",
             ) || {}
           ).value || card.name;
-        ownerByCard.set(
-          card.idx,
-          pengusaha ? dropdownValue(pengusaha) : ownerOf(item),
-        );
-        catByCard.set(card.idx, usahaProfile(item.kbli, item.namaUsaha).agri || "");
         updateItem(item.id, {
           usahaCard: nameNow || card.name,
           kbli: item.kbli,
@@ -6556,11 +6550,8 @@
       );
 
     // 5) Blok I lagi: Ya untuk semua penanggung jawab usaha (termasuk usaha lain), Tidak untuk anggota lain.
-    // Baca ulang SEMUA kartu dari nol di sini (tidak pakai ownerByCard/catByCard hasil langkah 3) --
-    // setMembersUsaha(decideAll=true) di bawah akan mengubah SIAPA PUN yang tidak ada di daftar "owners"
-    // menjadi Tidak, walau sebelumnya sudah benar Ya. Kalau ownerByCard sempat basi (mis. 12.a kartu itu
-    // berubah lagi setelah step 3 mencatatnya), pemilik yang sebenarnya sudah benar bisa ikut "dibalik"
-    // jadi Tidak di sini -> itu yang bikin terlihat bolak-balik lalu galat.
+    // Baca ulang semua kartu dari nol di sini; setMembersUsaha(decideAll=true) mengubah siapa pun yang
+    // tidak ada di daftar owners menjadi Tidak.
     try {
       const {
         owners: allOwners,
@@ -8191,6 +8182,13 @@
     }
     if (!data || typeof data !== "object") {
       alert("File tidak valid.");
+      return;
+    }
+    if (Array.isArray(data.queue) && !data.queue.every((q) => q && q.krt !== undefined)) {
+      alert(
+        "Import dibatalkan: file ini bukan ekspor data lengkap (baris antrean tidak punya data KRT/nama usaha).\n\n" +
+          "Antrean di laptop ini tidak diubah. Pakai file 💾 Export dari panel, atau 🧩 Gabung rekap JSON untuk file status.",
+      );
       return;
     }
     const qLen = Array.isArray(data.queue) ? data.queue.length : 0;
