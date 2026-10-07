@@ -6682,29 +6682,25 @@
   // Halaman CATATAN + nyalakan "Tampilkan Anomali Usaha dan Keluarga"
   async function openCatatan() {
     closeDialogs();
-    await goSection("CATATAN", () => !!findAnomaliSwitch());
-    const control = () => {
-      const s = findAnomaliSwitch();
-      return s && s.parentElement.querySelector('[id$="-control"]');
-    };
+    await goSection("CATATAN", () => !!findAnomaliControl());
     const isOn = () => {
       const s = findAnomaliSwitch();
-      const c = control();
+      const c = findAnomaliControl();
       return (
-        !!s &&
-        (s.checked ||
-          s.getAttribute("aria-checked") === "true" ||
-          (c && c.hasAttribute("data-checked")))
+        (!!s && (s.checked || s.getAttribute("aria-checked") === "true")) ||
+        (!!c &&
+          (c.hasAttribute("data-checked") ||
+            c.getAttribute("aria-checked") === "true"))
       );
     };
     // Beberapa cara klik; berhenti begitu toggle benar-benar menyala
     const attempts = [
-      () => triggerClick(control() || findAnomaliSwitch()),
-      () => findAnomaliSwitch().click(),
+      () => triggerClick(findAnomaliControl() || findAnomaliSwitch()),
+      () => (findAnomaliControl() || findAnomaliSwitch()).click(),
       () => {
-        const s = findAnomaliSwitch();
-        s.focus();
-        s.dispatchEvent(
+        const el = findAnomaliControl() || findAnomaliSwitch();
+        el.focus();
+        el.dispatchEvent(
           new KeyboardEvent("keydown", {
             key: " ",
             code: "Space",
@@ -6712,7 +6708,7 @@
             bubbles: true,
           }),
         );
-        s.dispatchEvent(
+        el.dispatchEvent(
           new KeyboardEvent("keyup", {
             key: " ",
             code: "Space",
@@ -7165,6 +7161,22 @@
       return;
     }
     await applyGalatFix(err, target, items, ctx);
+  }
+
+  // Elemen geser (div "...-control" dengan data-checked) untuk "Tampilkan Anomali Usaha dan Keluarga"
+  function findAnomaliControl() {
+    const direct = findAnomaliSwitch();
+    const near = direct && direct.parentElement.querySelector('[id$="-control"]');
+    if (near) return near;
+    return (
+      Array.from(document.querySelectorAll('[id$="-control"]')).find((el) => {
+        if (!visible(el)) return false;
+        let p = el;
+        for (let i = 0; i < 7 && p; i++, p = p.parentElement)
+          if (/anomali/i.test(p.innerText || "")) return true;
+        return false;
+      }) || null
+    );
   }
 
   // Switch "Tampilkan Anomali Usaha dan Keluarga" di halaman CATATAN
