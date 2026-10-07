@@ -7611,6 +7611,46 @@
   }
 
   // ---------- Bar status (selalu tampil saat berjalan / dijeda) ----------
+  const BAR_POS_KEY = "fasih_t2_bar_pos";
+  const BAR_MIN_KEY = "fasih_t2_bar_min";
+  function placeBar(bar) {
+    bar.classList.toggle("min", !!loadJson(BAR_MIN_KEY, false));
+    const pos = loadJson(BAR_POS_KEY, null);
+    if (!pos)
+      return Object.assign(bar.style, { left: "", top: "", bottom: "", transform: "" });
+    Object.assign(bar.style, {
+      left: `${Math.min(Math.max(0, pos.x), window.innerWidth - 120)}px`,
+      top: `${Math.min(Math.max(0, pos.y), window.innerHeight - 40)}px`,
+      bottom: "auto",
+      transform: "none",
+    });
+  }
+  function startBarDrag(e) {
+    const bar = e.currentTarget;
+    if (e.button !== 0 || !e.target.closest(".top") || e.target.closest("button")) return;
+    e.preventDefault();
+    const r = bar.getBoundingClientRect();
+    const dx = e.clientX - r.left;
+    const dy = e.clientY - r.top;
+    const move = (ev) => {
+      Object.assign(bar.style, {
+        left: `${Math.min(Math.max(0, ev.clientX - dx), window.innerWidth - 120)}px`,
+        top: `${Math.min(Math.max(0, ev.clientY - dy), window.innerHeight - 40)}px`,
+        bottom: "auto",
+        transform: "none",
+      });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      const b = bar.getBoundingClientRect();
+      saveJson(BAR_POS_KEY, { x: Math.round(b.left), y: Math.round(b.top) });
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+  let barResizeHooked = false;
+
   function updateRunBar() {
     const run = loadRun();
     let bar = document.getElementById("fasih-t2-bar");
@@ -7623,8 +7663,28 @@
       bar = document.createElement("div");
       bar.id = "fasih-t2-bar";
       bar.className = "fo fo-bar";
+      bar.addEventListener("pointerdown", startBarDrag);
+      bar.addEventListener("dblclick", (e) => {
+        if (!e.target.closest(".top") || e.target.closest("button")) return;
+        saveJson(BAR_POS_KEY, null);
+        placeBar(bar);
+      });
+      if (!barResizeHooked) {
+        barResizeHooked = true;
+        window.addEventListener("resize", () => {
+          const b = document.getElementById("fasih-t2-bar");
+          if (b) placeBar(b);
+        });
+      }
+      placeBar(bar);
       bar.addEventListener("click", (e) => {
         const act = e.target.closest("[data-bar]")?.dataset.bar;
+        if (act === "min") {
+          const minimized = !bar.classList.contains("min");
+          bar.classList.toggle("min", minimized);
+          saveJson(BAR_MIN_KEY, minimized);
+          updateRunBar();
+        }
         if (act === "stop") stopRun();
         if (act === "panel") openPanel();
         if (act === "pause") setUserPause(true, "Dijeda oleh Anda");
@@ -7712,6 +7772,7 @@
         }
         ${hold ? `<button class="fo-btn go" data-bar="next">Lanjut ke berikutnya →</button>` : ""}
         ${!paused && !hold && !up.rate ? (up.on ? `<button class="fo-btn go" data-bar="resume">▶ Lanjut</button>` : `<button class="fo-btn" data-bar="pause">⏸ Jeda</button>`) : ""}
+        <button class="fo-btn" data-bar="min" title="Perkecil / besarkan bar">${bar.classList.contains("min") ? "＋" : "–"}</button>
         <button class="fo-btn" data-bar="panel" title="Buka panel (Alt+7)">☰</button>
         <button class="fo-btn stop" data-bar="stop">■ Stop</button>
       </div>
@@ -7895,7 +7956,10 @@
         box-shadow:0 20px 50px rgba(10,10,30,.45), inset 0 0 0 1px rgba(255,255,255,.07); font:13px "Inter",ui-sans-serif,system-ui,sans-serif;
         animation:fo-up .25s ease; }
       @keyframes fo-up { from { transform:translate(-50%,12px); opacity:0; } to { transform:translate(-50%,0); opacity:1; } }
-      .fo-bar .top { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+      .fo-bar .top { display:flex; align-items:center; gap:10px; flex-wrap:wrap; cursor:move; user-select:none; touch-action:none; }
+      .fo-bar .top .fo-btn { cursor:pointer; }
+      .fo-bar.min { width:max-content; max-width:94vw; padding:9px 12px; }
+      .fo-bar.min > :not(.top) { display:none; }
       .fo-bar .dot { width:16px; height:16px; border-radius:50%; border:2.5px solid rgba(255,255,255,.2); border-top-color:#a5b4fc; flex:none;
         animation:fo-spin .8s linear infinite; }
       .fo-bar .dot.paused { animation:none; border-color:rgba(251,191,36,.3); border-top-color:#fbbf24; }
