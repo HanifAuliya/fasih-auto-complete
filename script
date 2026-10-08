@@ -4774,6 +4774,16 @@
     };
   }
 
+  // 26.b Biaya produksi: usaha pertanian tidak punya isian 26.c "Biaya pembelian barang yang terjual"
+  // (budidaya tidak membeli barang untuk dijual lagi), jadi nilainya digabung ke 26.b supaya tidak hilang.
+  // Dihitung dari Excel setiap kali dipakai (bukan ditulis balik ke item.values) supaya tidak dobel kalau
+  // kartu yang sama diisi ulang (fillUsaha bisa dipanggil beberapa kali) atau dipakai lagi lewat galat.
+  function biayaProduksiValue(item, p) {
+    const v = item.values || {};
+    if (!p.agri) return v.biaya_produksi;
+    return String((Number(v.biaya_produksi) || 0) + (Number(v.beli_barang) || 0));
+  }
+
   const CARD_CATEGORY = [
     [/TANAMAN PANGAN/, "tanaman_pangan"],
     [/HORTIKULTURA/, "hortikultura"],
@@ -5935,6 +5945,13 @@
     if (base === "pengusaha_var") {
       return fillPengusaha(inst, item, []);
     }
+    if (base === "biaya_produksi") {
+      return (
+        (await fillField(base, inst, biayaProduksiValue(item, p), {
+          container: target,
+        })) === "ok"
+      );
+    }
     if (base === "keberadaan_usaha") {
       const isNew = !target.querySelector('input[type="radio"][value="1"]');
       return (
@@ -6146,7 +6163,6 @@
       "tk_tdk_dibayar",
       "tahun_operasi",
       "gaji",
-      "biaya_produksi",
       "operasional",
       "non_operasional",
       "nilai_pendapatan",
@@ -6159,9 +6175,13 @@
       if ((await fillField(id, inst, v[id], { wait: 1200 })) === "skip")
         notes.push(`${id} tidak muncul`);
     }
-    const beli = containerByLabel(/pembelian\s+barang/i, inst);
-    if (beli)
-      await fillField("", inst, v.beli_barang || "0", { container: beli });
+    if ((await fillField("biaya_produksi", inst, biayaProduksiValue(item, p), { wait: 1200 })) === "skip")
+      notes.push("biaya_produksi tidak muncul");
+    if (!p.agri) {
+      const beli = containerByLabel(/pembelian\s+barang/i, inst);
+      if (beli)
+        await fillField("", inst, v.beli_barang || "0", { container: beli });
+    }
 
     for (const [id, value] of [
       ["pribadi", "100"],
