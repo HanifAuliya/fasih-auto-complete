@@ -20,6 +20,8 @@
   const HELPER_KEY = "kk_helper_hidden";
   const HELPER_POS_KEY = "kk_helper_pos"; // posisi panel bantu yang digeser
   const HELPER_MIN_KEY = "kk_helper_min"; // panel bantu diperkecil
+  const HUD_POS_KEY = "kk_hud_pos"; // posisi bar progres yang digeser
+  const HUD_MIN_KEY = "kk_hud_min"; // bar progres diperkecil
   const RATE_KEY = "fasih_rate_limit"; // sama dengan skrip FASIH lain: jeda 429 berlaku bersama
 
   const APP = {
@@ -835,9 +837,10 @@
         throw new Error(`KBLI ${t.kbliBaru} tidak bisa dipilih (13.g / Master KBLI tidak muncul)`);
       notes.push(`KBLI ${code || "-"} → ${t.kbliBaru}`);
       changed = true;
-      if (parseRupiah(pembelianBefore) > 0) {
+      if (parseRupiah(pembelianBefore) > 0 || !pembelianBox0) {
         await sleep(W(500)); // rincian 26 dirender ulang sesuai KBLI baru
-        if (!box("biaya_pembelian", inst)) {
+        const pembelianBoxNow = box("biaya_pembelian", inst);
+        if (parseRupiah(pembelianBefore) > 0 && !pembelianBoxNow) {
           const produksiBox = box("biaya_produksi", inst);
           const produksiInput = produksiBox && produksiBox.querySelector("input");
           if (produksiInput) {
@@ -847,6 +850,16 @@
           } else {
             notes.push(`26.c "Biaya pembelian barang" (Rp ${pembelianBefore}) hilang setelah KBLI diganti, tapi 26.b juga tidak muncul — cek manual`);
           }
+        } else if (!pembelianBox0 && pembelianBoxNow) {
+          // KBLI pindah ke usaha dagang: 26.c baru muncul. Tidak ada angkanya di Excel (usaha ini
+          // sebelumnya bukan dagang) -> jangan ditebak, berhenti & minta diisi manual.
+          const pembelianInputNow = pembelianBoxNow.querySelector("input");
+          const nowVal = pembelianInputNow ? pembelianInputNow.value.trim() : "";
+          if (!nowVal)
+            throw Object.assign(
+              new Error(`26.c "Biaya pembelian barang yang terjual" baru muncul (kosong) setelah KBLI diganti ke usaha dagang — tidak ada nilainya di Excel, isi manual dulu lalu Kirim & Approve`),
+              { soft: true },
+            );
         }
       }
     }
@@ -1892,11 +1905,11 @@
       .kk-help .line .o { color:#9aa0c3; text-decoration:line-through; }
       .kk-help .line .n { color:#fff; font-weight:650; }
       .kk-help .kk-btn:disabled { opacity:.4; }
-      .kk-help .top { cursor:move; user-select:none; touch-action:none; }
-      .kk-help .top .grip { color:#7d83a8; font-size:14px; line-height:1; }
-      .kk-help.drag { opacity:.85; box-shadow:0 24px 60px rgba(10,10,30,.6); }
-      .kk-help.min { width:auto; max-width:94vw; padding:9px 12px; }
-      .kk-help.min > :not(.top) { display:none; }
+      .kk-hud .top { cursor:move; user-select:none; touch-action:none; }
+      .kk-hud .top .grip { color:#7d83a8; font-size:14px; line-height:1; }
+      .kk-hud.drag { opacity:.85; box-shadow:0 24px 60px rgba(10,10,30,.6); }
+      .kk-hud.min { width:auto; max-width:94vw; padding:9px 12px; }
+      .kk-hud.min > :not(.top) { display:none; }
       .kk-toast { position:fixed; left:50%; top:20px; transform:translateX(-50%); z-index:1000003; background:#111324; color:#fff; padding:10px 16px; border-radius:12px; font:600 13px "Inter",ui-sans-serif,system-ui,sans-serif; box-shadow:0 12px 30px rgba(0,0,0,.3); animation:kkfade .2s; }
     `;
     document.head.appendChild(style);
@@ -2396,15 +2409,18 @@
     return pool.find((x) => card.code === x.kbliBaru) || pool.find((x) => card.code === x.kbliLama) || (t.length === 1 ? t[0] : null);
   }
 
-  function placeHelper(el) {
-    const pos = loadJson(HELPER_POS_KEY, null);
-    if (!pos) return Object.assign(el.style, { left: "", top: "", right: "", bottom: "" });
+  // Panel bantu & bar progres bisa digeser (tarik bagian judul) & posisinya diingat;
+  // klik dua kali judul = kembali ke tempat semula
+  function placeEl(el, key) {
+    if (!el) return;
+    const pos = loadJson(key, null);
+    if (!pos) return Object.assign(el.style, { left: "", top: "", right: "", bottom: "", transform: "" });
     const w = Math.min(el.offsetWidth || 400, window.innerWidth);
     const x = Math.min(Math.max(0, pos.x), window.innerWidth - w);
     const y = Math.min(Math.max(0, pos.y), window.innerHeight - 48);
-    Object.assign(el.style, { left: `${x}px`, top: `${y}px`, right: "auto", bottom: "auto" });
+    Object.assign(el.style, { left: `${x}px`, top: `${y}px`, right: "auto", bottom: "auto", transform: "none" });
   }
-  function makeDraggable(el) {
+  function makeDraggable(el, key) {
     el.addEventListener("pointerdown", (e) => {
       if (!e.target.closest(".top") || e.target.closest("button") || e.button !== 0) return;
       e.preventDefault();
@@ -2415,27 +2431,27 @@
       const move = (ev) => {
         const x = Math.min(Math.max(0, ev.clientX - dx), window.innerWidth - r.width);
         const y = Math.min(Math.max(0, ev.clientY - dy), window.innerHeight - 48);
-        Object.assign(el.style, { left: `${x}px`, top: `${y}px`, right: "auto", bottom: "auto" });
+        Object.assign(el.style, { left: `${x}px`, top: `${y}px`, right: "auto", bottom: "auto", transform: "none" });
       };
       const up = () => {
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
         el.classList.remove("drag");
         const b = el.getBoundingClientRect();
-        saveJson(HELPER_POS_KEY, { x: Math.round(b.left), y: Math.round(b.top) });
+        saveJson(key, { x: Math.round(b.left), y: Math.round(b.top) });
       };
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
     });
     el.addEventListener("dblclick", (e) => {
       if (!e.target.closest(".top") || e.target.closest("button")) return;
-      saveJson(HELPER_POS_KEY, null);
-      placeHelper(el);
+      saveJson(key, null);
+      placeEl(el, key);
     });
   }
   window.addEventListener("resize", () => {
-    const el = document.getElementById("kk-help");
-    if (el) placeHelper(el);
+    placeEl(document.getElementById("kk-help"), HELPER_POS_KEY);
+    placeEl(document.getElementById("kk-hud"), HUD_POS_KEY);
   });
 
   let helpSig = "";
@@ -2456,9 +2472,9 @@
       el.id = "kk-help";
       el.className = "kk kk-hud kk-help";
       el.addEventListener("click", onHelperClick);
-      makeDraggable(el);
+      makeDraggable(el, HELPER_POS_KEY);
       document.body.appendChild(el);
-      requestAnimationFrame(() => placeHelper(el));
+      requestAnimationFrame(() => placeEl(el, HELPER_POS_KEY));
     }
     const mini = !!loadJson(HELPER_MIN_KEY, false);
     el.classList.toggle("min", mini);
@@ -2516,7 +2532,7 @@
     if (act === "min") {
       saveJson(HELPER_MIN_KEY, !loadJson(HELPER_MIN_KEY, false));
       updateHelper();
-      return placeHelper(document.getElementById("kk-help"));
+      return placeEl(document.getElementById("kk-help"), HELPER_POS_KEY);
     }
     if (act === "done") {
       markManual(q.id);
@@ -2594,19 +2610,30 @@
           const r = loadRun();
           if (r.cur) finishItem(r.cur.id, "tested", "MODE UJI: KBLI diganti tapi TIDAK dikirim (dokumen masih terbuka edit)");
         }
+        if (act === "min") {
+          saveJson(HUD_MIN_KEY, !loadJson(HUD_MIN_KEY, false));
+          hudSig = "";
+          updateHud();
+          placeEl(hud, HUD_POS_KEY);
+        }
       });
+      makeDraggable(hud, HUD_POS_KEY);
       document.body.appendChild(hud);
+      requestAnimationFrame(() => placeEl(hud, HUD_POS_KEY));
     }
+    const hudMini = !!loadJson(HUD_MIN_KEY, false);
+    hud.classList.toggle("min", hudMini);
     const it = run.cur ? loadQueue().find((q) => q.id === run.cur.id) : null;
     const iNow = run.cur ? STEPS.findIndex(([k]) => k === run.cur.stage) : -1;
     const limited = rateLimited();
     const total = run.total || 0;
     const done = run.processed || 0;
-    const sig = JSON.stringify([run.cur, run.paused, run.logs, limited, done, run.testMode, run.hold]);
+    const sig = JSON.stringify([run.cur, run.paused, run.logs, limited, done, run.testMode, run.hold, hudMini]);
     if (sig === hudSig) return;
     hudSig = sig;
     hud.innerHTML = `
-      <div class="top">
+      <div class="top" title="Tarik untuk memindah · klik dua kali untuk kembali ke tengah bawah">
+        <span class="grip">⠿</span>
         <div class="spin ${run.paused || run.hold || limited ? "wait" : ""}"></div>
         <div class="ttl">${esc(APP.name)}</div>
         <div class="dim">${run.hold ? "⏸ DIJEDA · " : ""}${T().name}${run.testMode ? " · Mode uji" : ""} · ${done}/${total} dokumen</div>
@@ -2614,6 +2641,7 @@
         ${run.paused ? `<button class="kk-btn go" data-hud="go">✓ Kirim sekarang</button><button class="kk-btn" data-hud="pass">Lewati</button>` : ""}
         ${run.hold ? `<button class="kk-btn go" data-hud="resume">▶ Lanjut</button>` : `<button class="kk-btn" data-hud="hold" title="Tahan sementara; langkah yang sedang jalan dilanjutkan dari titik yang sama">⏸ Jeda</button>`}
         <button class="kk-btn" data-hud="panel" title="Buka panel">☰</button>
+        <button class="kk-btn" data-hud="min" title="${hudMini ? "Perbesar" : "Perkecil"}">${hudMini ? "▢" : "–"}</button>
         <button class="kk-btn stop" data-hud="stop">■ Stop</button>
       </div>
       ${
