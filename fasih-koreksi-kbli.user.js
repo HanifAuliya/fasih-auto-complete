@@ -758,6 +758,8 @@
     return true;
   }
 
+  const parseRupiah = (v) => Number(String(v || "").replace(/[^\d]/g, "")) || 0;
+
   // Ganti KBLI di kartu yang sedang terbuka, lalu produk (kalau Produk Baru ada) & kegiatan utama
   // (kolom "Kegiatan utama" baru, atau penyesuaian kata kalau kolom itu kosong).
   async function ensureKbliCard(inst, t) {
@@ -765,11 +767,32 @@
     let changed = false;
     await waitFor(() => box("kbli", inst) || box("kbli_genai", inst), 5000);
     const code = effectiveKbliCode(inst);
+    // 26.c "Biaya pembelian barang yang terjual" cuma ada untuk usaha dagang. Kalau KBLI dipindah ke
+    // kategori yang tidak punya isian itu (paling sering dagang -> industri), nilai yang sudah terisi
+    // hilang begitu saja dari form. Disimpan dulu sebelum KBLI diganti, supaya bisa dipindahkan ke 26.b
+    // biaya produksi kalau 26.c memang sampai hilang setelah KBLI-nya diganti.
+    const pembelianBox0 = box("biaya_pembelian", inst);
+    const pembelianInput0 = pembelianBox0 && pembelianBox0.querySelector("input");
+    const pembelianBefore = pembelianInput0 ? pembelianInput0.value.trim() : "";
     if (code !== t.kbliBaru) {
       if (!(await setKbliCode(inst, t.kbliBaru)))
         throw new Error(`KBLI ${t.kbliBaru} tidak bisa dipilih (13.g / Master KBLI tidak muncul)`);
       notes.push(`KBLI ${code || "-"} → ${t.kbliBaru}`);
       changed = true;
+      if (parseRupiah(pembelianBefore) > 0) {
+        await sleep(W(500)); // rincian 26 dirender ulang sesuai KBLI baru
+        if (!box("biaya_pembelian", inst)) {
+          const produksiBox = box("biaya_produksi", inst);
+          const produksiInput = produksiBox && produksiBox.querySelector("input");
+          if (produksiInput) {
+            const gabung = String(parseRupiah(produksiInput.value) + parseRupiah(pembelianBefore));
+            await writeText("biaya_produksi", inst, gabung);
+            notes.push(`26.c "Biaya pembelian barang" (Rp ${pembelianBefore}) hilang setelah KBLI diganti → digabung ke 26.b biaya produksi (jadi Rp ${gabung})`);
+          } else {
+            notes.push(`26.c "Biaya pembelian barang" (Rp ${pembelianBefore}) hilang setelah KBLI diganti, tapi 26.b juga tidak muncul — cek manual`);
+          }
+        }
+      }
     }
     if (t.produkBaru) {
       const produkBox = box("produk", inst);
