@@ -367,6 +367,7 @@
     no: ["NO"],
     codeIdentity: ["CODEIDENTITY", "KODEIDENTITAS"],
     kegUtama: ["KEGUTAMA"],
+    kegUtamaBaru: ["KEGIATANUTAMA"],
     produk: ["PRODUK"],
     produkBaru: ["PRODUKBARU"],
     kbliAkhir: ["KBLIAKHIR"],
@@ -420,6 +421,7 @@
           nama: get("nama"),
           codeIdentity: get("codeIdentity"),
           kegUtamaLama: get("kegUtama"),
+          kegUtamaBaru: get("kegUtamaBaru"),
           produkLama: get("produk"),
           produkBaru: get("produkBaru"),
           kbliLama: padKbli(get("kbliAkhir")),
@@ -637,22 +639,41 @@
     return null;
   }
 
+  // Nilai kegiatan utama yang diinginkan: kolom "Kegiatan utama" (baru) di Excel dipakai langsung kalau
+  // ada isinya; kalau kosong, baru dicoba disesuaikan dari kata yang beda antara produk lama & baru
+  // (sejauh ini cuma pasangan HIBRIDA/INBRIDA -> lihat WORD_PAIRS). null = tidak ada yang bisa dipastikan.
+  function wantedKegUtama(t, kegCur) {
+    if (t.kegUtamaBaru) return { value: t.kegUtamaBaru, guessed: false };
+    if (t.produkBaru) {
+      const swapped = kegUtamaSwap(t.produkLama, t.produkBaru, kegCur || t.kegUtamaLama || "");
+      if (swapped) return { value: swapped, guessed: true };
+    }
+    return null;
+  }
+
   // Baca saja (aman dipakai di halaman Review, tanpa revoke)
   function readKbliCard(inst, t) {
     const { code } = currentKbliCode(inst);
     const produkBox = box("produk", inst);
     const produkInput = produkBox && produkBox.querySelector("input, textarea");
     const produkCur = produkInput ? produkInput.value.trim() : "";
+    const kegBox = box("keg_utama", inst);
+    const kegInput = kegBox && kegBox.querySelector('input[type="text"]:not([disabled]), textarea:not([disabled])');
+    const kegCur = kegInput ? kegInput.value.trim() : "";
+    const want = wantedKegUtama(t, kegCur);
     const kbliOk = code === t.kbliBaru;
     const produkOk = !t.produkBaru || produkCur === t.produkBaru;
-    const already = kbliOk && produkOk;
-    const summary = already
-      ? "sudah sesuai"
-      : `KBLI ${code || "-"} → ${t.kbliBaru}${t.produkBaru ? `, produk "${produkCur}" → "${t.produkBaru}"` : ""}`;
-    return { changed: false, already, summary };
+    const kegOk = !want || kegCur === want.value;
+    const already = kbliOk && produkOk && kegOk;
+    const bits = [];
+    if (!kbliOk) bits.push(`KBLI ${code || "-"} → ${t.kbliBaru}`);
+    if (!produkOk) bits.push(`produk "${produkCur}" → "${t.produkBaru}"`);
+    if (!kegOk) bits.push(`kegiatan utama "${kegCur}" → "${want.value}"`);
+    return { changed: false, already, summary: already ? "sudah sesuai" : bits.join(", ") };
   }
 
-  // Ganti KBLI di kartu yang sedang terbuka, lalu produk & kegiatan utama kalau Produk Baru ada di Excel
+  // Ganti KBLI di kartu yang sedang terbuka, lalu produk (kalau Produk Baru ada) & kegiatan utama
+  // (kolom "Kegiatan utama" baru, atau penyesuaian kata kalau kolom itu kosong).
   async function ensureKbliCard(inst, t) {
     const notes = [];
     let changed = false;
@@ -671,17 +692,18 @@
         await writeText("produk", inst, t.produkBaru);
         notes.push(`produk "${produkCur}" → "${t.produkBaru}"`);
         changed = true;
-        const kegBox = box("keg_utama", inst);
-        const kegInput = kegBox && kegBox.querySelector('input[type="text"]:not([disabled]), textarea:not([disabled])');
-        const kegCur = kegInput ? kegInput.value.trim() : "";
-        const swapped = kegUtamaSwap(t.produkLama || produkCur, t.produkBaru, kegCur || t.kegUtamaLama || "");
-        if (swapped && swapped !== kegCur) {
-          await writeText("keg_utama", inst, swapped);
-          notes.push(`kegiatan utama → "${swapped}"`);
-        } else if (!swapped) {
-          notes.push(`kegiatan utama belum disesuaikan (cek manual): produk lama "${t.produkLama}" → baru "${t.produkBaru}"`);
-        }
       }
+    }
+    const kegBox = box("keg_utama", inst);
+    const kegInput = kegBox && kegBox.querySelector('input[type="text"]:not([disabled]), textarea:not([disabled])');
+    const kegCur = kegInput ? kegInput.value.trim() : "";
+    const want = wantedKegUtama(t, kegCur);
+    if (want && want.value !== kegCur) {
+      await writeText("keg_utama", inst, want.value);
+      notes.push(`kegiatan utama → "${want.value}"${want.guessed ? " (disesuaikan otomatis)" : ""}`);
+      changed = true;
+    } else if (!want && t.produkBaru) {
+      notes.push(`kegiatan utama belum disesuaikan (cek manual): produk lama "${t.produkLama}" → baru "${t.produkBaru}"`);
     }
     return { changed, already: !changed, summary: notes.join("; ") || "sudah sesuai" };
   }
@@ -1690,7 +1712,10 @@
         const produk = t.produkBaru
           ? `<span class="kk-chg"><span class="k">Produk</span><span class="o">${esc(t.produkLama)}</span>→<span class="a">${esc(t.produkBaru)}</span></span>`
           : "";
-        return `${q.targets.length > 1 ? `<span class="kk-chg"><span class="u">${esc((t.nama || "").split("(")[0].trim())}</span></span>` : ""}${kbli}${produk}`;
+        const keg = t.kegUtamaBaru
+          ? `<span class="kk-chg"><span class="k">Keg. utama</span><span class="o">${esc(t.kegUtamaLama)}</span>→<span class="a">${esc(t.kegUtamaBaru)}</span></span>`
+          : "";
+        return `${q.targets.length > 1 ? `<span class="kk-chg"><span class="u">${esc((t.nama || "").split("(")[0].trim())}</span></span>` : ""}${kbli}${produk}${keg}`;
       })
       .join("");
     const meta = [q.kec, q.desa, q.sls, q.targets.length > 1 ? `${q.targets.length} usaha` : "", q.statusAwal].filter(Boolean).map(esc).join(" · ");
@@ -2073,12 +2098,12 @@
   function exportCsv() {
     const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const lines = [
-      ["no", "baris_excel", "nama_usaha", "kec", "desa", "sls", "kbli_lama", "kbli_baru", "produk_lama", "produk_baru", "status", "keterangan", "hasil", "waktu", "link"].join(","),
+      ["no", "baris_excel", "nama_usaha", "kec", "desa", "sls", "kbli_lama", "kbli_baru", "produk_lama", "produk_baru", "kegiatan_utama_lama", "kegiatan_utama_baru", "status", "keterangan", "hasil", "waktu", "link"].join(","),
     ];
     loadQueue().forEach((q) =>
       q.targets.forEach((t) =>
         lines.push(
-          [t.no, t.row, t.nama, q.kec, q.desa, q.sls, t.kbliLama, t.kbliBaru, t.produkLama, t.produkBaru, (STATUS[q.status] || {}).label, q.reason, q.result, q.doneAt, docUrl(q)]
+          [t.no, t.row, t.nama, q.kec, q.desa, q.sls, t.kbliLama, t.kbliBaru, t.produkLama, t.produkBaru, t.kegUtamaLama, t.kegUtamaBaru, (STATUS[q.status] || {}).label, q.reason, q.result, q.doneAt, docUrl(q)]
             .map(cell)
             .join(","),
         ),
@@ -2221,7 +2246,8 @@
         const ok = now !== null && now === x.kbliBaru;
         const kbliLine = `<div class="line">KBLI: <span class="o">${esc(x.kbliLama || "-")}</span> → <span class="n">${esc(x.kbliBaru)}</span>${now === null ? "" : ok ? " ✓" : ` (sekarang ${esc(now || "-")})`}</div>`;
         const produkLine = x.produkBaru ? `<div class="line">Produk: <span class="o">${esc(x.produkLama)}</span> → <span class="n">${esc(x.produkBaru)}</span></div>` : "";
-        return `<div class="doc" style="margin-top:8px">${esc(x.nama)}</div>${kbliLine}${produkLine}`;
+        const kegLine = x.kegUtamaBaru ? `<div class="line">Keg. utama: <span class="o">${esc(x.kegUtamaLama)}</span> → <span class="n">${esc(x.kegUtamaBaru)}</span></div>` : "";
+        return `<div class="doc" style="margin-top:8px">${esc(x.nama)}</div>${kbliLine}${produkLine}${kegLine}`;
       })
       .join("");
     const nameWarn = card && t && card.name && nameMatch(card.name, t.nama) < NAME_OK ? ` ⚠ nama di kartu "${esc(card.name)}" beda dengan Excel` : "";
