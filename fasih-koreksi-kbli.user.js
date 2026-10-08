@@ -687,6 +687,48 @@
     return null;
   }
 
+  // Rincian 20 (izin edar BPOM) & sertifikat halal BPJPH cuma ditanyakan untuk kategori usaha tertentu
+  // (biasanya industri) -> bisa muncul atau hilang sendiri kalau KBLI diganti. Kalau muncul, diisi jawaban
+  // aman yang sama dengan skrip utama: belum ada izin edar / sertifikat halal, 1 varian yang belum.
+  const KBLI_FIXED_IF_SHOWN = [
+    ["izin_edar", "radio", "3"],
+    ["belum_bpom", "text", "1"],
+    ["halal", "radio", "3"],
+    ["belum_halal", "text", "1"],
+  ];
+  // Baca saja (dipakai di halaman Review): field yang sedang terlihat tapi belum sesuai jawaban aman itu
+  function izinHalalGaps(inst) {
+    const bits = [];
+    for (const [id, kind, value] of KBLI_FIXED_IF_SHOWN) {
+      const el = box(id, inst);
+      if (!el) continue;
+      const cur = kind === "radio" ? radioValue(el) : ((el.querySelector("input, textarea") || {}).value || "").trim();
+      if (cur !== value) bits.push(`${id} "${cur || "-"}" → "${value}"`);
+    }
+    return bits;
+  }
+  // Isi field-field itu kalau ternyata muncul. Kode industri (10-33) lebih mungkin memunculkannya,
+  // jadi ditunggu lebih lama; kode lain ditunggu sebentar saja supaya tidak memperlambat kartu yang
+  // memang tidak ada field ini.
+  async function fillIzinHalalIfShown(inst, kbliBaru) {
+    const ms = /^(1\d|2\d|3[0-3])/.test(kbliBaru || "") ? 1200 : 300;
+    const notes = [];
+    for (const [id, kind, value] of KBLI_FIXED_IF_SHOWN) {
+      const el = await waitBox(id, inst, ms);
+      if (!el) continue;
+      if (kind === "radio") {
+        if (radioValue(el) === value) continue;
+        if (await setRadio(el, value)) notes.push(`${id} → ${value}`);
+      } else {
+        const input = el.querySelector('input[type="text"]:not([disabled]), textarea:not([disabled])');
+        if (!input || input.value.trim() === value) continue;
+        await writeText(id, inst, value);
+        notes.push(`${id} → ${value}`);
+      }
+    }
+    return notes;
+  }
+
   // Nilai kegiatan utama yang diinginkan: kolom "Kegiatan utama" (baru) di Excel dipakai langsung kalau
   // ada isinya; kalau kosong, baru dicoba disesuaikan dari kata yang beda antara produk lama & baru
   // (sejauh ini cuma pasangan HIBRIDA/INBRIDA -> lihat WORD_PAIRS). null = tidak ada yang bisa dipastikan.
@@ -714,8 +756,9 @@
     const kbliOk = code === t.kbliBaru;
     const produkOk = !t.produkBaru || produkCur === t.produkBaru;
     const kegOk = !want || kegCur === want.value;
-    const already = kbliOk && produkOk && kegOk;
-    const bits = [];
+    const izinHalalBits = izinHalalGaps(inst);
+    const already = kbliOk && produkOk && kegOk && !izinHalalBits.length;
+    const bits = [...izinHalalBits];
     if (!kbliOk) bits.push(`KBLI ${code || "-"} → ${t.kbliBaru}`);
     if (!produkOk) bits.push(`produk "${produkCur}" → "${t.produkBaru}"`);
     if (!kegOk) bits.push(`kegiatan utama "${kegCur}" → "${want.value}"`);
@@ -793,6 +836,11 @@
           }
         }
       }
+    }
+    const izinHalalNotes = await fillIzinHalalIfShown(inst, t.kbliBaru);
+    if (izinHalalNotes.length) {
+      notes.push(...izinHalalNotes);
+      changed = true;
     }
     if (t.produkBaru) {
       const produkBox = box("produk", inst);
