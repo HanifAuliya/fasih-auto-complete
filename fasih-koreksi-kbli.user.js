@@ -1431,7 +1431,48 @@
   ];
   const STEP_LABEL = { ...Object.fromEntries(STEPS), find: "Cari via filter" };
   const STAGE_TIMEOUT_MS = 4 * 60 * 1000;
+  const HEARTBEAT_MS = 5 * 60 * 1000; // singgah ke halaman daftar tiap segini, jaga sesi SSO tetap aktif
   let busy = false;
+
+  // Halaman login SSO (sesi berakhir) — beda dari forbiddenPage(): bukan "tidak punya akses",
+  // tapi "tidak sedang login sama sekali" (form password / teks masuk & tidak ada shell aplikasi FASIH).
+  let loginAt = 0;
+  let loginLast = false;
+  function loginPage() {
+    if (Date.now() - loginAt < 1000) return loginLast;
+    loginAt = Date.now();
+    if (!document.body || document.querySelector(".fasih-form-sidebar")) return (loginLast = false);
+    if (document.querySelector('input[type="password"]')) return (loginLast = true);
+    const text = Array.from(document.body.children)
+      .filter((el) => !/^kk-/.test(el.id || "") && !/^(SCRIPT|STYLE)$/.test(el.tagName))
+      .map((el) => el.innerText || "")
+      .join(" ");
+    return (loginLast = /\b(masuk|login|sign in)\b/i.test(text) && /\b(sso|nip|kata sandi|password|single sign)\b/i.test(text));
+  }
+  function beepAlert() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      [0, 0.22, 0.44].forEach((t) => {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.frequency.value = 880;
+        g.gain.value = 0.15;
+        o.connect(g).connect(ctx.destination);
+        o.start(ctx.currentTime + t);
+        o.stop(ctx.currentTime + t + 0.18);
+      });
+    } catch (e) {
+      /* abaikan kalau audio diblokir browser */
+    }
+  }
+  function haltForLogout() {
+    const r = loadRun();
+    if (!r.running || r.hold) return;
+    r.hold = { at: Date.now(), reason: "logout" };
+    saveRun(r);
+    log("⏸ Dijeda otomatis — sesi FASIH berakhir (logout). Login ulang, lalu klik ▶ Lanjut. Progres tidak hilang.");
+    beepAlert();
+  }
 
   function log(msg) {
     console.log(`[${APP.name}] ${msg}`);
@@ -1515,11 +1556,20 @@
   async function tick() {
     const run = loadRun();
     if (!run.running || busy || rateLimited() || run.paused || run.hold) return;
+    if (loginPage()) return haltForLogout();
     busy = true;
     stopRequested = false;
     try {
       if (!run.cur) {
         if (Date.now() < (run.nextAt || 0)) return;
+        const listUrl = loadJson(LIST_KEY, "");
+        if (listUrl && Date.now() - (run.hbAt || 0) > HEARTBEAT_MS && !isListPage()) {
+          run.hbAt = Date.now();
+          saveRun(run);
+          log("↻ Singgah ke halaman daftar assignment (jaga sesi tetap aktif)");
+          location.href = listUrl;
+          return;
+        }
         const item = nextItem(run);
         if (!item || (run.limit && run.processed >= run.limit)) return stopRun("Selesai ✓");
         setStage("open", { id: item.id, submitClicked: false });
@@ -1698,6 +1748,7 @@
       processed: 0,
       cur: null,
       logs: [],
+      hbAt: Date.now(),
     });
     closePanel();
     log(`Mulai${opts.testMode ? " · MODE UJI" : ""}`);
@@ -2565,7 +2616,13 @@
         <button class="kk-btn" data-hud="panel" title="Buka panel">☰</button>
         <button class="kk-btn stop" data-hud="stop">■ Stop</button>
       </div>
-      ${run.hold ? `<div class="doc wait">⏸ Dijeda sejak ${new Date(run.hold.at).toLocaleTimeString("id-ID")} — jangan pindah halaman / klik isian supaya bisa dilanjutkan dengan aman</div>` : ""}
+      ${
+        run.hold && run.hold.reason === "logout"
+          ? `<div class="doc wait">🔒 Sesi FASIH berakhir sejak ${new Date(run.hold.at).toLocaleTimeString("id-ID")} — login ulang dulu, lalu klik ▶ Lanjut. Dokumen yang belum diproses masih aman.</div>`
+          : run.hold
+            ? `<div class="doc wait">⏸ Dijeda sejak ${new Date(run.hold.at).toLocaleTimeString("id-ID")} — jangan pindah halaman / klik isian supaya bisa dilanjutkan dengan aman</div>`
+            : ""
+      }
       ${limited ? `<div class="doc wait">⛔ Server membatasi (429) — lanjut otomatis ${new Date(rateInfo().until).toLocaleTimeString("id-ID")}</div>` : ""}
       ${it ? `<div class="doc">▶ ${esc(it.targets.map((t) => t.nama).join(" + "))} <span class="dim">· ${esc([it.desa, it.sls].filter(Boolean).join(" · "))}</span></div>` : ""}
       ${it ? `<div class="steps">${STEPS.map(([k, l], i) => `<div class="st ${i < iNow ? "done" : i === iNow ? "now" : ""}">${i < iNow ? "✓ " : ""}${l}</div>`).join("")}</div>` : ""}
