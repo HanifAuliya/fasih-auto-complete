@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         FASIH Koreksi R.27 - Pendapatan (27.a / 27.b)
+// @name         FASIH Koreksi Anomali NTB (26.a - 28.b)
 // @namespace    hanif-bps-hst
-// @version      2.1
-// @description  Baca Excel koreksi, buka tiap dokumen, ganti 27.a (nilai_pendapatan) = R.27a dan 27.b (pendapatan_lain) = R.27b di kartu usaha yang tepat, lalu Kirim & Approve. Dokumen keluarga: kartu dicari di Blok II; dokumen usaha tunggal: langsung ke kartunya.
+// @version      1.1
+// @description  Baca Excel Pengecekan Anomali NTB, buka tiap dokumen, ganti 26.a gaji, 26.b biaya produksi, 26.c biaya pembelian, 26.d biaya operasional, 27.a nilai penjualan dan 28.b aset (dari r28c) = kolom "rXX input" + catatan #DC_04 di tiap rincian yang diubah di kartu usaha yang tepat (nama usaha wajib cocok), lalu Kirim & Approve. Link salah/Forbidden: dicari lewat daftar assignment (BKU lalu keluarga). Yang gagal bisa dikerjakan manual lewat panel bantu.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
 // @grant        none
@@ -12,45 +12,51 @@
   "use strict";
 
   // Excel dibaca di browser ini saja; datanya tidak dikirim ke mana pun selain isian FASIH.
-  const QUEUE_KEY = "k27_queue";
-  const CONF_KEY = "k27_conf";
-  const RUN_KEY = "k27_run";
-  const AREA_KEY = "k27_area_titles";
-  const LIST_KEY = "k27_list_url"; // halaman daftar assignment terakhir yang dibuka (untuk cari lewat filter)
-  const HELPER_KEY = "k27_helper_hidden";
-  const HELPER_POS_KEY = "k27_helper_pos"; // posisi panel bantu yang digeser
-  const HELPER_MIN_KEY = "k27_helper_min"; // panel bantu diperkecil
-  const HUD_POS_KEY = "k27_hud_pos"; // posisi bar progres yang digeser
-  const HUD_MIN_KEY = "k27_hud_min"; // bar progres diperkecil
+  const QUEUE_KEY = "knt_queue";
+  const CONF_KEY = "knt_conf";
+  const RUN_KEY = "knt_run";
+  const AREA_KEY = "knt_area_titles";
+  const LIST_KEY = "knt_list_url"; // halaman daftar assignment terakhir yang dibuka (untuk cari lewat filter)
+  const HELPER_KEY = "knt_helper_hidden";
+  const HELPER_POS_KEY = "knt_helper_pos"; // posisi panel bantu yang digeser
+  const HELPER_MIN_KEY = "knt_helper_min"; // panel bantu diperkecil
+  const HUD_POS_KEY = "knt_hud_pos"; // posisi bar progres yang digeser
+  const HUD_MIN_KEY = "knt_hud_min"; // bar progres diperkecil
   const RATE_KEY = "fasih_rate_limit"; // sama dengan skrip FASIH lain: jeda 429 berlaku bersama
 
   // ===== KONFIGURASI =====
   // Satu-satunya bagian yang beda antara skrip Koreksi R.27, Koreksi Gaji dan Koreksi NTB; sisanya sama persis.
   const APP = {
-    name: "Koreksi R.27",
-    version: "2.1",
-    title: "Koreksi Pendapatan R.27",
-    badge: "27",
-    launch: "Koreksi Pendapatan",
-    hotkey: "9",
-    launchBottom: 112,
-    file: "koreksi-r27",
+    name: "Koreksi NTB",
+    version: "1.1",
+    title: "Koreksi Anomali NTB",
+    badge: "NTB",
+    launch: "Koreksi NTB",
+    hotkey: "5",
+    launchBottom: 208,
+    file: "koreksi-ntb",
   };
   // Isian yang diganti di kartu usaha:
   // [kunci, id isian FASIH, label, kolom Excel nilai lama, kolom Excel nilai baru, nama kolom baru di Excel, nama di CSV]
-  // Kolom Excel ditulis tanpa spasi/titik/huruf besar ("R.27a" = "R27A").
+  // Kolom Excel ditulis tanpa spasi/titik/huruf besar ("r26a input" = "R26AINPUT").
   const FIELDS = [
-    ["a", "nilai_pendapatan", "27.a", ["NILAIPENDAPATAN"], ["R27A"], "R.27a", "27a"],
-    ["b", "pendapatan_lain", "27.b", ["PENDAPATANLAIN", "PENDAPATANLAINNYA"], ["R27B"], "R.27b", "27b"],
+    ["r26a", "gaji", "26.a", ["R26AAWAL"], ["R26AINPUT"], "r26a input", "r26a"],
+    ["r26b", "biaya_produksi", "26.b", ["R26BAWAL"], ["R26BINPUT"], "r26b input", "r26b"],
+    ["r26c", "biaya_pembelian", "26.c", ["R26CAWAL"], ["R26CINPUT"], "r26c input", "r26c"],
+    ["r26d", "operasional", "26.d", ["R26DAWAL"], ["R26DINPUT"], "r26d input", "r26d"],
+    ["r27a", "nilai_pendapatan", "27.a", ["R27AAWAL"], ["R27AINPUT"], "r27a input", "r27a"],
+    // Kolom r28c di Excel diisikan ke rincian 28.b (aset selain tanah & bangunan)
+    ["r28", "aset_lain_thn", "28.b", ["R28CAWAL"], ["R28CINPUT"], "r28c input", "r28b"],
   ];
   // Kartu juga boleh dikenali dari jumlah isian ini (nama usaha tetap wajib cocok). Kosong = tidak dipakai.
-  const SUM_KEYS = ["a", "b"];
+  const SUM_KEYS = [];
   // Kolom penanda baris judul Excel (dan patokan "kolom nilai baru terdekat")
-  const ANCHOR = "R27A";
+  const ANCHOR = "R27AINPUT";
   // Isian yang dipakai untuk mengenali kartu (nilai lama/baru harus cocok). null = semua isian di FIELDS.
-  const MATCH_KEYS = null;
+  // 28.b tidak dipakai: nilai lamanya di Excel (r28c awal) bukan isi 28.b sekarang, jadi cuma diisi.
+  const MATCH_KEYS = ["r26a", "r26b", "r26c", "r26d", "r27a"];
   // Catatan yang ditambahkan di tiap rincian yang nilainya diubah (tombol Catatan). "" = tidak menambah catatan.
-  const NOTE = "";
+  const NOTE = "#DC_04";
   // ===== akhir KONFIGURASI =====
 
   const DEFAULT_CONF = {
@@ -112,8 +118,8 @@
   // ---------- Antrean: IndexedDB (muat puluhan ribu dokumen) + salinan di memori ----------
   // localStorage cuma ~5 MB, jadi antrean disimpan di IndexedDB; QUEUE = salinan di memori yang dipakai skrip.
   // Antrean lama di localStorage (versi sebelumnya) dipindahkan otomatis saat pertama kali dibuka.
-  const DB_NAME = "k27_db";
-  const REV_KEY = "k27_queue_rev"; // berubah tiap antrean disimpan -> tab lain memuat ulang
+  const DB_NAME = "knt_db";
+  const REV_KEY = "knt_queue_rev"; // berubah tiap antrean disimpan -> tab lain memuat ulang
   let QUEUE = [];
   let useIdb = typeof indexedDB !== "undefined";
   let dbp = null;
@@ -229,31 +235,31 @@
   }
   (function watch429() {
     const origFetch = window.fetch;
-    if (origFetch && !origFetch.__k27) {
+    if (origFetch && !origFetch.__knt) {
       const wrapped = function (input) {
         return origFetch.apply(this, arguments).then((res) => {
           if (res && res.status === 429) noteRateLimit(typeof input === "string" ? input : input && input.url);
           return res;
         });
       };
-      wrapped.__k27 = true;
+      wrapped.__knt = true;
       window.fetch = wrapped;
     }
     const XHR = window.XMLHttpRequest && window.XMLHttpRequest.prototype;
-    if (XHR && !XHR.__k27) {
+    if (XHR && !XHR.__knt) {
       const origOpen = XHR.open;
       const origSend = XHR.send;
       XHR.open = function (method, url) {
-        this.__k27Url = url;
+        this.__kntUrl = url;
         return origOpen.apply(this, arguments);
       };
       XHR.send = function () {
         this.addEventListener("loadend", () => {
-          if (this.status === 429) noteRateLimit(this.__k27Url);
+          if (this.status === 429) noteRateLimit(this.__kntUrl);
         });
         return origSend.apply(this, arguments);
       };
-      XHR.__k27 = true;
+      XHR.__knt = true;
     }
   })();
 
@@ -276,7 +282,7 @@
     forbiddenAt = Date.now();
     if (!document.body || document.querySelector(".fasih-form-sidebar")) return (forbiddenLast = false);
     const text = Array.from(document.body.children)
-      .filter((el) => !/^k27-/.test(el.id || "") && !/^(SCRIPT|STYLE)$/.test(el.tagName))
+      .filter((el) => !/^knt-/.test(el.id || "") && !/^(SCRIPT|STYLE)$/.test(el.tagName))
       .map((el) => el.innerText || "")
       .join(" ");
     return (forbiddenLast = /\b403\b.{0,20}(forbidden|akses)|forbidden|akses ditolak|access denied|tidak (memiliki|punya) (hak )?akses/i.test(text));
@@ -295,7 +301,7 @@
     return null;
   }
 
-  const OWN = "#k27-panel, #k27-hud, #k27-launch";
+  const OWN = "#knt-panel, #knt-hud, #knt-launch";
   const normalize = (text) =>
     String(text || "")
       .toUpperCase()
@@ -1655,126 +1661,126 @@
   // TAMPILAN
   // =========================================================================
   function ensureStyles() {
-    if (document.getElementById("k27-style")) return;
+    if (document.getElementById("knt-style")) return;
     const style = document.createElement("style");
-    style.id = "k27-style";
+    style.id = "knt-style";
     style.textContent = `
-      .k27, .k27 * { box-sizing:border-box; font-family:"Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
-      .k27 { --bg:#ffffff; --bg2:#f6f7fb; --line:#e7e8ef; --tx:#0f1222; --mut:#6b7186; --acc:#4f46e5; --acc2:#7c3aed; --ok:#16a34a; --warn:#d97706; --bad:#dc2626; color:var(--tx); }
-      .k27 button { font:inherit; }
-      .k27-overlay { position:fixed; inset:0; z-index:1000001; background:rgba(15,18,34,.38); backdrop-filter:blur(3px); display:flex; justify-content:flex-end; animation:k27fade .18s ease; }
-      @keyframes k27fade { from{opacity:0} to{opacity:1} }
-      @keyframes k27slide { from{transform:translateX(24px);opacity:.4} to{transform:none;opacity:1} }
-      @keyframes k27spin { to{transform:rotate(360deg)} }
-      @keyframes k27pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
-      .k27-sheet { background:var(--bg2); width:min(820px,100vw); height:100vh; display:flex; flex-direction:column; box-shadow:-20px 0 60px rgba(15,18,34,.25); animation:k27slide .22s ease; }
-      .k27-head { position:relative; padding:20px 24px 18px; color:#fff; background:linear-gradient(120deg,#4338ca,#7c3aed 55%,#c026d3); overflow:hidden; }
-      .k27-head:after { content:""; position:absolute; right:-60px; top:-80px; width:240px; height:240px; border-radius:50%; background:rgba(255,255,255,.09); }
-      .k27-head .row1 { display:flex; align-items:center; gap:14px; position:relative; z-index:1; }
-      .k27-logo { width:44px; height:44px; border-radius:12px; background:rgba(255,255,255,.18); display:grid; place-items:center; font-weight:800; font-size:17px; letter-spacing:-.5px; box-shadow:inset 0 0 0 1px rgba(255,255,255,.25); }
-      .k27-title { font-size:18px; font-weight:750; letter-spacing:-.2px; }
-      .k27-sub { font-size:12.5px; opacity:.85; margin-top:2px; }
-      .k27-sub code { background:rgba(255,255,255,.16); padding:1px 6px; border-radius:6px; font-family:ui-monospace,Consolas,monospace; font-size:11.5px; }
-      .k27-x { margin-left:auto; width:34px; height:34px; border-radius:10px; border:none; background:rgba(255,255,255,.16); color:#fff; font-size:18px; cursor:pointer; }
-      .k27-x:hover { background:rgba(255,255,255,.28); }
-      .k27-prog { position:relative; z-index:1; margin-top:16px; }
-      .k27-prog .track { height:8px; border-radius:99px; background:rgba(255,255,255,.2); overflow:hidden; display:flex; }
-      .k27-prog .seg { height:100%; transition:width .4s ease; }
-      .k27-prog .lbl { display:flex; justify-content:space-between; font-size:12px; margin-top:6px; opacity:.9; }
-      .k27-body { flex:1; overflow:auto; padding:18px 24px 28px; display:flex; flex-direction:column; gap:14px; }
-      .k27-card { background:var(--bg); border:1px solid var(--line); border-radius:16px; padding:16px; box-shadow:0 1px 2px rgba(15,18,34,.04); }
-      .k27-sec { display:flex; align-items:center; gap:8px; font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--mut); margin-bottom:12px; }
-      .k27-grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
-      @media (max-width:720px){ .k27-grid2{grid-template-columns:1fr} .k27-stats{grid-template-columns:repeat(4,1fr)!important} }
-      .k27-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-      .k27-btn { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); background:var(--bg); color:var(--tx); border-radius:10px; padding:8px 13px; font-size:13px; font-weight:600; cursor:pointer; transition:all .15s; }
-      .k27-btn:hover { border-color:#c7c9d9; background:#fafaff; transform:translateY(-1px); }
-      .k27-btn:disabled { opacity:.45; cursor:not-allowed; transform:none; }
-      .k27-btn.primary { background:linear-gradient(120deg,var(--acc),var(--acc2)); border-color:transparent; color:#fff; box-shadow:0 6px 16px rgba(79,70,229,.3); }
-      .k27-btn.primary:hover { box-shadow:0 8px 22px rgba(79,70,229,.4); }
-      .k27-btn.soft { background:#eef0ff; border-color:#e0e3ff; color:var(--acc); }
-      .k27-btn.ghost { border-color:transparent; background:transparent; color:var(--mut); }
-      .k27-btn.ghost:hover { background:#f0f1f6; color:var(--tx); }
-      .k27-btn.danger { color:var(--bad); }
-      .k27-btn.sm { padding:5px 9px; font-size:12px; border-radius:8px; }
-      .k27-drop { border:1.5px dashed #c9cbe0; border-radius:14px; padding:16px; display:flex; align-items:center; gap:14px; cursor:pointer; transition:all .15s; background:#fbfbfe; }
-      .k27-drop:hover, .k27-drop.over { border-color:var(--acc); background:#f4f4ff; }
-      .k27-drop .ic { width:42px; height:42px; border-radius:12px; display:grid; place-items:center; background:#e9fbe9; font-size:20px; flex:none; }
-      .k27-drop b { font-size:13.5px; }
-      .k27-hint { font-size:12px; color:var(--mut); line-height:1.5; }
-      .k27-seg { display:inline-flex; background:#f0f1f6; border-radius:10px; padding:3px; gap:2px; }
-      .k27-seg button { border:none; background:transparent; padding:6px 12px; border-radius:8px; font-size:12.5px; font-weight:600; color:var(--mut); cursor:pointer; }
-      .k27-seg button.on { background:var(--bg); color:var(--acc); box-shadow:0 1px 3px rgba(15,18,34,.12); }
-      .k27-tog { display:flex; align-items:flex-start; gap:10px; padding:7px 0; cursor:pointer; font-size:13px; }
-      .k27-tog input { display:none; }
-      .k27-tog .sw { flex:none; width:36px; height:21px; border-radius:99px; background:#d5d7e3; position:relative; transition:background .15s; margin-top:1px; }
-      .k27-tog .sw:after { content:""; position:absolute; top:2.5px; left:2.5px; width:16px; height:16px; border-radius:50%; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.2); transition:transform .15s; }
-      .k27-tog input:checked + .sw { background:var(--acc); }
-      .k27-tog input:checked + .sw:after { transform:translateX(15px); }
-      .k27-tog small { display:block; color:var(--mut); font-size:11.5px; margin-top:1px; }
-      .k27-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(82px,1fr)); gap:8px; }
-      .k27-stat { border:1px solid var(--line); border-radius:12px; padding:10px 11px; cursor:pointer; background:var(--bg); text-align:left; transition:all .15s; }
-      .k27-stat:hover { transform:translateY(-1px); }
-      .k27-stat.on { border-color:var(--c); box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 16%,transparent); }
-      .k27-stat .n { font-size:21px; font-weight:780; color:var(--c); letter-spacing:-.5px; }
-      .k27-stat .l { font-size:11.5px; color:var(--mut); margin-top:1px; white-space:nowrap; }
-      .k27-search { flex:1; min-width:200px; border:1px solid var(--line); border-radius:10px; padding:8px 12px; font-size:13px; background:var(--bg); outline:none; }
-      .k27-search:focus { border-color:var(--acc); box-shadow:0 0 0 3px rgba(79,70,229,.12); }
-      .k27-list { display:flex; flex-direction:column; gap:8px; }
-      .k27-item { display:grid; grid-template-columns:22px 1fr auto; gap:12px; align-items:start; background:var(--bg); border:1px solid var(--line); border-left:3px solid var(--c); border-radius:12px; padding:12px 14px; font-size:12.5px; }
-      .k27-item input[type=checkbox] { width:16px; height:16px; margin-top:2px; accent-color:var(--acc); }
-      .k27-item .nm { font-size:13.5px; font-weight:650; }
-      .k27-item .meta { color:var(--mut); margin-top:3px; }
-      .k27-pill { display:inline-block; font-size:11px; font-weight:650; padding:2px 8px; border-radius:99px; color:var(--c); background:color-mix(in srgb,var(--c) 11%,#fff); margin-left:6px; vertical-align:1px; }
-      .k27-diff { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
-      .k27-chg { display:inline-flex; align-items:center; gap:6px; background:var(--bg2); border:1px solid var(--line); border-radius:8px; padding:3px 8px; font-variant-numeric:tabular-nums; }
-      .k27-chg .k { font-weight:700; color:var(--acc); font-size:11px; }
-      .k27-chg .o { color:var(--mut); text-decoration:line-through; text-decoration-color:rgba(220,38,38,.5); }
-      .k27-chg .a { color:var(--tx); font-weight:650; }
-      .k27-chg .u { color:var(--mut); font-size:11px; }
-      .k27-item .why { margin-top:7px; color:var(--c); line-height:1.45; }
-      .k27-item .acts { display:flex; gap:4px; }
-      .k27-empty { text-align:center; padding:36px 10px; color:var(--mut); font-size:13px; }
-      .k27-more { text-align:center; font-size:12px; color:var(--mut); padding:6px; }
-      .k27-launch { position:fixed; left:16px; bottom:112px; z-index:999999; display:flex; align-items:center; gap:8px; border:none; border-radius:999px; padding:10px 16px 10px 12px; background:linear-gradient(120deg,#4f46e5,#7c3aed); color:#fff; font:650 13px "Inter",ui-sans-serif,system-ui,sans-serif; cursor:pointer; box-shadow:0 10px 28px rgba(79,70,229,.4); transition:transform .15s; }
-      .k27-launch:hover { transform:translateY(-2px); }
-      .k27-launch .b { background:rgba(255,255,255,.22); border-radius:7px; padding:2px 6px; font-size:11.5px; font-weight:800; }
-      .k27-hud { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); z-index:1000002; width:min(640px,94vw); background:rgba(17,19,36,.92); backdrop-filter:blur(12px); color:#eef0ff; border-radius:18px; padding:14px 16px; box-shadow:0 20px 50px rgba(10,10,30,.45), inset 0 0 0 1px rgba(255,255,255,.07); font-size:13px; }
-      .k27-hud .top { display:flex; align-items:center; gap:10px; }
-      .k27-hud .spin { width:16px; height:16px; border-radius:50%; border:2.5px solid rgba(255,255,255,.2); border-top-color:#a5b4fc; animation:k27spin .8s linear infinite; flex:none; }
-      .k27-hud .spin.wait { animation:none; border-color:#fbbf24; }
-      .k27-hud .ttl { font-weight:700; }
-      .k27-hud .dim { color:#9aa0c3; font-size:12px; }
-      .k27-hud .doc { margin-top:9px; font-weight:650; font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .k27-hud .steps { display:flex; gap:4px; margin-top:9px; }
-      .k27-hud .st { flex:1; text-align:center; font-size:10.5px; padding:4px 2px; border-radius:7px; background:rgba(255,255,255,.06); color:#7d83a8; white-space:nowrap; }
-      .k27-hud .st.done { color:#86efac; background:rgba(34,197,94,.1); }
-      .k27-hud .st.now { color:#fff; background:linear-gradient(120deg,#4f46e5,#7c3aed); font-weight:650; }
-      .k27-hud .log { margin-top:9px; color:#c7cbf0; font-size:12px; font-family:ui-monospace,Consolas,monospace; background:rgba(0,0,0,.25); border-radius:8px; padding:6px 9px; max-height:74px; overflow:hidden; line-height:1.5; }
-      .k27-hud .log div:last-child { color:#fde68a; }
-      .k27-hud .bar { height:4px; border-radius:99px; background:rgba(255,255,255,.1); margin-top:10px; overflow:hidden; }
-      .k27-hud .bar i { display:block; height:100%; background:linear-gradient(90deg,#818cf8,#c084fc); transition:width .4s; }
-      .k27-hud .k27-btn { background:rgba(255,255,255,.08); border-color:rgba(255,255,255,.12); color:#eef0ff; padding:6px 11px; font-size:12.5px; }
-      .k27-hud .k27-btn:hover { background:rgba(255,255,255,.16); }
-      .k27-hud .k27-btn.go { background:#16a34a; border-color:#16a34a; }
-      .k27-hud .k27-btn.stop { background:transparent; border-color:rgba(248,113,113,.45); color:#fca5a5; }
-      .k27-hud .wait { color:#fbbf24; animation:k27pulse 1.6s infinite; }
-      .k27-help { left:auto; right:16px; transform:none; width:min(400px,94vw); z-index:1000001; }
-      .k27-help .k27-pill { background:color-mix(in srgb,var(--c) 30%,transparent); color:#fff; }
-      .k27-help .tb { width:100%; border-collapse:collapse; margin-top:4px; font-size:12px; font-variant-numeric:tabular-nums; }
-      .k27-help .tb td { padding:2px 4px; }
-      .k27-help .tb td:first-child { color:#a5b4fc; font-weight:700; width:40px; }
-      .k27-help .tb .o { color:#9aa0c3; text-decoration:line-through; }
-      .k27-help .tb .n { color:#fff; font-weight:650; }
-      .k27-help .tb .ok { color:#86efac; text-align:right; }
-      .k27-help .tb .now { color:#fde68a; text-align:right; }
-      .k27-help .k27-btn:disabled { opacity:.4; }
-      .k27-hud .top { cursor:move; user-select:none; touch-action:none; flex-wrap:wrap; }
-      .k27-hud .top .grip { color:#7d83a8; font-size:14px; line-height:1; }
-      .k27-hud.drag { opacity:.85; box-shadow:0 24px 60px rgba(10,10,30,.6); }
-      .k27-hud.min { width:auto; max-width:94vw; padding:9px 12px; }
-      .k27-hud.min > :not(.top) { display:none; }
-      .k27-toast { position:fixed; left:50%; top:20px; transform:translateX(-50%); z-index:1000003; background:#111324; color:#fff; padding:10px 16px; border-radius:12px; font:600 13px "Inter",ui-sans-serif,system-ui,sans-serif; box-shadow:0 12px 30px rgba(0,0,0,.3); animation:k27fade .2s; }
+      .knt, .knt * { box-sizing:border-box; font-family:"Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+      .knt { --bg:#ffffff; --bg2:#f6f7fb; --line:#e7e8ef; --tx:#0f1222; --mut:#6b7186; --acc:#4f46e5; --acc2:#7c3aed; --ok:#16a34a; --warn:#d97706; --bad:#dc2626; color:var(--tx); }
+      .knt button { font:inherit; }
+      .knt-overlay { position:fixed; inset:0; z-index:1000001; background:rgba(15,18,34,.38); backdrop-filter:blur(3px); display:flex; justify-content:flex-end; animation:kntfade .18s ease; }
+      @keyframes kntfade { from{opacity:0} to{opacity:1} }
+      @keyframes kntslide { from{transform:translateX(24px);opacity:.4} to{transform:none;opacity:1} }
+      @keyframes kntspin { to{transform:rotate(360deg)} }
+      @keyframes kntpulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+      .knt-sheet { background:var(--bg2); width:min(820px,100vw); height:100vh; display:flex; flex-direction:column; box-shadow:-20px 0 60px rgba(15,18,34,.25); animation:kntslide .22s ease; }
+      .knt-head { position:relative; padding:20px 24px 18px; color:#fff; background:linear-gradient(120deg,#4338ca,#7c3aed 55%,#c026d3); overflow:hidden; }
+      .knt-head:after { content:""; position:absolute; right:-60px; top:-80px; width:240px; height:240px; border-radius:50%; background:rgba(255,255,255,.09); }
+      .knt-head .row1 { display:flex; align-items:center; gap:14px; position:relative; z-index:1; }
+      .knt-logo { width:44px; height:44px; border-radius:12px; background:rgba(255,255,255,.18); display:grid; place-items:center; font-weight:800; font-size:17px; letter-spacing:-.5px; box-shadow:inset 0 0 0 1px rgba(255,255,255,.25); }
+      .knt-title { font-size:18px; font-weight:750; letter-spacing:-.2px; }
+      .knt-sub { font-size:12.5px; opacity:.85; margin-top:2px; }
+      .knt-sub code { background:rgba(255,255,255,.16); padding:1px 6px; border-radius:6px; font-family:ui-monospace,Consolas,monospace; font-size:11.5px; }
+      .knt-x { margin-left:auto; width:34px; height:34px; border-radius:10px; border:none; background:rgba(255,255,255,.16); color:#fff; font-size:18px; cursor:pointer; }
+      .knt-x:hover { background:rgba(255,255,255,.28); }
+      .knt-prog { position:relative; z-index:1; margin-top:16px; }
+      .knt-prog .track { height:8px; border-radius:99px; background:rgba(255,255,255,.2); overflow:hidden; display:flex; }
+      .knt-prog .seg { height:100%; transition:width .4s ease; }
+      .knt-prog .lbl { display:flex; justify-content:space-between; font-size:12px; margin-top:6px; opacity:.9; }
+      .knt-body { flex:1; overflow:auto; padding:18px 24px 28px; display:flex; flex-direction:column; gap:14px; }
+      .knt-card { background:var(--bg); border:1px solid var(--line); border-radius:16px; padding:16px; box-shadow:0 1px 2px rgba(15,18,34,.04); }
+      .knt-sec { display:flex; align-items:center; gap:8px; font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--mut); margin-bottom:12px; }
+      .knt-grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+      @media (max-width:720px){ .knt-grid2{grid-template-columns:1fr} .knt-stats{grid-template-columns:repeat(4,1fr)!important} }
+      .knt-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+      .knt-btn { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); background:var(--bg); color:var(--tx); border-radius:10px; padding:8px 13px; font-size:13px; font-weight:600; cursor:pointer; transition:all .15s; }
+      .knt-btn:hover { border-color:#c7c9d9; background:#fafaff; transform:translateY(-1px); }
+      .knt-btn:disabled { opacity:.45; cursor:not-allowed; transform:none; }
+      .knt-btn.primary { background:linear-gradient(120deg,var(--acc),var(--acc2)); border-color:transparent; color:#fff; box-shadow:0 6px 16px rgba(79,70,229,.3); }
+      .knt-btn.primary:hover { box-shadow:0 8px 22px rgba(79,70,229,.4); }
+      .knt-btn.soft { background:#eef0ff; border-color:#e0e3ff; color:var(--acc); }
+      .knt-btn.ghost { border-color:transparent; background:transparent; color:var(--mut); }
+      .knt-btn.ghost:hover { background:#f0f1f6; color:var(--tx); }
+      .knt-btn.danger { color:var(--bad); }
+      .knt-btn.sm { padding:5px 9px; font-size:12px; border-radius:8px; }
+      .knt-drop { border:1.5px dashed #c9cbe0; border-radius:14px; padding:16px; display:flex; align-items:center; gap:14px; cursor:pointer; transition:all .15s; background:#fbfbfe; }
+      .knt-drop:hover, .knt-drop.over { border-color:var(--acc); background:#f4f4ff; }
+      .knt-drop .ic { width:42px; height:42px; border-radius:12px; display:grid; place-items:center; background:#e9fbe9; font-size:20px; flex:none; }
+      .knt-drop b { font-size:13.5px; }
+      .knt-hint { font-size:12px; color:var(--mut); line-height:1.5; }
+      .knt-seg { display:inline-flex; background:#f0f1f6; border-radius:10px; padding:3px; gap:2px; }
+      .knt-seg button { border:none; background:transparent; padding:6px 12px; border-radius:8px; font-size:12.5px; font-weight:600; color:var(--mut); cursor:pointer; }
+      .knt-seg button.on { background:var(--bg); color:var(--acc); box-shadow:0 1px 3px rgba(15,18,34,.12); }
+      .knt-tog { display:flex; align-items:flex-start; gap:10px; padding:7px 0; cursor:pointer; font-size:13px; }
+      .knt-tog input { display:none; }
+      .knt-tog .sw { flex:none; width:36px; height:21px; border-radius:99px; background:#d5d7e3; position:relative; transition:background .15s; margin-top:1px; }
+      .knt-tog .sw:after { content:""; position:absolute; top:2.5px; left:2.5px; width:16px; height:16px; border-radius:50%; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.2); transition:transform .15s; }
+      .knt-tog input:checked + .sw { background:var(--acc); }
+      .knt-tog input:checked + .sw:after { transform:translateX(15px); }
+      .knt-tog small { display:block; color:var(--mut); font-size:11.5px; margin-top:1px; }
+      .knt-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(82px,1fr)); gap:8px; }
+      .knt-stat { border:1px solid var(--line); border-radius:12px; padding:10px 11px; cursor:pointer; background:var(--bg); text-align:left; transition:all .15s; }
+      .knt-stat:hover { transform:translateY(-1px); }
+      .knt-stat.on { border-color:var(--c); box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 16%,transparent); }
+      .knt-stat .n { font-size:21px; font-weight:780; color:var(--c); letter-spacing:-.5px; }
+      .knt-stat .l { font-size:11.5px; color:var(--mut); margin-top:1px; white-space:nowrap; }
+      .knt-search { flex:1; min-width:200px; border:1px solid var(--line); border-radius:10px; padding:8px 12px; font-size:13px; background:var(--bg); outline:none; }
+      .knt-search:focus { border-color:var(--acc); box-shadow:0 0 0 3px rgba(79,70,229,.12); }
+      .knt-list { display:flex; flex-direction:column; gap:8px; }
+      .knt-item { display:grid; grid-template-columns:22px 1fr auto; gap:12px; align-items:start; background:var(--bg); border:1px solid var(--line); border-left:3px solid var(--c); border-radius:12px; padding:12px 14px; font-size:12.5px; }
+      .knt-item input[type=checkbox] { width:16px; height:16px; margin-top:2px; accent-color:var(--acc); }
+      .knt-item .nm { font-size:13.5px; font-weight:650; }
+      .knt-item .meta { color:var(--mut); margin-top:3px; }
+      .knt-pill { display:inline-block; font-size:11px; font-weight:650; padding:2px 8px; border-radius:99px; color:var(--c); background:color-mix(in srgb,var(--c) 11%,#fff); margin-left:6px; vertical-align:1px; }
+      .knt-diff { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+      .knt-chg { display:inline-flex; align-items:center; gap:6px; background:var(--bg2); border:1px solid var(--line); border-radius:8px; padding:3px 8px; font-variant-numeric:tabular-nums; }
+      .knt-chg .k { font-weight:700; color:var(--acc); font-size:11px; }
+      .knt-chg .o { color:var(--mut); text-decoration:line-through; text-decoration-color:rgba(220,38,38,.5); }
+      .knt-chg .a { color:var(--tx); font-weight:650; }
+      .knt-chg .u { color:var(--mut); font-size:11px; }
+      .knt-item .why { margin-top:7px; color:var(--c); line-height:1.45; }
+      .knt-item .acts { display:flex; gap:4px; }
+      .knt-empty { text-align:center; padding:36px 10px; color:var(--mut); font-size:13px; }
+      .knt-more { text-align:center; font-size:12px; color:var(--mut); padding:6px; }
+      .knt-launch { position:fixed; left:16px; bottom:112px; z-index:999999; display:flex; align-items:center; gap:8px; border:none; border-radius:999px; padding:10px 16px 10px 12px; background:linear-gradient(120deg,#4f46e5,#7c3aed); color:#fff; font:650 13px "Inter",ui-sans-serif,system-ui,sans-serif; cursor:pointer; box-shadow:0 10px 28px rgba(79,70,229,.4); transition:transform .15s; }
+      .knt-launch:hover { transform:translateY(-2px); }
+      .knt-launch .b { background:rgba(255,255,255,.22); border-radius:7px; padding:2px 6px; font-size:11.5px; font-weight:800; }
+      .knt-hud { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); z-index:1000002; width:min(640px,94vw); background:rgba(17,19,36,.92); backdrop-filter:blur(12px); color:#eef0ff; border-radius:18px; padding:14px 16px; box-shadow:0 20px 50px rgba(10,10,30,.45), inset 0 0 0 1px rgba(255,255,255,.07); font-size:13px; }
+      .knt-hud .top { display:flex; align-items:center; gap:10px; }
+      .knt-hud .spin { width:16px; height:16px; border-radius:50%; border:2.5px solid rgba(255,255,255,.2); border-top-color:#a5b4fc; animation:kntspin .8s linear infinite; flex:none; }
+      .knt-hud .spin.wait { animation:none; border-color:#fbbf24; }
+      .knt-hud .ttl { font-weight:700; }
+      .knt-hud .dim { color:#9aa0c3; font-size:12px; }
+      .knt-hud .doc { margin-top:9px; font-weight:650; font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .knt-hud .steps { display:flex; gap:4px; margin-top:9px; }
+      .knt-hud .st { flex:1; text-align:center; font-size:10.5px; padding:4px 2px; border-radius:7px; background:rgba(255,255,255,.06); color:#7d83a8; white-space:nowrap; }
+      .knt-hud .st.done { color:#86efac; background:rgba(34,197,94,.1); }
+      .knt-hud .st.now { color:#fff; background:linear-gradient(120deg,#4f46e5,#7c3aed); font-weight:650; }
+      .knt-hud .log { margin-top:9px; color:#c7cbf0; font-size:12px; font-family:ui-monospace,Consolas,monospace; background:rgba(0,0,0,.25); border-radius:8px; padding:6px 9px; max-height:74px; overflow:hidden; line-height:1.5; }
+      .knt-hud .log div:last-child { color:#fde68a; }
+      .knt-hud .bar { height:4px; border-radius:99px; background:rgba(255,255,255,.1); margin-top:10px; overflow:hidden; }
+      .knt-hud .bar i { display:block; height:100%; background:linear-gradient(90deg,#818cf8,#c084fc); transition:width .4s; }
+      .knt-hud .knt-btn { background:rgba(255,255,255,.08); border-color:rgba(255,255,255,.12); color:#eef0ff; padding:6px 11px; font-size:12.5px; }
+      .knt-hud .knt-btn:hover { background:rgba(255,255,255,.16); }
+      .knt-hud .knt-btn.go { background:#16a34a; border-color:#16a34a; }
+      .knt-hud .knt-btn.stop { background:transparent; border-color:rgba(248,113,113,.45); color:#fca5a5; }
+      .knt-hud .wait { color:#fbbf24; animation:kntpulse 1.6s infinite; }
+      .knt-help { left:auto; right:16px; transform:none; width:min(400px,94vw); z-index:1000001; }
+      .knt-help .knt-pill { background:color-mix(in srgb,var(--c) 30%,transparent); color:#fff; }
+      .knt-help .tb { width:100%; border-collapse:collapse; margin-top:4px; font-size:12px; font-variant-numeric:tabular-nums; }
+      .knt-help .tb td { padding:2px 4px; }
+      .knt-help .tb td:first-child { color:#a5b4fc; font-weight:700; width:40px; }
+      .knt-help .tb .o { color:#9aa0c3; text-decoration:line-through; }
+      .knt-help .tb .n { color:#fff; font-weight:650; }
+      .knt-help .tb .ok { color:#86efac; text-align:right; }
+      .knt-help .tb .now { color:#fde68a; text-align:right; }
+      .knt-help .knt-btn:disabled { opacity:.4; }
+      .knt-hud .top { cursor:move; user-select:none; touch-action:none; flex-wrap:wrap; }
+      .knt-hud .top .grip { color:#7d83a8; font-size:14px; line-height:1; }
+      .knt-hud.drag { opacity:.85; box-shadow:0 24px 60px rgba(10,10,30,.6); }
+      .knt-hud.min { width:auto; max-width:94vw; padding:9px 12px; }
+      .knt-hud.min > :not(.top) { display:none; }
+      .knt-toast { position:fixed; left:50%; top:20px; transform:translateX(-50%); z-index:1000003; background:#111324; color:#fff; padding:10px 16px; border-radius:12px; font:600 13px "Inter",ui-sans-serif,system-ui,sans-serif; box-shadow:0 12px 30px rgba(0,0,0,.3); animation:kntfade .2s; }
     `;
     document.head.appendChild(style);
   }
@@ -1782,7 +1788,7 @@
   function toast(msg) {
     ensureStyles();
     const t = document.createElement("div");
-    t.className = "k27-toast";
+    t.className = "knt-toast";
     t.textContent = msg;
     document.body.appendChild(t);
     setTimeout(() => t.remove(), 3200);
@@ -1802,7 +1808,7 @@
   const ui = { filter: "all", search: "", selected: new Set(), limit: 60, file: "" };
 
   function closePanel() {
-    document.getElementById("k27-panel")?.remove();
+    document.getElementById("knt-panel")?.remove();
   }
 
   function itemHtml(q) {
@@ -1812,27 +1818,27 @@
       .map((t) => {
         const ch = (k, o, n) =>
           o === n
-            ? `<span class="k27-chg"><span class="k">${k}</span><span class="u">${rupiah(n)} (tetap)</span></span>`
-            : `<span class="k27-chg"><span class="k">${k}</span><span class="o">${rupiah(o)}</span>→<span class="a">${rupiah(n)}</span></span>`;
-        return `${q.targets.length > 1 ? `<span class="k27-chg"><span class="u">${esc((t.nama || "").split("(")[0].trim())}</span></span>` : ""}${FIELDS.map(([k, , l]) => ch(l, t.old[k], t.neu[k])).join("")}`;
+            ? `<span class="knt-chg"><span class="k">${k}</span><span class="u">${rupiah(n)} (tetap)</span></span>`
+            : `<span class="knt-chg"><span class="k">${k}</span><span class="o">${rupiah(o)}</span>→<span class="a">${rupiah(n)}</span></span>`;
+        return `${q.targets.length > 1 ? `<span class="knt-chg"><span class="u">${esc((t.nama || "").split("(")[0].trim())}</span></span>` : ""}${FIELDS.map(([k, , l]) => ch(l, t.old[k], t.neu[k])).join("")}`;
       })
       .join("");
     const meta = [q.kec || q.kab, q.desa, q.sls, q.targets.length > 1 ? `${q.targets.length} usaha` : "", q.statusAwal, q.isian ? `isian: ${q.isian}` : ""]
       .filter(Boolean)
       .map(esc)
       .join(" · ");
-    return `<div class="k27-item" style="--c:${st.color}">
+    return `<div class="knt-item" style="--c:${st.color}">
       <input type="checkbox" data-sel="${q.id}" ${ui.selected.has(q.id) ? "checked" : ""}>
       <div style="min-width:0">
-        <div class="nm">${names}<span class="k27-pill">${st.label}</span></div>
+        <div class="nm">${names}<span class="knt-pill">${st.label}</span></div>
         <div class="meta">${meta}</div>
-        <div class="k27-diff">${diff}</div>
+        <div class="knt-diff">${diff}</div>
         ${q.reason ? `<div class="why">${esc(q.reason)}</div>` : ""}
       </div>
       <div class="acts">
-        <a class="k27-btn sm ghost" href="${esc(docUrl(q))}" target="_blank" title="Buka dokumen di tab baru">↗</a>
-        <a class="k27-btn sm ghost" href="${esc(docUrl(q))}" data-manual="${q.id}" title="Kerjakan manual: buka dokumen di tab ini, panel bantu muncul di kanan bawah">✍</a>
-        <button class="k27-btn sm soft" data-one="${q.id}" title="Jalankan dokumen ini saja">▶</button>
+        <a class="knt-btn sm ghost" href="${esc(docUrl(q))}" target="_blank" title="Buka dokumen di tab baru">↗</a>
+        <a class="knt-btn sm ghost" href="${esc(docUrl(q))}" data-manual="${q.id}" title="Kerjakan manual: buka dokumen di tab ini, panel bantu muncul di kanan bawah">✍</a>
+        <button class="knt-btn sm soft" data-one="${q.id}" title="Jalankan dokumen ini saja">▶</button>
       </div>
     </div>`;
   }
@@ -1861,14 +1867,14 @@
     root.querySelector("[data-stats]").innerHTML = [["all", "Semua", "#4f46e5"], ...Object.entries(STATUS).map(([k, v]) => [k, v.label, v.color])]
       .map(
         ([k, l, col]) =>
-          `<button class="k27-stat ${ui.filter === k ? "on" : ""}" style="--c:${col}" data-filter="${k}"><div class="n">${c[k] || 0}</div><div class="l">${l}</div></button>`,
+          `<button class="knt-stat ${ui.filter === k ? "on" : ""}" style="--c:${col}" data-filter="${k}"><div class="n">${c[k] || 0}</div><div class="l">${l}</div></button>`,
       )
       .join("");
     const items = filteredItems();
     root.querySelector("[data-list]").innerHTML = items.length
       ? items.slice(0, ui.limit).map(itemHtml).join("") +
-        (items.length > ui.limit ? `<div class="k27-more"><button class="k27-btn sm" data-more>Tampilkan ${Math.min(60, items.length - ui.limit)} lagi (sisa ${items.length - ui.limit})</button></div>` : "")
-      : `<div class="k27-empty">${c.all ? "Tidak ada dokumen di filter ini." : "📄 Muat file Excel koreksi dulu."}</div>`;
+        (items.length > ui.limit ? `<div class="knt-more"><button class="knt-btn sm" data-more>Tampilkan ${Math.min(60, items.length - ui.limit)} lagi (sisa ${items.length - ui.limit})</button></div>` : "")
+      : `<div class="knt-empty">${c.all ? "Tidak ada dokumen di filter ini." : "📄 Muat file Excel koreksi dulu."}</div>`;
     root.querySelector("[data-selinfo]").textContent = ui.selected.size ? `${ui.selected.size} dicentang` : "";
     const pend = c.pending;
     root.querySelectorAll("[data-needpend]").forEach((b) => (b.disabled = !pend));
@@ -1876,14 +1882,14 @@
   }
 
   function refreshPanel() {
-    const root = document.getElementById("k27-panel");
+    const root = document.getElementById("knt-panel");
     if (!root) return;
     const a = document.activeElement;
-    if (a && root.contains(a) && a.matches("input.k27-search")) {
+    if (a && root.contains(a) && a.matches("input.knt-search")) {
       renderDynamic(root); // pencarian tidak kehilangan fokus karena input-nya tidak digambar ulang
       return;
     }
-    const body = root.querySelector(".k27-body");
+    const body = root.querySelector(".knt-body");
     const top = body ? body.scrollTop : 0;
     renderDynamic(root);
     if (body) body.scrollTop = top;
@@ -1894,76 +1900,76 @@
     closePanel();
     const conf = loadConf();
     const overlay = document.createElement("div");
-    overlay.id = "k27-panel";
-    overlay.className = "k27 k27-overlay";
+    overlay.id = "knt-panel";
+    overlay.className = "knt knt-overlay";
     overlay.innerHTML = `
-      <div class="k27-sheet">
-        <div class="k27-head">
+      <div class="knt-sheet">
+        <div class="knt-head">
           <div class="row1">
-            <div class="k27-logo">${esc(APP.badge)}</div>
+            <div class="knt-logo">${esc(APP.badge)}</div>
             <div>
-              <div class="k27-title">${esc(APP.title)}</div>
-              <div class="k27-sub">${FIELDS.map(([, , l, , , x]) => `<code>${esc(l)} ← ${esc(x)}</code>`).join(" &nbsp; ")} &nbsp;· buka → ganti → kirim → approve</div>
+              <div class="knt-title">${esc(APP.title)}</div>
+              <div class="knt-sub">${FIELDS.map(([, , l, , , x]) => `<code>${esc(l)} ← ${esc(x)}</code>`).join(" &nbsp; ")} &nbsp;· buka → ganti → kirim → approve</div>
             </div>
-            <button class="k27-x" data-act="close" title="Tutup (Esc)">×</button>
+            <button class="knt-x" data-act="close" title="Tutup (Esc)">×</button>
           </div>
-          <div class="k27-prog" data-prog></div>
+          <div class="knt-prog" data-prog></div>
         </div>
-        <div class="k27-body">
-          <div class="k27-grid2">
-            <div class="k27-card">
-              <div class="k27-sec">① Data Excel</div>
-              <label class="k27-drop" data-drop>
+        <div class="knt-body">
+          <div class="knt-grid2">
+            <div class="knt-card">
+              <div class="knt-sec">① Data Excel</div>
+              <label class="knt-drop" data-drop>
                 <div class="ic">📊</div>
                 <div style="min-width:0">
                   <b>${esc(ui.file || (loadQueue().length ? "Antrean tersimpan di browser" : "Pilih / seret file .xlsx"))}</b>
-                  <div class="k27-hint">Kolom: <i>link, nama_usaha, ${FIELDS.map(([, id, , , , x]) => `${id} → ${x}`).join(", ")}</i>. Muat ulang file yang sama tidak menghapus progres.</div>
+                  <div class="knt-hint">Kolom: <i>link, nama_usaha, ${FIELDS.map(([, id, , , , x]) => `${id} → ${x}`).join(", ")}</i>. Muat ulang file yang sama tidak menghapus progres.</div>
                 </div>
                 <input type="file" accept=".xlsx" data-file hidden>
               </label>
-              <div class="k27-row" style="margin-top:12px">
-                <button class="k27-btn sm" data-act="csv">⬇ Laporan CSV</button>
-                <button class="k27-btn sm" data-act="export">💾 Ekspor</button>
-                <button class="k27-btn sm" data-act="import">📂 Impor</button>
-                <button class="k27-btn sm ghost danger" data-act="clear">Hapus antrean</button>
+              <div class="knt-row" style="margin-top:12px">
+                <button class="knt-btn sm" data-act="csv">⬇ Laporan CSV</button>
+                <button class="knt-btn sm" data-act="export">💾 Ekspor</button>
+                <button class="knt-btn sm" data-act="import">📂 Impor</button>
+                <button class="knt-btn sm ghost danger" data-act="clear">Hapus antrean</button>
                 <input type="file" accept=".json" data-importfile hidden>
               </div>
             </div>
-            <div class="k27-card">
-              <div class="k27-sec">② Pengaturan</div>
-              <div class="k27-seg" data-speed>${SPEEDS.map((s, i) => `<button data-speed="${i}" class="${Number(conf.speed) === i ? "on" : ""}">${s.name}</button>`).join("")}</div>
+            <div class="knt-card">
+              <div class="knt-sec">② Pengaturan</div>
+              <div class="knt-seg" data-speed>${SPEEDS.map((s, i) => `<button data-speed="${i}" class="${Number(conf.speed) === i ? "on" : ""}">${s.name}</button>`).join("")}</div>
               <div style="margin-top:8px">
-                <label class="k27-tog"><input type="checkbox" data-conf="checkFirst" ${conf.checkFirst ? "checked" : ""}><span class="sw"></span><span>Cek dulu di Review<small>Kalau nilainya sudah benar, dokumen tidak di-revoke</small></span></label>
-                <label class="k27-tog"><input type="checkbox" data-conf="approve" ${conf.approve ? "checked" : ""}><span class="sw"></span><span>Approve setelah kirim</span></label>
-                <label class="k27-tog"><input type="checkbox" data-conf="forceOnGalat" ${conf.forceOnGalat ? "checked" : ""}><span class="sw"></span><span>Submit Paksa kalau ada galat<small>Mati: dokumen bergalat ditandai "Perlu cek"</small></span></label>
+                <label class="knt-tog"><input type="checkbox" data-conf="checkFirst" ${conf.checkFirst ? "checked" : ""}><span class="sw"></span><span>Cek dulu di Review<small>Kalau nilainya sudah benar, dokumen tidak di-revoke</small></span></label>
+                <label class="knt-tog"><input type="checkbox" data-conf="approve" ${conf.approve ? "checked" : ""}><span class="sw"></span><span>Approve setelah kirim</span></label>
+                <label class="knt-tog"><input type="checkbox" data-conf="forceOnGalat" ${conf.forceOnGalat ? "checked" : ""}><span class="sw"></span><span>Submit Paksa kalau ada galat<small>Mati: dokumen bergalat ditandai "Perlu cek"</small></span></label>
               </div>
             </div>
           </div>
 
-          <div class="k27-card">
-            <div class="k27-sec">③ Jalankan</div>
-            <div class="k27-row">
-              <button class="k27-btn soft" data-act="test" data-needpend>🧪 Uji 1 dokumen</button>
-              <button class="k27-btn" data-act="n5" data-needpend>▶ 5</button>
-              <button class="k27-btn" data-act="n20" data-needpend>▶ 20</button>
-              <button class="k27-btn" data-act="runsel" data-runsel>▶ Yang dicentang</button>
-              <button class="k27-btn primary" data-act="all" data-needpend>⚡ Jalankan semua</button>
+          <div class="knt-card">
+            <div class="knt-sec">③ Jalankan</div>
+            <div class="knt-row">
+              <button class="knt-btn soft" data-act="test" data-needpend>🧪 Uji 1 dokumen</button>
+              <button class="knt-btn" data-act="n5" data-needpend>▶ 5</button>
+              <button class="knt-btn" data-act="n20" data-needpend>▶ 20</button>
+              <button class="knt-btn" data-act="runsel" data-runsel>▶ Yang dicentang</button>
+              <button class="knt-btn primary" data-act="all" data-needpend>⚡ Jalankan semua</button>
               <span style="flex:1"></span>
-              <button class="k27-btn sm ghost" data-act="retry" title="Perlu cek, Gagal & Terisi (uji) dikembalikan ke Belum">↻ Ulangi yang bermasalah</button>
+              <button class="knt-btn sm ghost" data-act="retry" title="Perlu cek, Gagal & Terisi (uji) dikembalikan ke Belum">↻ Ulangi yang bermasalah</button>
             </div>
-            <div class="k27-hint" style="margin-top:10px">Bisa dimulai dari halaman FASIH mana saja — tiap dokumen dibuka lewat link di Excel. Kalau link-nya tidak membuka dokumen yang benar, dokumen dicari lewat Filter desa/SLS di halaman daftar assignment: BKU dulu, kalau tidak ada dokumen keluarganya (buka halaman daftar itu sekali dulu). Mode uji berhenti tepat sebelum Kirim. Gagal terus? Kerjakan manual lewat tombol ✍ di tiap baris. Pintasan panel: <b>Alt+${APP.hotkey}</b>.</div>
+            <div class="knt-hint" style="margin-top:10px">Bisa dimulai dari halaman FASIH mana saja — tiap dokumen dibuka lewat link di Excel. Kalau link-nya tidak membuka dokumen yang benar, dokumen dicari lewat Filter desa/SLS di halaman daftar assignment: BKU dulu, kalau tidak ada dokumen keluarganya (buka halaman daftar itu sekali dulu). Mode uji berhenti tepat sebelum Kirim. Gagal terus? Kerjakan manual lewat tombol ✍ di tiap baris. Pintasan panel: <b>Alt+${APP.hotkey}</b>.</div>
           </div>
 
-          <div class="k27-stats" data-stats></div>
+          <div class="knt-stats" data-stats></div>
 
-          <div class="k27-row">
-            <input class="k27-search" placeholder="Cari nama usaha, desa, kecamatan, idsbr…" value="${esc(ui.search)}">
-            <button class="k27-btn sm" data-act="selall">☑ Centang yang tampil</button>
-            <button class="k27-btn sm ghost" data-act="selnone">Kosongkan</button>
-            <button class="k27-btn sm" data-act="setstatus" data-runsel title="Hasil cek manual: tentukan status dokumen yang dicentang (ikut ke Laporan CSV)">🏷 Atur status</button>
-            <span class="k27-hint" data-selinfo></span>
+          <div class="knt-row">
+            <input class="knt-search" placeholder="Cari nama usaha, desa, kecamatan, idsbr…" value="${esc(ui.search)}">
+            <button class="knt-btn sm" data-act="selall">☑ Centang yang tampil</button>
+            <button class="knt-btn sm ghost" data-act="selnone">Kosongkan</button>
+            <button class="knt-btn sm" data-act="setstatus" data-runsel title="Hasil cek manual: tentukan status dokumen yang dicentang (ikut ke Laporan CSV)">🏷 Atur status</button>
+            <span class="knt-hint" data-selinfo></span>
           </div>
-          <div class="k27-list" data-list></div>
+          <div class="knt-list" data-list></div>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -1992,7 +1998,7 @@
     });
     const imp = overlay.querySelector("[data-importfile]");
     imp.addEventListener("change", () => imp.files[0] && importJson(imp.files[0]));
-    overlay.querySelector(".k27-search").addEventListener("input", (e) => {
+    overlay.querySelector(".knt-search").addEventListener("input", (e) => {
       ui.search = e.target.value;
       ui.limit = 60;
       renderDynamic(overlay);
@@ -2119,22 +2125,22 @@
     saveQueue(q);
   }
   function openStatusPicker(ids, onDone) {
-    document.getElementById("k27-status")?.remove();
+    document.getElementById("knt-status")?.remove();
     ensureStyles();
     const modal = document.createElement("div");
-    modal.id = "k27-status";
-    modal.className = "k27 k27-overlay";
+    modal.id = "knt-status";
+    modal.className = "knt knt-overlay";
     modal.style.cssText = "align-items:center;justify-content:center;z-index:1000003;";
     const options = Object.entries(STATUS)
       .map(
         ([k, v]) =>
-          `<button class="k27-btn" data-status="${k}" style="justify-content:flex-start;text-align:left;border-left:4px solid ${v.color}"><span><b>${v.label}</b><br><span class="k27-hint">${STATUS_HINT[k] || ""}</span></span></button>`,
+          `<button class="knt-btn" data-status="${k}" style="justify-content:flex-start;text-align:left;border-left:4px solid ${v.color}"><span><b>${v.label}</b><br><span class="knt-hint">${STATUS_HINT[k] || ""}</span></span></button>`,
       )
       .join("");
-    modal.innerHTML = `<div class="k27-card" style="width:min(440px,92vw);max-height:90vh;overflow:auto">
-      <div class="k27-sec">🏷 Atur status · ${ids.length} dokumen</div>
-      <textarea class="k27-search" data-note rows="2" placeholder="Catatan (opsional), mis. sudah dikoreksi manual di FASIH" style="width:100%;resize:vertical"></textarea>
-      <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px">${options}<button class="k27-btn ghost" data-status="">Batal</button></div>
+    modal.innerHTML = `<div class="knt-card" style="width:min(440px,92vw);max-height:90vh;overflow:auto">
+      <div class="knt-sec">🏷 Atur status · ${ids.length} dokumen</div>
+      <textarea class="knt-search" data-note rows="2" placeholder="Catatan (opsional), mis. sudah dikoreksi manual di FASIH" style="width:100%;resize:vertical"></textarea>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px">${options}<button class="knt-btn ghost" data-status="">Batal</button></div>
     </div>`;
     modal.addEventListener("keydown", (e) => e.stopPropagation());
     modal.addEventListener("click", (e) => {
@@ -2322,14 +2328,14 @@
     });
   }
   window.addEventListener("resize", () => {
-    placeEl(document.getElementById("k27-help"), HELPER_POS_KEY);
-    placeEl(document.getElementById("k27-hud"), HUD_POS_KEY);
+    placeEl(document.getElementById("knt-help"), HELPER_POS_KEY);
+    placeEl(document.getElementById("knt-hud"), HUD_POS_KEY);
   });
 
   let helpSig = "";
   let helpBusy = false;
   function updateHelper() {
-    let el = document.getElementById("k27-help");
+    let el = document.getElementById("knt-help");
     const id = docIdHere();
     const q = id && !loadRun().running ? loadQueue().find((x) => did(x) === id || x.id === id) : null;
     if (!q || loadJson(HELPER_KEY, null) === id) {
@@ -2341,8 +2347,8 @@
     ensureStyles();
     if (!el) {
       el = document.createElement("div");
-      el.id = "k27-help";
-      el.className = "k27 k27-hud k27-help";
+      el.id = "knt-help";
+      el.className = "knt knt-hud knt-help";
       el.addEventListener("click", onHelperClick);
       makeDraggable(el, HELPER_POS_KEY);
       document.body.appendChild(el);
@@ -2377,19 +2383,19 @@
       <div class="top" title="Tarik untuk memindah · klik dua kali untuk kembali ke pojok">
         <span class="grip">⠿</span>
         <div class="ttl">✍ ${esc(APP.name)} — manual</div>
-        <span class="k27-pill" style="--c:${st.color}">${st.label}</span>
+        <span class="knt-pill" style="--c:${st.color}">${st.label}</span>
         <span style="flex:1"></span>
-        <button class="k27-btn" data-help="min" title="${mini ? "Perbesar" : "Perkecil"}">${mini ? "▢" : "–"}</button>
-        <button class="k27-btn" data-help="hide" title="Sembunyikan untuk dokumen ini">×</button>
+        <button class="knt-btn" data-help="min" title="${mini ? "Perbesar" : "Perkecil"}">${mini ? "▢" : "–"}</button>
+        <button class="knt-btn" data-help="hide" title="Sembunyikan untuk dokumen ini">×</button>
       </div>
       ${q.reason ? `<div class="dim" style="margin-top:6px">${esc(q.reason)}</div>` : ""}
       ${rows}
       <div class="dim" style="margin-top:8px">${hint}</div>
-      <div class="k27-row" style="margin-top:10px">
-        <button class="k27-btn go" data-help="fill" ${editing && card && !helpBusy ? "" : "disabled"}>✏ Isi ke kartu ini</button>
-        <button class="k27-btn" data-help="done">✓ Tandai selesai manual</button>
-        <button class="k27-btn" data-help="status" title="Pilih status lain (Perlu cek, Gagal, Sudah sesuai, …)">🏷 Status…</button>
-        <button class="k27-btn" data-help="auto" title="Kembalikan ke Belum & jalankan otomatis dokumen ini">↻ Otomatis</button>
+      <div class="knt-row" style="margin-top:10px">
+        <button class="knt-btn go" data-help="fill" ${editing && card && !helpBusy ? "" : "disabled"}>✏ Isi ke kartu ini</button>
+        <button class="knt-btn" data-help="done">✓ Tandai selesai manual</button>
+        <button class="knt-btn" data-help="status" title="Pilih status lain (Perlu cek, Gagal, Sudah sesuai, …)">🏷 Status…</button>
+        <button class="knt-btn" data-help="auto" title="Kembalikan ke Belum & jalankan otomatis dokumen ini">↻ Otomatis</button>
       </div>`;
   }
   async function onHelperClick(e) {
@@ -2404,7 +2410,7 @@
     if (act === "min") {
       saveJson(HELPER_MIN_KEY, !loadJson(HELPER_MIN_KEY, false));
       updateHelper();
-      return placeEl(document.getElementById("k27-help"), HELPER_POS_KEY);
+      return placeEl(document.getElementById("knt-help"), HELPER_POS_KEY);
     }
     if (act === "done") {
       markManual(q.id);
@@ -2454,7 +2460,7 @@
   let hudSig = "";
   function updateHud() {
     const run = loadRun();
-    let hud = document.getElementById("k27-hud");
+    let hud = document.getElementById("knt-hud");
     if (!run.running) {
       if (hud) hud.remove();
       hudSig = "";
@@ -2464,8 +2470,8 @@
     ensureStyles();
     if (!hud) {
       hud = document.createElement("div");
-      hud.id = "k27-hud";
-      hud.className = "k27 k27-hud";
+      hud.id = "knt-hud";
+      hud.className = "knt knt-hud";
       hud.addEventListener("click", (e) => {
         const act = e.target.closest("[data-hud]")?.dataset.hud;
         if (act === "stop") stopRun("Dihentikan.");
@@ -2512,11 +2518,11 @@
         <div class="ttl">${esc(APP.name)}</div>
         <div class="dim">${run.hold ? "⏸ DIJEDA · " : ""}${T().name}${run.testMode ? " · Mode uji" : ""} · ${done}/${total} dokumen</div>
         <span style="flex:1"></span>
-        ${run.paused ? `<button class="k27-btn go" data-hud="go">✓ Kirim sekarang</button><button class="k27-btn" data-hud="pass">Lewati</button>` : ""}
-        ${run.hold ? `<button class="k27-btn go" data-hud="resume">▶ Lanjut</button>` : `<button class="k27-btn" data-hud="hold" title="Tahan sementara; langkah yang sedang jalan dilanjutkan dari titik yang sama">⏸ Jeda</button>`}
-        <button class="k27-btn" data-hud="panel" title="Buka panel">☰</button>
-        <button class="k27-btn" data-hud="min" title="${hudMini ? "Perbesar" : "Perkecil"}">${hudMini ? "▢" : "–"}</button>
-        <button class="k27-btn stop" data-hud="stop">■ Stop</button>
+        ${run.paused ? `<button class="knt-btn go" data-hud="go">✓ Kirim sekarang</button><button class="knt-btn" data-hud="pass">Lewati</button>` : ""}
+        ${run.hold ? `<button class="knt-btn go" data-hud="resume">▶ Lanjut</button>` : `<button class="knt-btn" data-hud="hold" title="Tahan sementara; langkah yang sedang jalan dilanjutkan dari titik yang sama">⏸ Jeda</button>`}
+        <button class="knt-btn" data-hud="panel" title="Buka panel">☰</button>
+        <button class="knt-btn" data-hud="min" title="${hudMini ? "Perbesar" : "Perkecil"}">${hudMini ? "▢" : "–"}</button>
+        <button class="knt-btn stop" data-hud="stop">■ Stop</button>
       </div>
       ${run.hold ? `<div class="doc wait">⏸ Dijeda sejak ${new Date(run.hold.at).toLocaleTimeString("id-ID")} — jangan pindah halaman / klik isian supaya bisa dilanjutkan dengan aman</div>` : ""}
       ${limited ? `<div class="doc wait">⛔ Server membatasi (429) — lanjut otomatis ${new Date(rateInfo().until).toLocaleTimeString("id-ID")}</div>` : ""}
@@ -2527,11 +2533,11 @@
   }
 
   function ensureLauncher() {
-    if (!document.body || document.getElementById("k27-launch")) return;
+    if (!document.body || document.getElementById("knt-launch")) return;
     ensureStyles();
     const btn = document.createElement("button");
-    btn.id = "k27-launch";
-    btn.className = "k27-launch";
+    btn.id = "knt-launch";
+    btn.className = "knt-launch";
     btn.innerHTML = `<span class="b">${esc(APP.badge)}</span> ${esc(APP.launch)}`;
     btn.title = `Buka panel (Alt+${APP.hotkey})`;
     btn.style.bottom = `${APP.launchBottom}px`;
@@ -2542,7 +2548,7 @@
   window.addEventListener("keydown", (e) => {
     if (e.altKey && e.key === APP.hotkey) {
       e.preventDefault();
-      document.getElementById("k27-panel") ? closePanel() : openPanel();
+      document.getElementById("knt-panel") ? closePanel() : openPanel();
     }
   });
 

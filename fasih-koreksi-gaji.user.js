@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi Gaji + R.27 (gaji / 27.a / 27.b)
 // @namespace    hanif-bps-hst
-// @version      1.4
+// @version      1.6
 // @description  Baca Excel koreksi upah/gaji, buka tiap dokumen, ganti gaji = kolom "Gaji", 27.a (nilai_pendapatan) = R.27a dan 27.b (pendapatan_lain) = R.27b di kartu usaha yang tepat (nama usaha wajib cocok), lalu Kirim & Approve. Link salah/Forbidden: dicari lewat filter desa/SLS (BKU lalu keluarga). Yang gagal bisa dikerjakan manual lewat panel bantu.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -20,13 +20,15 @@
   const HELPER_KEY = "kgj_helper_hidden";
   const HELPER_POS_KEY = "kgj_helper_pos"; // posisi panel bantu yang digeser
   const HELPER_MIN_KEY = "kgj_helper_min"; // panel bantu diperkecil
+  const HUD_POS_KEY = "kgj_hud_pos"; // posisi bar progres yang digeser
+  const HUD_MIN_KEY = "kgj_hud_min"; // bar progres diperkecil
   const RATE_KEY = "fasih_rate_limit"; // sama dengan skrip FASIH lain: jeda 429 berlaku bersama
 
   // ===== KONFIGURASI =====
-  // Satu-satunya bagian yang beda antara skrip Koreksi R.27 dan Koreksi Gaji; sisanya sama persis.
+  // Satu-satunya bagian yang beda antara skrip Koreksi R.27, Koreksi Gaji dan Koreksi NTB; sisanya sama persis.
   const APP = {
     name: "Koreksi Gaji",
-    version: "1.4",
+    version: "1.6",
     title: "Koreksi Upah / Gaji",
     badge: "Rp",
     launch: "Koreksi Gaji",
@@ -46,6 +48,12 @@
   // Kartu juga boleh dikenali dari jumlah isian ini (nama usaha tetap wajib cocok). Kosong = tidak dipakai:
   // gaji ikut mengubah 27.a, jadi jumlahnya tidak bisa jadi patokan.
   const SUM_KEYS = [];
+  // Kolom penanda baris judul Excel (dan patokan "kolom nilai baru terdekat")
+  const ANCHOR = "R27A";
+  // Isian yang dipakai untuk mengenali kartu (nilai lama/baru harus cocok). null = semua isian di FIELDS.
+  const MATCH_KEYS = null;
+  // Catatan yang ditambahkan di tiap rincian yang nilainya diubah (tombol Catatan). "" = tidak menambah catatan.
+  const NOTE = "";
   // ===== akhir KONFIGURASI =====
 
   const DEFAULT_CONF = {
@@ -104,18 +112,108 @@
       console.error(`[${APP.name}] Gagal menyimpan.`, e);
     }
   };
-  const loadQueue = () => loadJson(QUEUE_KEY, []);
-  const saveQueue = (q) => saveJson(QUEUE_KEY, q);
+  // ---------- Antrean: IndexedDB (muat puluhan ribu dokumen) + salinan di memori ----------
+  // localStorage cuma ~5 MB, jadi antrean disimpan di IndexedDB; QUEUE = salinan di memori yang dipakai skrip.
+  // Antrean lama di localStorage (versi sebelumnya) dipindahkan otomatis saat pertama kali dibuka.
+  const DB_NAME = "kgj_db";
+  const REV_KEY = "kgj_queue_rev"; // berubah tiap antrean disimpan -> tab lain memuat ulang
+  let QUEUE = [];
+  let useIdb = typeof indexedDB !== "undefined";
+  let dbp = null;
+  let pendingWrites = 0;
+  function openDb() {
+    if (!dbp)
+      dbp = new Promise((res, rej) => {
+        const r = indexedDB.open(DB_NAME, 1);
+        r.onupgradeneeded = () => r.result.createObjectStore("items", { keyPath: "id" });
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => rej(r.error);
+      });
+    return dbp;
+  }
+  function idbWrite(fn) {
+    pendingWrites++;
+    return openDb()
+      .then(
+        (d) =>
+          new Promise((res, rej) => {
+            const tx = d.transaction("items", "readwrite");
+            fn(tx.objectStore("items"));
+            tx.oncomplete = res;
+            tx.onerror = tx.onabort = () => rej(tx.error);
+          }),
+      )
+      .catch((e) => console.error(`[${APP.name}] Gagal menyimpan antrean.`, e))
+      .finally(() => {
+        pendingWrites--;
+        try {
+          localStorage.setItem(REV_KEY, `${Date.now()}-${Math.random()}`);
+        } catch (e) {}
+      });
+  }
+  async function idbReadAll() {
+    const d = await openDb();
+    const items = await new Promise((res, rej) => {
+      const r = d.transaction("items").objectStore("items").getAll();
+      r.onsuccess = () => res(r.result || []);
+      r.onerror = () => rej(r.error);
+    });
+    return items.sort((a, b) => (a._i ?? 0) - (b._i ?? 0));
+  }
+  const loadQueue = () => QUEUE;
+  function saveQueue(q) {
+    q.forEach((x, i) => (x._i = i)); // urutan Excel
+    QUEUE = q;
+    if (!useIdb) return Promise.resolve(saveJson(QUEUE_KEY, q));
+    return idbWrite((st) => {
+      st.clear();
+      q.forEach((x) => st.put(x));
+    });
+  }
+  async function initQueue() {
+    if (useIdb) {
+      try {
+        QUEUE = await idbReadAll();
+        const legacy = loadJson(QUEUE_KEY, null);
+        if (Array.isArray(legacy)) {
+          if (!QUEUE.length && legacy.length) await saveQueue(legacy);
+          localStorage.removeItem(QUEUE_KEY);
+        }
+        return;
+      } catch (e) {
+        console.warn(`[${APP.name}] IndexedDB tidak bisa dipakai, antrean disimpan di localStorage.`, e);
+        useIdb = false;
+      }
+    }
+    QUEUE = loadJson(QUEUE_KEY, []);
+  }
+  // Pindah halaman setelah semua penyimpanan antrean selesai (supaya tidak terpotong)
+  function go(url) {
+    const t0 = Date.now();
+    const attempt = () => (pendingWrites > 0 && Date.now() - t0 < 5000 ? setTimeout(attempt, 50) : (location.href = url));
+    attempt();
+  }
+  // Antrean diubah di tab lain -> muat ulang salinannya
+  window.addEventListener("storage", (e) => {
+    if (e.key !== REV_KEY || !useIdb) return;
+    idbReadAll()
+      .then((items) => {
+        QUEUE = items;
+        refreshPanel();
+      })
+      .catch(() => {});
+  });
   const loadConf = () => ({ ...DEFAULT_CONF, ...loadJson(CONF_KEY, {}) });
   const saveConf = (c) => saveJson(CONF_KEY, c);
   const loadRun = () => loadJson(RUN_KEY, { running: false });
   const saveRun = (r) => saveJson(RUN_KEY, r);
 
   function updateItem(id, changes) {
-    const queue = loadQueue();
-    const item = queue.find((q) => q.id === id);
-    if (item) Object.assign(item, changes);
-    saveQueue(queue);
+    const item = QUEUE.find((q) => q.id === id);
+    if (!item) return item;
+    Object.assign(item, changes);
+    if (useIdb) idbWrite((st) => st.put(item));
+    else saveJson(QUEUE_KEY, QUEUE);
     return item;
   }
 
@@ -384,8 +482,17 @@
     const read = await openZip(arrayBuffer);
     const xml = (text) => new DOMParser().parseFromString(text, "application/xml");
     const tags = (node, tag) => Array.from(node.getElementsByTagNameNS("*", tag));
+    // Isi sel dibaca pakai regex, bukan DOMParser: sheet puluhan MB (puluhan ribu baris) tetap cepat & hemat memori
+    const ENT = { lt: "<", gt: ">", amp: "&", quot: '"', apos: "'" };
+    const decode = (t) =>
+      t.indexOf("&") < 0
+        ? t
+        : t.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) =>
+            e[0] !== "#" ? (ENT[e] ?? m) : String.fromCodePoint(e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : Number(e.slice(1))),
+          );
+    const texts = (x) => Array.from(x.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g), (m) => decode(m[1])).join("");
     const sharedXml = await read("xl/sharedStrings.xml");
-    const shared = sharedXml ? tags(xml(sharedXml), "si").map((si) => tags(si, "t").map((t) => t.textContent).join("")) : [];
+    const shared = sharedXml ? Array.from(sharedXml.matchAll(/<si>([\s\S]*?)<\/si>/g), (m) => texts(m[1].replace(/<rPh\b[\s\S]*?<\/rPh>/g, ""))) : [];
     const rels = {};
     tags(xml(await read("xl/_rels/workbook.xml.rels")), "Relationship").forEach((r) => {
       rels[r.getAttribute("Id")] = r.getAttribute("Target");
@@ -401,28 +508,31 @@
         s.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id") || s.getAttribute("r:id");
       let target = rels[relId].replace(/^\//, "");
       if (!target.startsWith("xl/")) target = "xl/" + target;
-      const rows = tags(xml(await read(target)), "row").map((row) => {
+      const sheetXml = (await read(target)) || "";
+      const rows = [];
+      for (const row of sheetXml.matchAll(/<row\b[^>]*?(?:\/>|>([\s\S]*?)<\/row>)/g)) {
         const out = [];
-        tags(row, "c").forEach((c) => {
-          const type = c.getAttribute("t");
-          const v = tags(c, "v")[0];
+        for (const c of (row[1] || "").matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+          const ref = (c[1].match(/\br="([A-Z]+)\d*"/) || [])[1];
+          const type = (c[1].match(/\bt="([^"]*)"/) || [])[1];
+          const body = c[2] || "";
           let value = "";
-          if (type === "inlineStr") value = tags(c, "t").map((t) => t.textContent).join("");
-          else if (!v) value = "";
-          else if (type === "s") value = shared[Number(v.textContent)];
-          else value = v.textContent;
-          out[colIndex(c.getAttribute("r"))] = String(value);
-        });
-        return Array.from(out, (x) => (x === undefined ? "" : x));
-      });
+          if (type === "inlineStr") value = texts(body);
+          else {
+            const v = body.match(/<v>([\s\S]*?)<\/v>/);
+            if (v) value = type === "s" ? shared[Number(v[1])] : decode(v[1]);
+          }
+          out[ref ? colIndex(ref) : out.length] = String(value ?? "");
+        }
+        rows.push(Array.from(out, (x) => (x === undefined ? "" : x)));
+      }
       sheets.push({ name: s.getAttribute("name"), rows });
     }
     return sheets;
   }
 
   // Kolom dicocokkan tanpa spasi/titik/huruf besar: "R.27a" = "r27a" = "R 27 A".
-  // Baris judul = baris yang memuat kolom R.27a. Kolom nilai (lama/baru) diambil dari FIELDS.
-  const ANCHOR = "R27A";
+  // Baris judul = baris yang memuat kolom ANCHOR. Kolom nilai (lama/baru) diambil dari FIELDS.
   const COLS = {
     link: ["LINK", "URL", "LINKFASIH"],
     nama: ["NAMAUSAHA"],
@@ -431,13 +541,15 @@
     desa: ["DESA", "NMDESA"],
     sls: ["NMSLS", "SLS"],
     status: ["ASSIGNMENTSTATUSALIAS", "STATUS"],
+    kab: ["NAMAKAB", "KAB", "KABUPATEN", "NMKAB"],
+    isian: ["ISIANYANGHARUSDIINPUT"],
     no: ["NO"],
   };
 
   async function parseWorkbook(arrayBuffer) {
     const sheets = await readXlsx(arrayBuffer);
     for (const sheet of sheets) {
-      const hi = sheet.rows.findIndex((r) => r.some((h) => squash(h) === ANCHOR));
+      const hi = sheet.rows.slice(0, 30).findIndex((r) => r.some((h) => squash(h) === ANCHOR)); // baris judul ada di atas
       if (hi < 0) continue;
       const headers = sheet.rows[hi].map(squash);
       const anchor = headers.indexOf(ANCHOR);
@@ -483,6 +595,8 @@
             desa: get("desa"),
             sls: get("sls"),
             statusAwal: get("status"),
+            kab: get("kab"),
+            isian: get("isian"),
             targets: [],
             status: "pending",
             reason: "",
@@ -491,7 +605,7 @@
       });
       return { items: Array.from(byDoc.values()), sheet: sheet.name, rows: sheet.rows.slice(hi + 1).filter((r) => r.some((x) => String(x).trim())).length, skipped };
     }
-    throw new Error('tidak ada sheet dengan kolom "R.27a"');
+    throw new Error(`tidak ada sheet dengan kolom "${FIELDS.map((f) => f[5]).join('", "')}"`);
   }
 
   // =========================================================================
@@ -611,8 +725,10 @@
 
   const norm0 = (v) => (v === null || v === undefined ? 0 : v);
   const eqAll = (x, y) => FIELDS.every(([k]) => x[k] === y[k]);
-  // Tiap isian bernilai lama atau baru (bisa campur kalau sebelumnya sempat terisi sebagian)
-  const oldOrNew = (cur, t) => FIELDS.every(([k]) => cur[k] === t.old[k] || cur[k] === t.neu[k]);
+  // Tiap isian pengenal bernilai lama atau baru (bisa campur kalau sebelumnya sempat terisi sebagian).
+  // Isian di luar MATCH_KEYS (mis. 28.b di Koreksi NTB) cuma diisi, tidak dipakai mengenali kartu.
+  const MATCH = FIELDS.filter(([k]) => !MATCH_KEYS || MATCH_KEYS.includes(k));
+  const oldOrNew = (cur, t) => MATCH.every(([k]) => cur[k] === t.old[k] || cur[k] === t.neu[k]);
   const sumOf = (x) => SUM_KEYS.reduce((n, k) => n + (x[k] || 0), 0);
   const fmtCur = (cur) => FIELDS.map(([k, , l]) => `${l} ${rupiah(cur[k])}`).join(" / ");
   const fmtChange = (cur, t) =>
@@ -620,6 +736,70 @@
       .map(([k, , l]) => `${l} ${rupiah(cur[k])} → ${rupiah(t.neu[k])}`)
       .join(", ");
   const readFields = (inst) => Object.fromEntries(FIELDS.map(([k, id]) => [k, norm0(readBox(box(id, inst)))]));
+
+  // ---------- Catatan (#DC_04 dsb.) di rincian yang diubah ----------
+  // Dialog catatan yang sedang terbuka: kotak "Tambah catatan..." + pembungkus yang punya tombol Dismiss
+  function noteDialog() {
+    const ta = Array.from(document.querySelectorAll("textarea")).find((t) => visible(t) && /catatan/i.test(t.placeholder || "") && !t.closest(OWN));
+    if (!ta) return null;
+    let el = ta.parentElement;
+    while (el && el !== document.body && !el.querySelector('button[aria-label="Dismiss"]')) el = el.parentElement;
+    return el && el !== document.body ? { el, ta } : null;
+  }
+  async function closeNoteDialog() {
+    const d = noteDialog();
+    if (!d) return;
+    const x = d.el.querySelector('button[aria-label="Dismiss"]');
+    if (x) triggerClick(x);
+    if (!(await waitFor(() => !noteDialog(), 4000))) pressKey("Escape");
+    await waitFor(() => !noteDialog(), 3000);
+  }
+  // Pastikan thread catatan rincian `id` memuat NOTE; kalau sudah ada, tidak ditambah lagi (hindari duplikat)
+  async function ensureNote(id, inst, label) {
+    const c = box(id, inst);
+    const btn = c && Array.from(c.querySelectorAll('button[title="Catatan"]')).find(visible);
+    if (!btn) throw new Error("tombol Catatan tidak ada");
+    if (noteDialog()) await closeNoteDialog();
+    triggerClick(btn);
+    const d = await waitFor(noteDialog, 8000);
+    if (!d) throw new Error("dialog Catatan tidak terbuka");
+    try {
+      await sleep(W(500)); // thread catatan dimuat
+      const head = d.el.querySelector('[class*="line-clamp"]');
+      if (head && !squash(head.innerText).startsWith(squash(label)))
+        throw new Error(`dialog yang terbuka untuk "${head.innerText.trim().slice(0, 40)}"`);
+      if (d.el.innerText.includes(NOTE)) return "ada";
+      if (d.ta.disabled || d.ta.readOnly) throw new Error("kotak catatan terkunci");
+      setFieldValue(d.ta, NOTE);
+      const save = await waitFor(() => {
+        const b = d.el.querySelector('button[title="Simpan"]');
+        return b && !b.disabled ? b : null;
+      }, 4000);
+      if (!save) throw new Error("tombol Simpan catatan tidak aktif");
+      triggerClick(save);
+      if (!(await waitFor(() => noteDialog() && noteDialog().el.innerText.includes(NOTE), 10000)))
+        throw new Error("catatan tidak tersimpan");
+      return "ditambah";
+    } finally {
+      await closeNoteDialog();
+    }
+  }
+  // Catatan di semua rincian yang nilainya diubah (menurut Excel, atau isinya di dokumen tadinya beda).
+  // Hasil: daftar rincian yang gagal
+  async function addNotes(inst, t, cur) {
+    if (!NOTE) return [];
+    const fails = [];
+    for (const [k, id, label] of FIELDS) {
+      if (t.old[k] === t.neu[k] && (!cur || cur[k] === t.neu[k])) continue;
+      try {
+        const r = await ensureNote(id, inst, label);
+        log(`Catatan ${label}: ${r === "ada" ? `${NOTE} sudah ada` : `${NOTE} ditambahkan`}`);
+      } catch (e) {
+        fails.push(`${label} (${e.message})`);
+      }
+    }
+    return fails;
+  }
 
   // Ganti semua isian di kartu yang sedang terbuka. Yang turun dulu baru yang naik,
   // supaya total sementara tidak melonjak
@@ -686,8 +866,10 @@
       if (!d) return notes.push(`kartu "${name}": ${fmtCur(cur)} tidak cocok dengan Excel`);
       const t = targets[d.i];
       if (d.kind === "new") {
-        results[d.i] = { state: "already", card: name, cur };
-        return log(`✓ "${name}" sudah sesuai`);
+        // Nilainya sudah benar; catatan tetap dipastikan ada (di Review juga dicoba, kalau terkunci -> lewat Edit)
+        const noteFail = await addNotes(inst, t);
+        results[d.i] = { state: "already", card: name, cur, noteFail };
+        return log(`✓ "${name}" sudah sesuai${noteFail.length ? ` (catatan belum: ${noteFail.join(", ")})` : ""}`);
       }
       if (!write) {
         results[d.i] = { state: "todo", card: name, cur };
@@ -695,7 +877,8 @@
       }
       log(`Ganti "${name}" (= Excel "${t.nama}"): ${fmtChange(cur, t)}`);
       await writeCard(inst, t, cur);
-      results[d.i] = { state: "set", card: name, cur };
+      const noteFail = await addNotes(inst, t, cur);
+      results[d.i] = { state: "set", card: name, cur, noteFail };
     };
 
     if (area.kind === "direct") {
@@ -937,7 +1120,7 @@
     const r = loadRun();
     r.navAt = Date.now();
     saveRun(r);
-    location.href = c.href;
+    go(c.href);
   }
 
   const needFind = (why) => Object.assign(new Error(why), { needFind: true });
@@ -1212,7 +1395,7 @@
     r.navAt = Date.now();
     saveRun(r);
     log(`Membuka dokumen${tries ? ` (percobaan ${tries + 1})` : ""}`);
-    location.href = tries % 2 === 0 ? docUrl(item) : `${location.origin}/app/assignment-detail/${did(item)}`;
+    go(tries % 2 === 0 ? docUrl(item) : `${location.origin}/app/assignment-detail/${did(item)}`);
     return false;
   }
   // Dari halaman assignment-detail: ikuti link Review-nya
@@ -1225,7 +1408,7 @@
     const r = loadRun();
     r.navAt = Date.now();
     saveRun(r);
-    location.href = a.href;
+    go(a.href);
     return true;
   }
 
@@ -1330,7 +1513,7 @@
             r.navAt = Date.now();
             saveRun(r);
             log("Buka halaman daftar assignment");
-            location.href = listUrl;
+            go(listUrl);
             return;
           }
           if (!(await waitFor(isListPage, 20000))) throw new Error("halaman daftar assignment tidak termuat");
@@ -1345,8 +1528,10 @@
         if (!ensureReview(item)) return;
         try {
           const { results, notes } = await scanDoc(item, false);
+          if (results.every((r) => r && r.state === "already" && !(r.noteFail || []).length))
+            return finishItem(item.id, "already", `tidak diubah, sudah sesuai${NOTE ? ` · catatan ${NOTE} ada` : ""} · ${summary(item, results)}`);
           if (results.every((r) => r && r.state === "already"))
-            return finishItem(item.id, "already", `tidak diubah, sudah sesuai · ${summary(item, results)}`);
+            log(`Nilai sudah sesuai, tapi catatan ${NOTE} belum bisa ditambah di Review → lewat Edit`);
           // Tidak ada satu kartu pun yang cocok: kemungkinan link membuka dokumen lain -> cari dulu, jangan revoke
           if (results.every((r) => !r)) {
             const why = `tidak ada kartu yang sesuai nama_usaha & nilai Excel (${notes.join("; ") || "-"})`;
@@ -1374,7 +1559,8 @@
       case "fill": {
         if (!onEditOf(did(item))) return setStage("edit");
         const { results, notes } = await scanDoc(item, true);
-        updateItem(item.id, { result: summary(item, results) });
+        const noteFail = results.flatMap((r) => (r && r.noteFail) || []);
+        updateItem(item.id, { result: summary(item, results), noteFail });
         if (results.some((r) => !r))
           throw Object.assign(new Error(`${summary(item, results)}${notes.length ? ` (${notes.join("; ")})` : ""}`), { soft: true });
         return setStage("submit", { submitClicked: false, changed: results.some((r) => r.state === "set") });
@@ -1412,7 +1598,8 @@
           closeDialogs();
         }
         const q = loadQueue().find((x) => x.id === item.id) || item;
-        return finishItem(item.id, "done", `${q.result || "terkirim"} · terkirim${conf.approve && !note ? " & approve" : ""}${note}`);
+        const nf = (q.noteFail || []).length ? ` · ⚠ catatan ${NOTE} belum masuk di ${q.noteFail.join(", ")}` : "";
+        return finishItem(item.id, nf ? "yellow" : "done", `${q.result || "terkirim"} · terkirim${conf.approve && !note ? " & approve" : ""}${note}${nf}`);
       }
       default:
         throw new Error(`tahap tidak dikenal: ${cur.stage}`);
@@ -1585,11 +1772,11 @@
       .kgj-help .tb .ok { color:#86efac; text-align:right; }
       .kgj-help .tb .now { color:#fde68a; text-align:right; }
       .kgj-help .kgj-btn:disabled { opacity:.4; }
-      .kgj-help .top { cursor:move; user-select:none; touch-action:none; }
-      .kgj-help .top .grip { color:#7d83a8; font-size:14px; line-height:1; }
-      .kgj-help.drag { opacity:.85; box-shadow:0 24px 60px rgba(10,10,30,.6); }
-      .kgj-help.min { width:auto; max-width:94vw; padding:9px 12px; }
-      .kgj-help.min > :not(.top) { display:none; }
+      .kgj-hud .top { cursor:move; user-select:none; touch-action:none; flex-wrap:wrap; }
+      .kgj-hud .top .grip { color:#7d83a8; font-size:14px; line-height:1; }
+      .kgj-hud.drag { opacity:.85; box-shadow:0 24px 60px rgba(10,10,30,.6); }
+      .kgj-hud.min { width:auto; max-width:94vw; padding:9px 12px; }
+      .kgj-hud.min > :not(.top) { display:none; }
       .kgj-toast { position:fixed; left:50%; top:20px; transform:translateX(-50%); z-index:1000003; background:#111324; color:#fff; padding:10px 16px; border-radius:12px; font:600 13px "Inter",ui-sans-serif,system-ui,sans-serif; box-shadow:0 12px 30px rgba(0,0,0,.3); animation:kgjfade .2s; }
     `;
     document.head.appendChild(style);
@@ -1633,7 +1820,10 @@
         return `${q.targets.length > 1 ? `<span class="kgj-chg"><span class="u">${esc((t.nama || "").split("(")[0].trim())}</span></span>` : ""}${FIELDS.map(([k, , l]) => ch(l, t.old[k], t.neu[k])).join("")}`;
       })
       .join("");
-    const meta = [q.kec, q.desa, q.sls, q.targets.length > 1 ? `${q.targets.length} usaha` : "", q.statusAwal].filter(Boolean).map(esc).join(" · ");
+    const meta = [q.kec || q.kab, q.desa, q.sls, q.targets.length > 1 ? `${q.targets.length} usaha` : "", q.statusAwal, q.isian ? `isian: ${q.isian}` : ""]
+      .filter(Boolean)
+      .map(esc)
+      .join(" · ");
     return `<div class="kgj-item" style="--c:${st.color}">
       <input type="checkbox" data-sel="${q.id}" ${ui.selected.has(q.id) ? "checked" : ""}>
       <div style="min-width:0">
@@ -1849,7 +2039,7 @@
         try {
           localStorage.removeItem(HELPER_KEY);
         } catch (err) {}
-        location.href = man.getAttribute("href");
+        go(man.getAttribute("href"));
         return;
       }
       const one = e.target.closest("[data-one]");
@@ -2004,7 +2194,7 @@
   // Nama wilayah untuk nama file ekspor, dari kecamatan/desa yang ada di antrean
   function wilayahTag() {
     const queue = loadQueue();
-    const kecs = [...new Set(queue.map((q) => q.kec).filter(Boolean))];
+    const kecs = [...new Set(queue.map((q) => q.kec || q.kab).filter(Boolean))];
     const desas = [...new Set(queue.map((q) => q.desa).filter(Boolean))];
     let tag = "semua-wilayah";
     if (desas.length === 1) tag = kecs.length === 1 ? `${kecs[0]}-${desas[0]}` : desas[0];
@@ -2094,16 +2284,18 @@
     return pool.find((x) => eqAll(card.cur, x.neu)) || pool.find((x) => oldOrNew(card.cur, x)) || (t.length === 1 ? t[0] : null);
   }
 
-  // Panel bantu bisa digeser (tarik bagian judul) & posisinya diingat; klik dua kali judul = kembali ke pojok
-  function placeHelper(el) {
-    const pos = loadJson(HELPER_POS_KEY, null);
-    if (!pos) return Object.assign(el.style, { left: "", top: "", right: "", bottom: "" });
+  // Panel bantu & bar progres bisa digeser (tarik bagian judul) & posisinya diingat;
+  // klik dua kali judul = kembali ke tempat semula
+  function placeEl(el, key) {
+    if (!el) return;
+    const pos = loadJson(key, null);
+    if (!pos) return Object.assign(el.style, { left: "", top: "", right: "", bottom: "", transform: "" });
     const w = Math.min(el.offsetWidth || 400, window.innerWidth);
     const x = Math.min(Math.max(0, pos.x), window.innerWidth - w);
     const y = Math.min(Math.max(0, pos.y), window.innerHeight - 48);
-    Object.assign(el.style, { left: `${x}px`, top: `${y}px`, right: "auto", bottom: "auto" });
+    Object.assign(el.style, { left: `${x}px`, top: `${y}px`, right: "auto", bottom: "auto", transform: "none" });
   }
-  function makeDraggable(el) {
+  function makeDraggable(el, key) {
     el.addEventListener("pointerdown", (e) => {
       if (!e.target.closest(".top") || e.target.closest("button") || e.button !== 0) return;
       e.preventDefault();
@@ -2114,27 +2306,27 @@
       const move = (ev) => {
         const x = Math.min(Math.max(0, ev.clientX - dx), window.innerWidth - r.width);
         const y = Math.min(Math.max(0, ev.clientY - dy), window.innerHeight - 48);
-        Object.assign(el.style, { left: `${x}px`, top: `${y}px`, right: "auto", bottom: "auto" });
+        Object.assign(el.style, { left: `${x}px`, top: `${y}px`, right: "auto", bottom: "auto", transform: "none" });
       };
       const up = () => {
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
         el.classList.remove("drag");
         const b = el.getBoundingClientRect();
-        saveJson(HELPER_POS_KEY, { x: Math.round(b.left), y: Math.round(b.top) });
+        saveJson(key, { x: Math.round(b.left), y: Math.round(b.top) });
       };
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
     });
     el.addEventListener("dblclick", (e) => {
       if (!e.target.closest(".top") || e.target.closest("button")) return;
-      saveJson(HELPER_POS_KEY, null);
-      placeHelper(el);
+      saveJson(key, null);
+      placeEl(el, key);
     });
   }
   window.addEventListener("resize", () => {
-    const el = document.getElementById("kgj-help");
-    if (el) placeHelper(el);
+    placeEl(document.getElementById("kgj-help"), HELPER_POS_KEY);
+    placeEl(document.getElementById("kgj-hud"), HUD_POS_KEY);
   });
 
   let helpSig = "";
@@ -2155,9 +2347,9 @@
       el.id = "kgj-help";
       el.className = "kgj kgj-hud kgj-help";
       el.addEventListener("click", onHelperClick);
-      makeDraggable(el);
+      makeDraggable(el, HELPER_POS_KEY);
       document.body.appendChild(el);
-      requestAnimationFrame(() => placeHelper(el)); // setelah isinya tergambar (lebarnya sudah diketahui)
+      requestAnimationFrame(() => placeEl(el, HELPER_POS_KEY)); // setelah isinya tergambar (lebarnya sudah diketahui)
     }
     const mini = !!loadJson(HELPER_MIN_KEY, false);
     el.classList.toggle("min", mini);
@@ -2215,7 +2407,7 @@
     if (act === "min") {
       saveJson(HELPER_MIN_KEY, !loadJson(HELPER_MIN_KEY, false));
       updateHelper();
-      return placeHelper(document.getElementById("kgj-help"));
+      return placeEl(document.getElementById("kgj-help"), HELPER_POS_KEY);
     }
     if (act === "done") {
       markManual(q.id);
@@ -2247,6 +2439,8 @@
       updateHelper();
       try {
         await writeCard(card.inst, t, card.cur);
+        const noteFail = await addNotes(card.inst, t, card.cur);
+        if (noteFail.length) alert(`Nilai sudah diganti, tapi catatan ${NOTE} belum masuk di: ${noteFail.join(", ")}`);
         updateItem(q.id, { result: `${t.nama.split("(")[0].trim()}: ${fmtChange(card.cur, t) || "sudah sesuai"} (manual)` });
         toast("Nilai sudah diganti. Kirim & Approve di FASIH, lalu klik “Tandai selesai manual”.");
       } catch (err) {
@@ -2293,19 +2487,30 @@
           const r = loadRun();
           if (r.cur) finishItem(r.cur.id, "tested", "MODE UJI: nilai diganti tapi TIDAK dikirim (dokumen masih terbuka edit)");
         }
+        if (act === "min") {
+          saveJson(HUD_MIN_KEY, !loadJson(HUD_MIN_KEY, false));
+          hudSig = "";
+          updateHud();
+          placeEl(hud, HUD_POS_KEY);
+        }
       });
+      makeDraggable(hud, HUD_POS_KEY);
       document.body.appendChild(hud);
+      requestAnimationFrame(() => placeEl(hud, HUD_POS_KEY));
     }
+    const hudMini = !!loadJson(HUD_MIN_KEY, false);
+    hud.classList.toggle("min", hudMini);
     const it = run.cur ? loadQueue().find((q) => q.id === run.cur.id) : null;
     const iNow = run.cur ? STEPS.findIndex(([k]) => k === run.cur.stage) : -1;
     const limited = rateLimited();
     const total = run.total || 0;
     const done = run.processed || 0;
-    const sig = JSON.stringify([run.cur, run.paused, run.logs, limited, done, run.testMode, run.hold]);
+    const sig = JSON.stringify([run.cur, run.paused, run.logs, limited, done, run.testMode, run.hold, hudMini]);
     if (sig === hudSig) return;
     hudSig = sig;
     hud.innerHTML = `
-      <div class="top">
+      <div class="top" title="Tarik untuk memindah · klik dua kali untuk kembali ke tengah bawah">
+        <span class="grip">⠿</span>
         <div class="spin ${run.paused || run.hold || limited ? "wait" : ""}"></div>
         <div class="ttl">${esc(APP.name)}</div>
         <div class="dim">${run.hold ? "⏸ DIJEDA · " : ""}${T().name}${run.testMode ? " · Mode uji" : ""} · ${done}/${total} dokumen</div>
@@ -2313,6 +2518,7 @@
         ${run.paused ? `<button class="kgj-btn go" data-hud="go">✓ Kirim sekarang</button><button class="kgj-btn" data-hud="pass">Lewati</button>` : ""}
         ${run.hold ? `<button class="kgj-btn go" data-hud="resume">▶ Lanjut</button>` : `<button class="kgj-btn" data-hud="hold" title="Tahan sementara; langkah yang sedang jalan dilanjutkan dari titik yang sama">⏸ Jeda</button>`}
         <button class="kgj-btn" data-hud="panel" title="Buka panel">☰</button>
+        <button class="kgj-btn" data-hud="min" title="${hudMini ? "Perbesar" : "Perkecil"}">${hudMini ? "▢" : "–"}</button>
         <button class="kgj-btn stop" data-hud="stop">■ Stop</button>
       </div>
       ${run.hold ? `<div class="doc wait">⏸ Dijeda sejak ${new Date(run.hold.at).toLocaleTimeString("id-ID")} — jangan pindah halaman / klik isian supaya bisa dilanjutkan dengan aman</div>` : ""}
@@ -2343,9 +2549,9 @@
     }
   });
 
-  // Halaman dimuat ulang saat berjalan -> lanjut dari tahap terakhir
+  // Halaman dimuat ulang saat berjalan -> lanjut dari tahap terakhir (setelah antrean termuat)
   let lastPanelRefresh = 0;
-  setInterval(() => {
+  const loop = () => {
     ensureLauncher();
     if (isListPage() && loadJson(LIST_KEY, "") !== location.href) saveJson(LIST_KEY, location.href);
     const run = loadRun();
@@ -2356,7 +2562,11 @@
       lastPanelRefresh = Date.now();
       refreshPanel();
     }
-  }, 700);
-
-  console.log(`[${APP.name} v${APP.version}] Aktif. Tombol di kiri bawah (Alt+${APP.hotkey}).`);
+  };
+  initQueue().then(() => {
+    setInterval(loop, 700);
+    console.log(
+      `[${APP.name} v${APP.version}] Aktif · ${QUEUE.length} dokumen di antrean (${useIdb ? "IndexedDB" : "localStorage"}). Tombol di kiri bawah (Alt+${APP.hotkey}).`,
+    );
+  });
 })();

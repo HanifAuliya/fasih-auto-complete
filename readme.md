@@ -9,6 +9,7 @@ Ada beberapa skrip di folder ini, untuk dua tahap pekerjaan yang berbeda:
 | [`script`](script) | FASIH Batch Otomatis - Tahap 1 + 2 | Transkripsi hasil penyisiran Excel ke dokumen FASIH: cari dokumen rumah tangga yang cocok, isi Blok P + Blok II (usaha lama/baru), tentukan KBLI, kirim & approve. |
 | [`fasih-koreksi-r27.user.js`](fasih-koreksi-r27.user.js) | FASIH Koreksi R.27 - Pendapatan (27.a / 27.b) | Ganti isian 27.a (`nilai_pendapatan`) = R.27a dan 27.b (`pendapatan_lain`) = R.27b di kartu usaha yang tepat, lalu kirim & approve. Pintasan Alt+9. |
 | [`fasih-koreksi-gaji.user.js`](fasih-koreksi-gaji.user.js) | FASIH Koreksi Gaji + R.27 (gaji / 27.a / 27.b) | Sama persis dengan Koreksi R.27 (semua fitur di bagian 3), ditambah isian `gaji` = kolom Gaji dari Excel upah/gaji. Pintasan Alt+6. |
+| [`fasih-koreksi-ntb.user.js`](fasih-koreksi-ntb.user.js) | FASIH Koreksi Anomali NTB (26.a - 28.b) | Sama persis dengan Koreksi R.27 (bagian 3), untuk Excel Pengecekan Anomali NTB: ganti 26.a–26.d, 27.a dan 28.b (dari kolom r28c) = kolom `rXX input`, plus catatan `#DC_04` di tiap rincian yang diubah. Muat puluhan ribu dokumen. Pintasan Alt+5. |
 | [`fasih-ganti-wilayah-oss.user.js`](fasih-ganti-wilayah-oss.user.js) | FASIH OSS -> Keluarga: Pindah + Tautkan | Pindahkan assignment OSS ke SLS keluarganya (Ganti Wilayah), lalu tautkan ke usaha keluarga lewat "Pilih UMKM dalam satu SLS" — atau tutup/gandakan kalau memang tidak ada yang cocok. |
 
 Semuanya independen — bisa dipasang salah satu atau dua-duanya sekaligus.
@@ -47,7 +48,7 @@ Untuk Chrome/Edge:
 ### 4. Pastikan jalan di FASIH
 
 1. Buka halaman `https://fasih-sm.bps.go.id/...` (halaman **DATA survei**, bukan halaman login).
-2. Tombol pelontar mengambang akan muncul di pojok kiri bawah — ikonnya tergantung skrip mana yang aktif: **⚡ FASIH Otomatis** (Batch Otomatis), **🔀 OSS → Keluarga** (Ganti Wilayah OSS), **27 Koreksi Pendapatan** (R.27), atau **Rp Koreksi Gaji** (Koreksi Gaji). Kalau lebih dari satu skrip dipasang, semua tombolnya numpuk di situ.
+2. Tombol pelontar mengambang akan muncul di pojok kiri bawah — ikonnya tergantung skrip mana yang aktif: **⚡ FASIH Otomatis** (Batch Otomatis), **🔀 OSS → Keluarga** (Ganti Wilayah OSS), **27 Koreksi Pendapatan** (R.27), **Rp Koreksi Gaji** (Koreksi Gaji), atau **NTB Koreksi NTB** (Koreksi Anomali NTB). Kalau lebih dari satu skrip dipasang, semua tombolnya numpuk di situ.
 3. Buka Console browser (tekan **F12** → tab **Console**) dan refresh halaman. Harus ada baris log seperti `[FASIH Batch Otomatis v2.0] Skrip termuat di ...` (teksnya beda-beda tergantung skrip). **Kalau log ini tidak muncul sama sekali**, skrip belum benar-benar jalan — balik cek langkah 2 (Allow User Scripts) dan langkah 3.5 (status Enabled).
 4. Kalau muncul izin browser semacam "Izinkan ekstensi ini membaca dan mengubah data Anda di situs ini" saat halaman FASIH pertama kali dibuka, klik **Allow/Izinkan** — tanpa ini skrip tidak bisa membaca/mengisi form.
 
@@ -204,25 +205,29 @@ Sama seperti skrip Batch Otomatis — memakai key `localStorage` yang sama (`fas
 
 ---
 
-## 3. `fasih-koreksi-r27.user.js` & `fasih-koreksi-gaji.user.js` — Koreksi R.27 / Koreksi Gaji
+## 3. `fasih-koreksi-r27.user.js`, `fasih-koreksi-gaji.user.js` & `fasih-koreksi-ntb.user.js` — Koreksi R.27 / Gaji / NTB
 
-Kedua skrip ini **isinya sama persis**; yang beda cuma blok `KONFIGURASI` di bagian atas file (isian yang diganti, kolom Excel, nama, pintasan). Antrean & progres keduanya terpisah, jadi boleh dipasang bersamaan.
+Ketiga skrip ini **isinya sama persis**; yang beda cuma blok `KONFIGURASI` di bagian atas file (isian yang diganti, kolom Excel, nama, pintasan). Antrean & progres masing-masing terpisah, jadi boleh dipasang bersamaan.
 
-| | Koreksi R.27 | Koreksi Gaji |
-|---|---|---|
-| Tombol / pintasan | **27 Koreksi Pendapatan** · Alt+9 | **Rp Koreksi Gaji** · Alt+6 |
-| Isian yang diganti | 27.a ← `R.27a`, 27.b ← `R.27b` | `gaji` ← `Gaji`, 27.a ← `R.27a`, 27.b ← `R.27b` |
-| Kolom nilai lama | `nilai_pendapatan`, `pendapatan_lain` | `gaji` (kolom gaji yang di depan), `nilai_pendapatan`, `pendapatan_lain` |
+| | Koreksi R.27 | Koreksi Gaji | Koreksi NTB |
+|---|---|---|---|
+| Tombol / pintasan | **27 Koreksi Pendapatan** · Alt+9 | **Rp Koreksi Gaji** · Alt+6 | **NTB Koreksi NTB** · Alt+5 |
+| Isian yang diganti | 27.a ← `R.27a`, 27.b ← `R.27b` | `gaji` ← `Gaji`, 27.a ← `R.27a`, 27.b ← `R.27b` | 26.a `gaji`, 26.b `biaya_produksi`, 26.c `biaya_pembelian`, 26.d `operasional`, 27.a `nilai_pendapatan` ← `r26a input` … `r27a input`; 28.b `aset_lain_thn` ← `r28c input` |
+| Kolom nilai lama | `nilai_pendapatan`, `pendapatan_lain` | `gaji` (kolom gaji yang di depan), `nilai_pendapatan`, `pendapatan_lain` | `r26a awal` … `r27a awal` (28.b tidak dipakai mengenali kartu, cuma diisi) |
 
-**Kolom Excel**: `link`, `nama_usaha`, kolom nilai lama & baru seperti tabel di atas. Opsional: `idsbr`, `kec`, `desa`, `nm_sls`, `assignment_status_alias`. Baris dengan link yang sama digabung jadi satu dokumen (keluarga dengan beberapa usaha). Di Excel gaji ada dua kolom "gaji": yang **paling dekat dengan R.27a** dibaca sebagai nilai baru, yang lain nilai lama.
+**Kolom Excel**: `link` / `link_fasih`, `nama_usaha` / `Nama usaha`, kolom nilai lama & baru seperti tabel di atas. Opsional: `idsbr`, `kec`, `desa`, `nm_sls`, `nama_kab`, `assignment_status_alias`, `Isian yang harus diinput` (ditampilkan di panel).
+
+**Catatan `#DC_04`** (Koreksi NTB): di tiap rincian yang nilainya diubah, tombol Catatan di samping isian dibuka dan `#DC_04` ditambahkan — kecuali thread-nya sudah memuat `#DC_04` (tidak diisi dua kali; catatan lain dibiarkan). Kalau nilainya sudah benar tapi catatannya belum ada, catatan tetap ditambahkan (di Review kalau bisa, kalau tidak lewat Edit). Catatan yang gagal masuk → dokumen ditandai "Perlu cek".
+
+**Antrean besar**: antrean disimpan di IndexedDB browser (bukan localStorage), jadi puluhan ribu dokumen (mis. Excel NTB ±29 ribu dokumen) tetap muat; Excel puluhan MB terbaca dalam beberapa detik. Antrean dari versi lama dipindahkan otomatis. Baris dengan link yang sama digabung jadi satu dokumen (keluarga dengan beberapa usaha). Di Excel gaji ada dua kolom "gaji": yang **paling dekat dengan R.27a** dibaca sebagai nilai baru, yang lain nilai lama.
 
 **Alur per dokumen**: Buka → (opsional) cek di Review → Edit/Revoke → ganti nilai → Kirim → Approve.
 - **Kartu yang benar** harus cocok **nilainya** (sama dengan nilai lama/baru di Excel; R.27 juga boleh jumlah 27.a+27.b yang sama) **dan nama usahanya** (`nama_usaha` Excel). Nama dibanding tanpa bagian (PEMILIK); nomor harus sama (SDN 1 ≠ SDN 2), jenjang sekolah harus sama (SD ≠ SMP), pemilik harus sama. Nilainya cocok tapi namanya beda → kartu tidak disentuh.
 - **Cek dulu di Review** (default aktif): dokumen yang nilainya sudah benar tidak di-revoke sama sekali; dokumen yang tidak memuat kartu yang cocok juga tidak di-revoke.
-- **Link salah / Forbidden / tidak bisa dibuka** → dicari di halaman daftar assignment lewat **Filter Kecamatan → Desa → SLS** (dari Excel): BKU (nama usaha) dulu, lalu dokumen keluarga (nama pemilik di dalam kurung); kalau di SLS kosong, dicari di seluruh desa. Kandidat dicoba satu per satu sampai ada yang memuat semua usahanya. **Buka halaman daftar assignment sekali** sebelum mulai supaya alamatnya diingat. Tetap Forbidden → status "Forbidden", dilewati.
+- **Link salah / Forbidden / tidak bisa dibuka** → dicari di halaman daftar assignment lewat **Filter Kecamatan → Desa → SLS** (dari Excel; Excel tanpa kolom wilayah langsung dicari pakai nama): BKU (nama usaha) dulu, lalu dokumen keluarga (nama pemilik di dalam kurung); kalau di SLS kosong, dicari di seluruh desa. Kandidat dicoba satu per satu sampai ada yang memuat semua usahanya. **Buka halaman daftar assignment sekali** sebelum mulai supaya alamatnya diingat. Tetap Forbidden → status "Forbidden", dilewati.
 - **Galat**: default-nya berhenti dan ditandai "Perlu cek". Aktifkan "Submit Paksa kalau ada galat" kalau galatnya memang boleh diabaikan.
 - **Mode uji** (🧪 Uji 1 dokumen): berhenti tepat sebelum Kirim, lalu pilih "✓ Kirim sekarang" atau "Lewati".
-- **⏸ Jeda / ▶ Lanjut** di bar bawah saat berjalan.
+- **⏸ Jeda / ▶ Lanjut** di bar progres saat berjalan. Bar progres & panel bantu bisa **digeser** (tarik judulnya, klik dua kali = kembali) dan **diperkecil** (–).
 
 **Kerjakan manual** (tombol **✍** di tiap baris): dokumen dibuka di tab ini dan muncul panel bantu di kanan bawah — nilai lama → baru, isi kartu yang sedang terbuka, tombol **✏ Isi ke kartu ini**, **✓ Tandai selesai manual**, **🏷 Status…**, **↻ Otomatis**.
 
