@@ -771,6 +771,11 @@
   // Tombol "Catatan" ada di tiap rincian (desktop/mobile beda elemen, cuma satu yang kelihatan).
   // Kotak catatannya sendiri muncul sebagai popover terpisah (bukan anak dari kbli_genai/kbli), jadi
   // dicari dari seluruh halaman lewat placeholder-nya, bukan dibatasi ke dalam kontainer KBLI.
+  // Catatan di FASIH itu thread chat (bukan satu kotak nilai): kotak "Tambah catatan di sini..." SELALU
+  // kosong (itu kotak ketik pesan baru), yang menandakan sudah ada catatan adalah pesan-pesan di ATAS
+  // kotak itu. Begitu terkirim, pesan tidak bisa dihapus -> kalau thread-nya sudah ada isi apa pun
+  // (dari petugas lain atau dari proses ini sebelumnya), JANGAN kirim pesan baru lagi.
+  // Hasil: { found } = tombol Catatan tidak ketemu; { found: true, added, hasExisting }.
   async function addKbliCatatan(inst, text) {
     const containers = [box("kbli_genai", inst), box("kbli", inst)].filter(Boolean);
     let btn = null;
@@ -778,7 +783,7 @@
       btn = Array.from(c.querySelectorAll('button[title="Catatan"]')).find(visible);
       if (btn) break;
     }
-    if (!btn) return false;
+    if (!btn) return { found: false };
     triggerClick(btn);
     const ta = await waitFor(
       () => Array.from(document.querySelectorAll("textarea")).find((t2) => visible(t2) && /tambah catatan/i.test(t2.placeholder || "")),
@@ -786,19 +791,25 @@
     );
     if (!ta) {
       pressKey("Escape");
-      return false;
+      return { found: false };
     }
-    if (ta.value.trim() !== text) {
+    await sleep(W(300)); // thread pesan lama (kalau ada) dimuat sesaat setelah popover terbuka
+    const hasExisting = Array.from(document.querySelectorAll('[class*="wrap-break-word"]')).some(visible);
+    let added = false;
+    if (!hasExisting) {
       setFieldValue(ta, text);
       const simpan = await waitFor(
         () => Array.from(document.querySelectorAll('button[title="Simpan"]')).find((b) => visible(b) && !b.disabled),
         2000,
       );
-      if (simpan) triggerClick(simpan);
-      await sleep(W(400));
+      if (simpan) {
+        triggerClick(simpan);
+        await sleep(W(400));
+        added = true;
+      }
     }
     closeDialogs();
-    return true;
+    return { found: true, added, hasExisting };
   }
 
   const parseRupiah = (v) => Number(String(v || "").replace(/[^\d]/g, "")) || 0;
@@ -863,8 +874,10 @@
     } else if (!want && t.produkBaru) {
       notes.push(`kegiatan utama belum disesuaikan (cek manual): produk lama "${t.produkLama}" → baru "${t.produkBaru}"`);
     }
-    if (await addKbliCatatan(inst, KBLI_CATATAN_TAG)) notes.push(`catatan KBLI: ${KBLI_CATATAN_TAG}`);
-    else notes.push("tombol Catatan di bagian KBLI tidak ketemu, tag tidak ditambahkan (cek manual)");
+    const catatan = await addKbliCatatan(inst, KBLI_CATATAN_TAG);
+    if (catatan.added) notes.push(`catatan KBLI: ${KBLI_CATATAN_TAG}`);
+    else if (catatan.found && catatan.hasExisting) notes.push("catatan KBLI dibiarkan, thread-nya sudah ada pesan sebelumnya");
+    else if (!catatan.found) notes.push("tombol Catatan di bagian KBLI tidak ketemu, tag tidak ditambahkan (cek manual)");
     return { changed, already: !changed, summary: notes.join("; ") || "sudah sesuai" };
   }
 
