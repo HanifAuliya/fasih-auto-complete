@@ -498,7 +498,8 @@
   }
 
   const onCardList = () => visible(box("se2026_nested")) && !document.querySelector('[id^="keberadaan_usaha#"]');
-  const visibleKbli = () => Array.from(document.querySelectorAll('[id^="kbli#"], #kbli')).find(visible) || null;
+  const visibleKbli = () =>
+    Array.from(document.querySelectorAll('[id^="kbli#"], #kbli, [id^="kbli_genai#"], #kbli_genai')).find(visible) || null;
   const instOf = (el) => (el.id.includes("#") ? el.id.split("#")[1] : undefined);
 
   function usahaCards() {
@@ -602,11 +603,55 @@
     return false;
   }
 
-  function currentKbliCode(inst) {
-    const b = box("kbli", inst);
-    if (!b) return { box: null, code: "" };
-    const code = ((dropdownValue(b) || b.innerText).match(/\b(\d{5})\b/) || [])[1] || "";
-    return { box: b, code };
+  function radioValue(container) {
+    const checked = container.querySelector('input[type="radio"]:checked, input[type="radio"][data-checked]');
+    return checked ? checked.value : "";
+  }
+  async function setRadio(container, value) {
+    const input = container.querySelector(`input[type="radio"][value="${value}"]`);
+    if (!input) return false;
+    if (radioValue(container) === value) return true;
+    if (input.disabled) return false;
+    const group = input.closest('[role="group"]') || input.parentElement;
+    triggerClick((group && group.querySelector('[role="radio"]')) || input);
+    return !!(await waitFor(() => radioValue(fresh(container)) === value, 3000));
+  }
+
+  // 13.g "Kode KBLI" bukan langsung kotak pencarian: isinya radio beberapa saran GenAI ("[G] 47782 ...")
+  // ditambah satu pilihan "Pilih dari Master KBLI" (value 999999). Kotak pencarian KBLI (Master KBLI)
+  // cuma muncul SETELAH "Pilih dari Master KBLI" itu dipilih -> bukan cuma soal render telat.
+  function genaiCode(inst) {
+    const genai = box("kbli_genai", inst);
+    if (!genai) return "";
+    const checked = genai.querySelector('input[type="radio"]:checked, input[type="radio"][data-checked]');
+    if (!checked || checked.value === "999999") return "";
+    const label = genai.querySelector(`label[for="${checked.id}"]`) || checked.closest('[role="group"]');
+    return ((label && label.innerText) || "").match(/\b(\d{5})\b/)?.[1] || "";
+  }
+  // Kode KBLI yang sedang berlaku di kartu ini: dari kotak Master KBLI kalau sudah dipilih,
+  // kalau belum (masih di radio 13.g) dari saran GenAI yang sedang tercentang.
+  function effectiveKbliCode(inst) {
+    const kbliBox = box("kbli", inst);
+    if (kbliBox) {
+      const code = ((dropdownValue(kbliBox) || kbliBox.innerText).match(/\b(\d{5})\b/) || [])[1];
+      if (code) return code;
+    }
+    return genaiCode(inst);
+  }
+  // Pastikan KBLI kartu ini = code. Kalau salah satu saran GenAI (13.g) sudah persis sama, dipakai saja
+  // (tidak usah pindah ke Master KBLI, supaya perubahan ke form seminim mungkin). Kalau belum, radio
+  // 13.g dipindah ke "Pilih dari Master KBLI" dulu agar kotak pencariannya muncul, baru dipilih di sana.
+  async function setKbliCode(inst, code) {
+    if (genaiCode(inst) === code) return true;
+    let kbliBox = await waitBox("kbli", inst, 1500);
+    if (!kbliBox) {
+      const genai = await waitBox("kbli_genai", inst, 3000);
+      if (!genai || !(await setRadio(genai, "999999"))) return false;
+      kbliBox = await waitBox("kbli", inst, 5000);
+      if (!kbliBox) return false;
+    }
+    if ((dropdownValue(kbliBox) || kbliBox.innerText).includes(code)) return true;
+    return selectKbli(kbliBox, code);
   }
 
   // Pasangan kata yang disamakan di kegiatan utama saat produk berubah (mis. padi hibrida -> inbrida).
@@ -632,6 +677,9 @@
         to = a;
       }
       if (from) {
+        // Sudah pakai kata yang baru (mis. kartu lama sempat diisi ulang manual) -> tidak perlu diganti,
+        // jangan dikira "tidak ketemu pasangan kata" lalu disuruh cek manual padahal sudah benar.
+        if (new RegExp(`\\b${to}\\b`, "i").test(kegUtama)) return kegUtama;
         const m = kegUtama.match(from);
         if (m) return kegUtama.replace(from, matchCase(m[0], to));
       }
@@ -651,9 +699,11 @@
     return null;
   }
 
-  // Baca saja (aman dipakai di halaman Review, tanpa revoke)
-  function readKbliCard(inst, t) {
-    const { code } = currentKbliCode(inst);
+  // Baca saja (aman dipakai di halaman Review, tanpa revoke). Halaman Review tidak bisa diklik (bukan
+  // mode edit), jadi KBLI dibaca dari mana pun dia sedang terlihat: kotak Master KBLI atau radio 13.g.
+  async function readKbliCard(inst, t) {
+    await waitFor(() => box("kbli", inst) || box("kbli_genai", inst), 3000);
+    const code = effectiveKbliCode(inst);
     const produkBox = box("produk", inst);
     const produkInput = produkBox && produkBox.querySelector("input, textarea");
     const produkCur = produkInput ? produkInput.value.trim() : "";
@@ -672,15 +722,52 @@
     return { changed: false, already, summary: already ? "sudah sesuai" : bits.join(", ") };
   }
 
+  // Tag catatan yang dipasang di bagian KBLI (13.g) tiap kartu yang diproses skrip ini, sebagai jejak
+  // bahwa kartu itu sudah dicek/dikoreksi lewat prosedur Pengecekan KBLI.
+  const KBLI_CATATAN_TAG = "#DC_01";
+  // Tombol "Catatan" ada di tiap rincian (desktop/mobile beda elemen, cuma satu yang kelihatan).
+  // Kotak catatannya sendiri muncul sebagai popover terpisah (bukan anak dari kbli_genai/kbli), jadi
+  // dicari dari seluruh halaman lewat placeholder-nya, bukan dibatasi ke dalam kontainer KBLI.
+  async function addKbliCatatan(inst, text) {
+    const containers = [box("kbli_genai", inst), box("kbli", inst)].filter(Boolean);
+    let btn = null;
+    for (const c of containers) {
+      btn = Array.from(c.querySelectorAll('button[title="Catatan"]')).find(visible);
+      if (btn) break;
+    }
+    if (!btn) return false;
+    triggerClick(btn);
+    const ta = await waitFor(
+      () => Array.from(document.querySelectorAll("textarea")).find((t2) => visible(t2) && /tambah catatan/i.test(t2.placeholder || "")),
+      3000,
+    );
+    if (!ta) {
+      pressKey("Escape");
+      return false;
+    }
+    if (ta.value.trim() !== text) {
+      setFieldValue(ta, text);
+      const simpan = await waitFor(
+        () => Array.from(document.querySelectorAll('button[title="Simpan"]')).find((b) => visible(b) && !b.disabled),
+        2000,
+      );
+      if (simpan) triggerClick(simpan);
+      await sleep(W(400));
+    }
+    closeDialogs();
+    return true;
+  }
+
   // Ganti KBLI di kartu yang sedang terbuka, lalu produk (kalau Produk Baru ada) & kegiatan utama
   // (kolom "Kegiatan utama" baru, atau penyesuaian kata kalau kolom itu kosong).
   async function ensureKbliCard(inst, t) {
     const notes = [];
     let changed = false;
-    const { box: kbliBox, code } = currentKbliCode(inst);
-    if (!kbliBox) throw new Error("isian KBLI (Master KBLI) tidak muncul");
+    await waitFor(() => box("kbli", inst) || box("kbli_genai", inst), 5000);
+    const code = effectiveKbliCode(inst);
     if (code !== t.kbliBaru) {
-      if (!(await selectKbli(kbliBox, t.kbliBaru))) throw new Error(`KBLI ${t.kbliBaru} tidak bisa dipilih dari Master KBLI`);
+      if (!(await setKbliCode(inst, t.kbliBaru)))
+        throw new Error(`KBLI ${t.kbliBaru} tidak bisa dipilih (13.g / Master KBLI tidak muncul)`);
       notes.push(`KBLI ${code || "-"} → ${t.kbliBaru}`);
       changed = true;
     }
@@ -705,6 +792,8 @@
     } else if (!want && t.produkBaru) {
       notes.push(`kegiatan utama belum disesuaikan (cek manual): produk lama "${t.produkLama}" → baru "${t.produkBaru}"`);
     }
+    if (await addKbliCatatan(inst, KBLI_CATATAN_TAG)) notes.push(`catatan KBLI: ${KBLI_CATATAN_TAG}`);
+    else notes.push("tombol Catatan di bagian KBLI tidak ketemu, tag tidak ditambahkan (cek manual)");
     return { changed, already: !changed, summary: notes.join("; ") || "sudah sesuai" };
   }
 
@@ -723,7 +812,7 @@
       if (targets.length > 1)
         notes.push(`halaman ini cuma 1 isian KBLI, tapi Excel punya ${targets.length} baris untuk dokumen ini — hanya baris pertama diproses`);
       try {
-        results[0] = write ? await ensureKbliCard(inst, t) : readKbliCard(inst, t);
+        results[0] = write ? await ensureKbliCard(inst, t) : await readKbliCard(inst, t);
       } catch (e) {
         notes.push(e.message);
       }
@@ -736,6 +825,7 @@
       .map((c, idx) => ({ idx, score: Math.max(...targets.map((t) => nameMatch(c.name, t.nama))) }))
       .sort((a, b) => b.score - a.score);
     log(`${cards.length} kartu usaha di "${area.title}", ${targets.length} target dari Excel`);
+    const tried = new Set(); // target yang sudah ketemu kartunya (walau akhirnya gagal diisi -> bukan "tidak cocok")
     let first = true;
     for (const o of order) {
       if (results.every(Boolean)) break;
@@ -751,16 +841,17 @@
         .sort((a, b) => b.s - a.s);
       const best = scored[0];
       if (!best || best.s < NAME_OK) continue;
+      tried.add(best.i);
       const t = targets[best.i];
       try {
-        const r = write ? await ensureKbliCard(inst, t) : readKbliCard(inst, t);
+        const r = write ? await ensureKbliCard(inst, t) : await readKbliCard(inst, t);
         results[best.i] = { card: card.name, ...r };
         log(`"${card.name}": ${r.already ? "sudah sesuai" : r.summary}`);
       } catch (e) {
         notes.push(`kartu "${card.name}": ${e.message}`);
       }
     }
-    const unmatched = targets.filter((t, i) => !results[i]).map((t) => t.nama);
+    const unmatched = targets.filter((t, i) => !results[i] && !tried.has(i)).map((t) => t.nama);
     if (unmatched.length) notes.push(`nama usaha tidak cocok dengan kartu manapun: ${unmatched.join(", ")}`);
     return { results, notes };
   }
@@ -2156,7 +2247,8 @@
         return i ? i.value.trim() : "";
       })
       .find(Boolean);
-    const { code } = currentKbliCode(inst);
+    // kb sudah dipastikan kelihatan (visibleKbli() di atas), jadi baca langsung tanpa menunggu
+    const code = effectiveKbliCode(inst);
     return { inst, code, name: name || "" };
   }
   function targetFor(q, card) {
