@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi KBLI & Anomali
 // @namespace    hanif-bps-hst
-// @version      1.0
+// @version      1.1
 // @description  Baca Excel "Pengecekan KBLI" (Edit KBLI = 1), buka tiap dokumen, ganti KBLI akhir ke KBLI Baru di kartu usaha yang tepat, sesuaikan produk & kegiatan utama kalau ada Produk Baru, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" lalu Kirim & Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -26,7 +26,7 @@
 
   const APP = {
     name: "Koreksi KBLI",
-    version: "1.0",
+    version: "1.1",
     title: "Koreksi KBLI & Anomali",
     badge: "KBLI",
     launch: "Koreksi KBLI",
@@ -759,8 +759,10 @@
     const produkOk = !t.produkBaru || produkCur === t.produkBaru;
     const kegOk = !want || kegCur === want.value;
     const izinHalalBits = izinHalalGaps(inst);
-    const already = kbliOk && produkOk && kegOk && !izinHalalBits.length;
+    const umkmKosong = umkmEmpty(inst);
+    const already = kbliOk && produkOk && kegOk && !izinHalalBits.length && !umkmKosong;
     const bits = [...izinHalalBits];
+    if (umkmKosong) bits.push('Pilih UMKM dalam satu SLS kosong → "TIDAK ADA"');
     if (!kbliOk) bits.push(`KBLI ${code || "-"} → ${t.kbliBaru}`);
     if (!produkOk) bits.push(`produk "${produkCur}" → "${t.produkBaru}"`);
     if (!kegOk) bits.push(`kegiatan utama "${kegCur}" → "${want.value}"`);
@@ -816,6 +818,56 @@
     return { found: true, added, alreadyTagged };
   }
 
+  // "Pilih UMKM dalam satu SLS yang sama" yang dibiarkan kosong bikin galat saat Kirim. Kalau memang tidak ada
+  // UMKM yang ditautkan (kosong), pilih "TIDAK ADA". Yang sudah terisi (UMKM lain / TIDAK ADA) atau terkunci dibiarkan.
+  const umkmBox = (inst) => box("pilih_umkm_sls", inst);
+  const umkmEmpty = (inst) => {
+    const c = umkmBox(inst);
+    const ta = c && c.querySelector('textarea, input[type="text"]');
+    return !!(ta && !ta.disabled && !ta.hasAttribute("data-disabled") && !dropdownValue(c));
+  };
+  async function fillUmkmTidakAda(inst) {
+    const c = await waitBox("pilih_umkm_sls", inst, 1500);
+    if (!c || !umkmEmpty(inst)) return null;
+    const isTidak = (o) => /TIDAK\s+ADA/i.test(o.innerText);
+    for (let attempt = 0; attempt < 2 && umkmEmpty(inst); attempt++) {
+      await chooseFromDropdown(fresh(umkmBox(inst)), attempt ? "TIDAK ADA" : "", (opts) => opts.find(isTidak));
+      if (await waitFor(() => /TIDAK ADA/i.test(dropdownValue(fresh(umkmBox(inst)))), 3000)) return 'Pilih UMKM dalam satu SLS → "TIDAK ADA"';
+      // sisa teks pencarian jangan sampai tertinggal di kotaknya
+      const ta = fresh(umkmBox(inst)).querySelector('textarea, input[type="text"]');
+      if (ta && /^TIDAK ADA$/i.test(ta.value.trim())) setFieldValue(ta, "");
+      closeDialogs();
+      await sleep(W(400));
+    }
+    throw Object.assign(new Error('isian "Pilih UMKM dalam satu SLS" kosong & pilihan "TIDAK ADA" tidak bisa dipilih — isi manual'), { soft: true });
+  }
+  // Semua kartu usaha di dokumen ini (bukan cuma yang KBLI-nya diganti): galat di kartu mana pun menahan Kirim
+  async function sweepUmkmTidakAda() {
+    const area = await gotoArea();
+    const notes = [];
+    const one = async (inst, name) => {
+      try {
+        const r = await fillUmkmTidakAda(inst);
+        if (r) notes.push(`${name ? `"${name}": ` : ""}${r}`);
+      } catch (e) {
+        notes.push(`${name ? `"${name}": ` : ""}${e.message}`);
+      }
+    };
+    if (area.kind === "direct") {
+      await one(instOf(visibleKbli()), "");
+      return notes;
+    }
+    const n = usahaCards().length;
+    for (let idx = 0; idx < n; idx++) {
+      if (idx) await goSection(area.title, onCardList, true);
+      const card = usahaCards()[idx];
+      if (!card) continue;
+      await one(await openCard(card), card.name);
+    }
+    if (notes.length) log(notes.join("; "));
+    return notes;
+  }
+
   const parseRupiah = (v) => Number(String(v || "").replace(/[^\d]/g, "")) || 0;
 
   // Ganti KBLI di kartu yang sedang terbuka, lalu produk (kalau Produk Baru ada) & kegiatan utama
@@ -866,6 +918,11 @@
     const izinHalalNotes = await fillIzinHalalIfShown(inst, t.kbliBaru);
     if (izinHalalNotes.length) {
       notes.push(...izinHalalNotes);
+      changed = true;
+    }
+    const umkmNote = await fillUmkmTidakAda(inst);
+    if (umkmNote) {
+      notes.push(umkmNote);
       changed = true;
     }
     if (t.produkBaru) {
@@ -1688,6 +1745,8 @@
         updateItem(item.id, { result: summary(item, results), kbliNotes: notes });
         if (results.some((r) => !r))
           throw Object.assign(new Error(`${summary(item, results)}${notes.length ? ` (${notes.join("; ")})` : ""}`), { soft: true });
+        const umkmNotes = await sweepUmkmTidakAda();
+        if (umkmNotes.length) updateItem(item.id, { kbliNotes: [...notes, ...umkmNotes] });
         return setStage("anomali", { submitClicked: false, changed: results.some((r) => r.changed) });
       }
       case "anomali": {
@@ -2565,7 +2624,7 @@
       try {
         const r = await ensureKbliCard(card.inst, t);
         updateItem(q.id, { result: `${t.nama.split("(")[0].trim()}: ${r.summary} (manual)` });
-        toast("KBLI/produk sudah diganti. Cek Anomali KBLI di sidebar, Kirim & Approve di FASIH, lalu klik “Tandai selesai manual”.");
+        toast("KBLI/produk sudah diganti. Cek Anomali KBLI & isian “Pilih UMKM dalam satu SLS” di kartu lain, Kirim & Approve di FASIH, lalu klik “Tandai selesai manual”.");
       } catch (err) {
         alert(`Gagal mengisi: ${err.message}`);
       } finally {
