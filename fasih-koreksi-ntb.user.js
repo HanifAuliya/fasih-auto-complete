@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi Anomali NTB (26.a - 28.b)
 // @namespace    hanif-bps-hst
-// @version      1.7
+// @version      1.9
 // @description  Baca Excel Pengecekan Anomali NTB, buka tiap dokumen, ganti 26.a gaji, 26.b biaya produksi, 26.c biaya pembelian, 26.d biaya operasional, 27.a nilai penjualan dan 28.b aset (dari r28c) = kolom "rXX input" + catatan #DC_04 di tiap rincian yang diubah di kartu usaha yang tepat (nama usaha wajib cocok), lalu Kirim & Approve. Isian yang memang tidak ada di kartu (tergantung KBLI) dilewati bila nilai Excel-nya 0. Link salah/Forbidden: dicari lewat daftar assignment (BKU lalu keluarga). Yang gagal bisa dikerjakan manual lewat panel bantu.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -28,7 +28,7 @@
   // Satu-satunya bagian yang beda antara skrip Koreksi R.27, Koreksi Gaji dan Koreksi NTB; sisanya sama persis.
   const APP = {
     name: "Koreksi NTB",
-    version: "1.7",
+    version: "1.9",
     title: "Koreksi Anomali NTB",
     badge: "NTB",
     launch: "Koreksi NTB",
@@ -1702,15 +1702,33 @@
       '#cek_anomali_button input[role="switch"]',
     );
     if (direct) return direct;
+    // Hanya toggle yang barisnya sendiri bertuliskan "anomali": naik dari toggle selama pembungkusnya
+    // belum memuat toggle lain, supaya toggle lain di halaman yang sama tidak ikut diaktifkan
+    const switches = Array.from(
+      document.querySelectorAll('input[role="switch"]'),
+    ).filter((sw) => !sw.closest(OWN));
+    const rowText = (sw) => {
+      let el = sw;
+      let text = "";
+      for (let i = 0; i < 8 && el && el !== document.body; i++) {
+        if (
+          Array.from(el.querySelectorAll('input[role="switch"]')).some(
+            (x) => x !== sw,
+          )
+        )
+          break;
+        text = el.innerText || text;
+        el = el.parentElement;
+      }
+      return text;
+    };
+    const rows = switches.map((sw) => ({ sw, text: rowText(sw) }));
     return (
-      Array.from(document.querySelectorAll('input[role="switch"]')).find(
-        (sw) => {
-          let el = sw;
-          for (let i = 0; i < 7 && el; i++, el = el.parentElement)
-            if (/anomali/i.test(el.innerText || "")) return true;
-          return false;
-        },
-      ) || null
+      (
+        rows.find((r) => /cek\s*anomali/i.test(r.text)) ||
+        rows.find((r) => /anomali/i.test(r.text)) ||
+        {}
+      ).sw || null
     );
   }
   async function openCatatan() {
@@ -2503,13 +2521,14 @@
       .knt-hud .wait { color:#fbbf24; animation:kntpulse 1.6s infinite; }
       .knt-help { left:auto; right:16px; transform:none; width:min(400px,94vw); z-index:1000001; }
       .knt-help .knt-pill { background:color-mix(in srgb,var(--c) 30%,transparent); color:#fff; }
-      .knt-help .tb { width:100%; border-collapse:collapse; margin-top:4px; font-size:12px; font-variant-numeric:tabular-nums; }
-      .knt-help .tb td { padding:2px 4px; }
-      .knt-help .tb td:first-child { color:#a5b4fc; font-weight:700; width:40px; }
-      .knt-help .tb .o { color:#9aa0c3; text-decoration:line-through; }
-      .knt-help .tb .n { color:#fff; font-weight:650; }
-      .knt-help .tb .ok { color:#86efac; text-align:right; }
-      .knt-help .tb .now { color:#fde68a; text-align:right; }
+      .knt-hud .tb { width:100%; border-collapse:collapse; margin-top:4px; font-size:12px; font-variant-numeric:tabular-nums; }
+      .knt-hud .tb td { padding:2px 4px; }
+      .knt-hud .tb td:first-child { color:#a5b4fc; font-weight:700; width:40px; }
+      .knt-hud .tb .o { color:#9aa0c3; text-decoration:line-through; }
+      .knt-hud .tb .n { color:#fff; font-weight:650; }
+      .knt-hud .tb .ok { color:#86efac; text-align:right; }
+      .knt-hud .tb .now { color:#fde68a; text-align:right; }
+      .knt-hud .chg { max-height:210px; overflow:auto; margin-top:2px; }
       .knt-help .knt-btn:disabled { opacity:.4; }
       .knt-hud .top { cursor:move; user-select:none; touch-action:none; flex-wrap:wrap; }
       .knt-hud .top .grip { color:#7d83a8; font-size:14px; line-height:1; }
@@ -3389,6 +3408,24 @@
     }
   }
 
+  // Rincian dokumen yang sedang dikerjakan: yang diubah (lama → baru) + isi kartu yang sedang terbuka (✓ = sudah sesuai)
+  function hudChanges(it, card) {
+    const open = card ? targetFor(it, card) : null;
+    return it.targets
+      .map((x) => {
+        const live = card && open === x;
+        const rows = FIELDS.filter(([k]) => x.old[k] !== x.neu[k] || (live && card.cur[k] !== x.neu[k]))
+          .map(([k, , l]) => {
+            const now = live ? card.cur[k] : null;
+            const ok = now !== null && now === x.neu[k];
+            return `<tr><td>${l}</td><td class="o">${rupiah(x.old[k])}</td><td>→</td><td class="n">${rupiah(x.neu[k])}</td><td class="${ok ? "ok" : "now"}">${now === null ? "" : ok ? "✓" : rupiah(now)}</td></tr>`;
+          })
+          .join("");
+        return `<div class="dim" style="margin-top:8px">${esc(x.nama)}${live ? " · kartu terbuka" : ""}</div>${rows ? `<table class="tb">${rows}</table>` : `<div class="dim">tidak ada nilai yang diubah</div>`}`;
+      })
+      .join("");
+  }
+
   // ---------- HUD saat berjalan ----------
   let hudSig = "";
   function updateHud() {
@@ -3440,6 +3477,7 @@
       requestAnimationFrame(() => placeEl(hud, HUD_POS_KEY));
     }
     const hudMini = !!loadJson(HUD_MIN_KEY, false);
+    const card = run.cur && !hudMini ? openCardNow() : null; // kartu yang sedang terbuka (isinya sekarang)
     hud.classList.toggle("min", hudMini);
     const it = run.cur ? loadQueue().find((q) => q.id === run.cur.id) : null;
     const iNow = run.cur ? STEPS.findIndex(([k]) => k === run.cur.stage) : -1;
@@ -3455,6 +3493,8 @@
       run.testMode,
       run.hold,
       hudMini,
+      card && card.cur,
+      card && card.name,
     ]);
     if (sig === hudSig) return;
     hudSig = sig;
@@ -3475,6 +3515,7 @@
       ${limited ? `<div class="doc wait">⛔ Server membatasi (429) — lanjut otomatis ${new Date(rateInfo().until).toLocaleTimeString("id-ID")}</div>` : ""}
       ${it ? `<div class="doc">▶ ${esc(it.targets.map((t) => t.nama).join(" + "))} <span class="dim">· ${esc([it.desa, it.sls].filter(Boolean).join(" · "))}</span></div>` : ""}
       ${it ? `<div class="steps">${STEPS.map(([k, l], i) => `<div class="st ${i < iNow ? "done" : i === iNow ? "now" : ""}">${i < iNow ? "✓ " : ""}${l}</div>`).join("")}</div>` : ""}
+      ${it && !hudMini ? `<div class="chg">${hudChanges(it, card)}</div>` : ""}
       <div class="log">${(run.logs || []).map((l) => `<div>${esc(l)}</div>`).join("") || "<div>…</div>"}</div>
       <div class="bar"><i style="width:${total ? Math.min(100, (100 * done) / total) : 0}%"></i></div>`;
   }

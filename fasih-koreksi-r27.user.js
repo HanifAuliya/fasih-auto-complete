@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi R.27 - Pendapatan (27.a / 27.b)
 // @namespace    hanif-bps-hst
-// @version      2.6
+// @version      2.7
 // @description  Baca Excel koreksi, buka tiap dokumen, ganti 27.a (nilai_pendapatan) = R.27a dan 27.b (pendapatan_lain) = R.27b di kartu usaha yang tepat, lalu Kirim & Approve. Dokumen keluarga: kartu dicari di Blok II; dokumen usaha tunggal: langsung ke kartunya.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -28,7 +28,7 @@
   // Satu-satunya bagian yang beda antara skrip Koreksi R.27, Koreksi Gaji dan Koreksi NTB; sisanya sama persis.
   const APP = {
     name: "Koreksi R.27",
-    version: "2.6",
+    version: "2.7",
     title: "Koreksi Pendapatan R.27",
     badge: "27",
     launch: "Koreksi Pendapatan",
@@ -1909,13 +1909,14 @@
       .k27-hud .wait { color:#fbbf24; animation:k27pulse 1.6s infinite; }
       .k27-help { left:auto; right:16px; transform:none; width:min(400px,94vw); z-index:1000001; }
       .k27-help .k27-pill { background:color-mix(in srgb,var(--c) 30%,transparent); color:#fff; }
-      .k27-help .tb { width:100%; border-collapse:collapse; margin-top:4px; font-size:12px; font-variant-numeric:tabular-nums; }
-      .k27-help .tb td { padding:2px 4px; }
-      .k27-help .tb td:first-child { color:#a5b4fc; font-weight:700; width:40px; }
-      .k27-help .tb .o { color:#9aa0c3; text-decoration:line-through; }
-      .k27-help .tb .n { color:#fff; font-weight:650; }
-      .k27-help .tb .ok { color:#86efac; text-align:right; }
-      .k27-help .tb .now { color:#fde68a; text-align:right; }
+      .k27-hud .tb { width:100%; border-collapse:collapse; margin-top:4px; font-size:12px; font-variant-numeric:tabular-nums; }
+      .k27-hud .tb td { padding:2px 4px; }
+      .k27-hud .tb td:first-child { color:#a5b4fc; font-weight:700; width:40px; }
+      .k27-hud .tb .o { color:#9aa0c3; text-decoration:line-through; }
+      .k27-hud .tb .n { color:#fff; font-weight:650; }
+      .k27-hud .tb .ok { color:#86efac; text-align:right; }
+      .k27-hud .tb .now { color:#fde68a; text-align:right; }
+      .k27-hud .chg { max-height:210px; overflow:auto; margin-top:2px; }
       .k27-help .k27-btn:disabled { opacity:.4; }
       .k27-hud .top { cursor:move; user-select:none; touch-action:none; flex-wrap:wrap; }
       .k27-hud .top .grip { color:#7d83a8; font-size:14px; line-height:1; }
@@ -2599,6 +2600,24 @@
     }
   }
 
+  // Rincian dokumen yang sedang dikerjakan: yang diubah (lama → baru) + isi kartu yang sedang terbuka (✓ = sudah sesuai)
+  function hudChanges(it, card) {
+    const open = card ? targetFor(it, card) : null;
+    return it.targets
+      .map((x) => {
+        const live = card && open === x;
+        const rows = FIELDS.filter(([k]) => x.old[k] !== x.neu[k] || (live && card.cur[k] !== x.neu[k]))
+          .map(([k, , l]) => {
+            const now = live ? card.cur[k] : null;
+            const ok = now !== null && now === x.neu[k];
+            return `<tr><td>${l}</td><td class="o">${rupiah(x.old[k])}</td><td>→</td><td class="n">${rupiah(x.neu[k])}</td><td class="${ok ? "ok" : "now"}">${now === null ? "" : ok ? "✓" : rupiah(now)}</td></tr>`;
+          })
+          .join("");
+        return `<div class="dim" style="margin-top:8px">${esc(x.nama)}${live ? " · kartu terbuka" : ""}</div>${rows ? `<table class="tb">${rows}</table>` : `<div class="dim">tidak ada nilai yang diubah</div>`}`;
+      })
+      .join("");
+  }
+
   // ---------- HUD saat berjalan ----------
   let hudSig = "";
   function updateHud() {
@@ -2645,13 +2664,14 @@
       requestAnimationFrame(() => placeEl(hud, HUD_POS_KEY));
     }
     const hudMini = !!loadJson(HUD_MIN_KEY, false);
+    const card = run.cur && !hudMini ? openCardNow() : null; // kartu yang sedang terbuka (isinya sekarang)
     hud.classList.toggle("min", hudMini);
     const it = run.cur ? loadQueue().find((q) => q.id === run.cur.id) : null;
     const iNow = run.cur ? STEPS.findIndex(([k]) => k === run.cur.stage) : -1;
     const limited = rateLimited();
     const total = run.total || 0;
     const done = run.processed || 0;
-    const sig = JSON.stringify([run.cur, run.paused, run.logs, limited, done, run.testMode, run.hold, hudMini]);
+    const sig = JSON.stringify([run.cur, run.paused, run.logs, limited, done, run.testMode, run.hold, hudMini, card && card.cur, card && card.name]);
     if (sig === hudSig) return;
     hudSig = sig;
     hud.innerHTML = `
@@ -2671,6 +2691,7 @@
       ${limited ? `<div class="doc wait">⛔ Server membatasi (429) — lanjut otomatis ${new Date(rateInfo().until).toLocaleTimeString("id-ID")}</div>` : ""}
       ${it ? `<div class="doc">▶ ${esc(it.targets.map((t) => t.nama).join(" + "))} <span class="dim">· ${esc([it.desa, it.sls].filter(Boolean).join(" · "))}</span></div>` : ""}
       ${it ? `<div class="steps">${STEPS.map(([k, l], i) => `<div class="st ${i < iNow ? "done" : i === iNow ? "now" : ""}">${i < iNow ? "✓ " : ""}${l}</div>`).join("")}</div>` : ""}
+      ${it && !hudMini ? `<div class="chg">${hudChanges(it, card)}</div>` : ""}
       <div class="log">${(run.logs || []).map((l) => `<div>${esc(l)}</div>`).join("") || "<div>…</div>"}</div>
       <div class="bar"><i style="width:${total ? Math.min(100, (100 * done) / total) : 0}%"></i></div>`;
   }
