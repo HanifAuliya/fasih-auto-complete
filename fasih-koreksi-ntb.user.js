@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi Anomali NTB (26.a - 28.b)
 // @namespace    hanif-bps-hst
-// @version      1.6
+// @version      1.7
 // @description  Baca Excel Pengecekan Anomali NTB, buka tiap dokumen, ganti 26.a gaji, 26.b biaya produksi, 26.c biaya pembelian, 26.d biaya operasional, 27.a nilai penjualan dan 28.b aset (dari r28c) = kolom "rXX input" + catatan #DC_04 di tiap rincian yang diubah di kartu usaha yang tepat (nama usaha wajib cocok), lalu Kirim & Approve. Isian yang memang tidak ada di kartu (tergantung KBLI) dilewati bila nilai Excel-nya 0. Link salah/Forbidden: dicari lewat daftar assignment (BKU lalu keluarga). Yang gagal bisa dikerjakan manual lewat panel bantu.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -28,7 +28,7 @@
   // Satu-satunya bagian yang beda antara skrip Koreksi R.27, Koreksi Gaji dan Koreksi NTB; sisanya sama persis.
   const APP = {
     name: "Koreksi NTB",
-    version: "1.6",
+    version: "1.7",
     title: "Koreksi Anomali NTB",
     badge: "NTB",
     launch: "Koreksi NTB",
@@ -1142,7 +1142,7 @@
     return i ? Number((i.value.match(/\d{4}/) || [0])[0]) : 0;
   };
   async function fillUmkmTidakAda(inst) {
-    await waitFor(() => umkmBox(inst), 1500);
+    await waitFor(() => umkmBox(inst), 2500);
     if (!umkmBox(inst) || !umkmEmpty(inst)) return null;
     const isTidak = (o) => /TIDAK\s+ADA/i.test(o.innerText);
     for (let attempt = 0; attempt < 2 && umkmEmpty(inst); attempt++) {
@@ -1242,13 +1242,13 @@
     };
 
     const handle = async (inst, cardName) => {
-      let pend = await waitBox("nilai_pendapatan", inst, 5000);
-      if (!pend && write && umkmEmpty(inst)) {
-        // Rincian 26/27 baru muncul setelah "Pilih UMKM dalam satu SLS" dijawab
+      // Begitu kartu terbuka: "Pilih UMKM dalam satu SLS" yang masih kosong diisi "TIDAK ADA" dulu
+      // (selama kosong, rincian 26/27 tersembunyi & Kirim kena galat). Di Review isian terkunci, jadi lewat Edit.
+      if (write) {
         const r = await fillUmkmTidakAda(inst);
         if (r) log(`"${cardName || namesAt(inst, cardName)[0] || ""}": ${r}`);
-        pend = await waitBox("nilai_pendapatan", inst, 6000);
       }
+      const pend = await waitBox("nilai_pendapatan", inst, write ? 6000 : 5000);
       if (!pend) {
         // Usaha yang mulai beroperasi 2026 tidak punya rincian 27 (pendapatannya jadi rincian 30, sebulan terakhir) -> dilewati
         const thn = await waitFor(() => yearOf(inst) || null, 2000);

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi KBLI & Anomali
 // @namespace    hanif-bps-hst
-// @version      1.4
+// @version      1.5
 // @description  Baca Excel "Pengecekan KBLI" (Edit KBLI = 1), buka tiap dokumen, ganti KBLI akhir ke KBLI Baru di kartu usaha yang tepat, sesuaikan produk & kegiatan utama kalau ada Produk Baru, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" lalu Kirim & Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -26,7 +26,7 @@
 
   const APP = {
     name: "Koreksi KBLI",
-    version: "1.4",
+    version: "1.5",
     title: "Koreksi KBLI & Anomali",
     badge: "KBLI",
     launch: "Koreksi KBLI",
@@ -837,7 +837,7 @@
     return !!(c && c.querySelector('textarea, input[type="text"]') && umkmUnset(c));
   };
   async function fillUmkmTidakAda(inst) {
-    await waitFor(() => umkmBox(inst), 1500);
+    await waitFor(() => umkmBox(inst), 2500);
     if (!umkmBox(inst) || !umkmEmpty(inst)) return null;
     const isTidak = (o) => /TIDAK\s+ADA/i.test(o.innerText);
     for (let attempt = 0; attempt < 2 && umkmEmpty(inst); attempt++) {
