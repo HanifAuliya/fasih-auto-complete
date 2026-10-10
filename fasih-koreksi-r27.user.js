@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi R.27 - Pendapatan (27.a / 27.b)
 // @namespace    hanif-bps-hst
-// @version      2.2
+// @version      2.3
 // @description  Baca Excel koreksi, buka tiap dokumen, ganti 27.a (nilai_pendapatan) = R.27a dan 27.b (pendapatan_lain) = R.27b di kartu usaha yang tepat, lalu Kirim & Approve. Dokumen keluarga: kartu dicari di Blok II; dokumen usaha tunggal: langsung ke kartunya.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -28,7 +28,7 @@
   // Satu-satunya bagian yang beda antara skrip Koreksi R.27, Koreksi Gaji dan Koreksi NTB; sisanya sama persis.
   const APP = {
     name: "Koreksi R.27",
-    version: "2.2",
+    version: "2.3",
     title: "Koreksi Pendapatan R.27",
     badge: "27",
     launch: "Koreksi Pendapatan",
@@ -840,6 +840,11 @@
     const ta = c && c.querySelector('textarea, input[type="text"]');
     return !!(ta && !ta.disabled && !ta.hasAttribute("data-disabled") && !dropdownValue(c));
   };
+  // Sama, tapi tanpa syarat "tidak terkunci": di halaman Review semua isian memang terkunci
+  const umkmBlank = (inst) => {
+    const c = umkmBox(inst);
+    return !!(c && c.querySelector('textarea, input[type="text"]') && !dropdownValue(c));
+  };
   async function fillUmkmTidakAda(inst) {
     const c = await waitBox("pilih_umkm_sls", inst, 1500);
     if (!c || !umkmEmpty(inst)) return null;
@@ -925,25 +930,26 @@
 
     const handle = async (inst, cardName) => {
       let pend = await waitBox("nilai_pendapatan", inst, 5000);
-      if (!pend && umkmEmpty(inst)) {
+      if (!pend && write && umkmEmpty(inst)) {
         // Rincian 26/27 baru muncul setelah "Pilih UMKM dalam satu SLS" dijawab
-        const nm = cardName || namesAt(inst, cardName)[0] || "";
-        if (!write) {
-          // Di Review belum bisa diisi: kartu yang namanya cocok ditandai perlu Edit (bukan "tidak cocok")
-          const names0 = namesAt(inst, cardName);
-          const ti = targets.findIndex((t, i) => !results[i] && Math.max(0, ...names0.map((n) => nameMatch(n, t.nama))) >= NAME_OK);
-          if (ti >= 0) {
-            results[ti] = { state: "todo", card: nm, cur: {}, umkm: true };
-            return log(`"${nm}": Pilih UMKM dalam satu SLS masih kosong → diisi "TIDAK ADA" saat Edit`);
-          }
-        } else {
-          const r = await fillUmkmTidakAda(inst);
-          if (r) log(`"${nm}": ${r}`);
-          pend = await waitBox("nilai_pendapatan", inst, 6000);
+        const r = await fillUmkmTidakAda(inst);
+        if (r) log(`"${cardName || namesAt(inst, cardName)[0] || ""}": ${r}`);
+        pend = await waitBox("nilai_pendapatan", inst, 6000);
+      }
+      if (!pend && !write) {
+        // Di Review semua isian terkunci & rincian 26/27 bisa tersembunyi (mis. Pilih UMKM dalam satu SLS kosong),
+        // jadi belum bisa dinilai: kartu yang namanya cocok ditandai perlu Edit (bukan "tidak cocok")
+        await waitFor(() => namesAt(inst, cardName).length, 2000);
+        const names0 = namesAt(inst, cardName);
+        const ti = targets.findIndex((t, i) => !results[i] && Math.max(0, ...names0.map((n) => nameMatch(n, t.nama))) >= NAME_OK);
+        if (ti >= 0) {
+          const nm = cardName || names0[0] || "";
+          results[ti] = { state: "todo", card: nm, cur: {}, hidden: true };
+          return log(`"${nm}": isian 27.a tersembunyi di Review${umkmBlank(inst) ? ' (Pilih UMKM dalam satu SLS kosong → diisi "TIDAK ADA" saat Edit)' : ""}, dicek saat Edit`);
         }
       }
       if (!pend)
-        return notes.push(`kartu "${cardName || "-"}": isian 27.a tidak muncul${umkmEmpty(inst) ? ' (Pilih UMKM dalam satu SLS masih kosong)' : ""}`);
+        return notes.push(`kartu "${cardName || "-"}": isian 27.a tidak muncul${umkmBlank(inst) ? ' (Pilih UMKM dalam satu SLS masih kosong)' : ""}`);
       await waitFor(() => namesAt(inst, cardName).length, 2000);
       const names = namesAt(inst, cardName);
       const name = cardName || names[0] || "";

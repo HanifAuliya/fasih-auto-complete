@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi KBLI & Anomali
 // @namespace    hanif-bps-hst
-// @version      1.2
+// @version      1.3
 // @description  Baca Excel "Pengecekan KBLI" (Edit KBLI = 1), buka tiap dokumen, ganti KBLI akhir ke KBLI Baru di kartu usaha yang tepat, sesuaikan produk & kegiatan utama kalau ada Produk Baru, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" lalu Kirim & Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -26,7 +26,7 @@
 
   const APP = {
     name: "Koreksi KBLI",
-    version: "1.2",
+    version: "1.3",
     title: "Koreksi KBLI & Anomali",
     badge: "KBLI",
     launch: "Koreksi KBLI",
@@ -760,7 +760,7 @@
     const produkOk = !t.produkBaru || produkCur === t.produkBaru;
     const kegOk = !want || kegCur === want.value;
     const izinHalalBits = izinHalalGaps(inst);
-    const umkmKosong = umkmEmpty(inst);
+    const umkmKosong = umkmBlank(inst);
     const already = kbliOk && produkOk && kegOk && !izinHalalBits.length && !umkmKosong;
     const bits = [...izinHalalBits];
     if (umkmKosong) bits.push('Pilih UMKM dalam satu SLS kosong → "TIDAK ADA"');
@@ -826,6 +826,11 @@
     const c = umkmBox(inst);
     const ta = c && c.querySelector('textarea, input[type="text"]');
     return !!(ta && !ta.disabled && !ta.hasAttribute("data-disabled") && !dropdownValue(c));
+  };
+  // Sama, tapi tanpa syarat "tidak terkunci": di halaman Review semua isian memang terkunci
+  const umkmBlank = (inst) => {
+    const c = umkmBox(inst);
+    return !!(c && c.querySelector('textarea, input[type="text"]') && !dropdownValue(c));
   };
   async function fillUmkmTidakAda(inst) {
     const c = await waitBox("pilih_umkm_sls", inst, 1500);

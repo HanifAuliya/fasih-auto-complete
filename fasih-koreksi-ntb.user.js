@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi Anomali NTB (26.a - 28.b)
 // @namespace    hanif-bps-hst
-// @version      1.3
+// @version      1.4
 // @description  Baca Excel Pengecekan Anomali NTB, buka tiap dokumen, ganti 26.a gaji, 26.b biaya produksi, 26.c biaya pembelian, 26.d biaya operasional, 27.a nilai penjualan dan 28.b aset (dari r28c) = kolom "rXX input" + catatan #DC_04 di tiap rincian yang diubah di kartu usaha yang tepat (nama usaha wajib cocok), lalu Kirim & Approve. Isian yang memang tidak ada di kartu (tergantung KBLI) dilewati bila nilai Excel-nya 0. Link salah/Forbidden: dicari lewat daftar assignment (BKU lalu keluarga). Yang gagal bisa dikerjakan manual lewat panel bantu.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -28,7 +28,7 @@
   // Satu-satunya bagian yang beda antara skrip Koreksi R.27, Koreksi Gaji dan Koreksi NTB; sisanya sama persis.
   const APP = {
     name: "Koreksi NTB",
-    version: "1.3",
+    version: "1.4",
     title: "Koreksi Anomali NTB",
     badge: "NTB",
     launch: "Koreksi NTB",
@@ -1123,6 +1123,11 @@
     const ta = c && c.querySelector('textarea, input[type="text"]');
     return !!(ta && !ta.disabled && !ta.hasAttribute("data-disabled") && !dropdownValue(c));
   };
+  // Sama, tapi tanpa syarat "tidak terkunci": di halaman Review semua isian memang terkunci
+  const umkmBlank = (inst) => {
+    const c = umkmBox(inst);
+    return !!(c && c.querySelector('textarea, input[type="text"]') && !dropdownValue(c));
+  };
   async function fillUmkmTidakAda(inst) {
     const c = await waitBox("pilih_umkm_sls", inst, 1500);
     if (!c || !umkmEmpty(inst)) return null;
@@ -1223,28 +1228,31 @@
 
     const handle = async (inst, cardName) => {
       let pend = await waitBox("nilai_pendapatan", inst, 5000);
-      if (!pend && umkmEmpty(inst)) {
+      if (!pend && write && umkmEmpty(inst)) {
         // Rincian 26/27 baru muncul setelah "Pilih UMKM dalam satu SLS" dijawab
-        const nm = cardName || namesAt(inst, cardName)[0] || "";
-        if (!write) {
-          // Di Review belum bisa diisi: kartu yang namanya cocok ditandai perlu Edit (bukan "tidak cocok")
-          const names0 = namesAt(inst, cardName);
-          const ti = targets.findIndex(
-            (t, i) => !results[i] && Math.max(0, ...names0.map((n) => nameMatch(n, t.nama))) >= NAME_OK,
+        const r = await fillUmkmTidakAda(inst);
+        if (r) log(`"${cardName || namesAt(inst, cardName)[0] || ""}": ${r}`);
+        pend = await waitBox("nilai_pendapatan", inst, 6000);
+      }
+      if (!pend && !write) {
+        // Di Review semua isian terkunci & rincian 26/27 bisa tersembunyi (mis. Pilih UMKM dalam satu SLS kosong),
+        // jadi belum bisa dinilai: kartu yang namanya cocok ditandai perlu Edit (bukan "tidak cocok")
+        await waitFor(() => namesAt(inst, cardName).length, 2000);
+        const names0 = namesAt(inst, cardName);
+        const ti = targets.findIndex(
+          (t, i) => !results[i] && Math.max(0, ...names0.map((n) => nameMatch(n, t.nama))) >= NAME_OK,
+        );
+        if (ti >= 0) {
+          const nm = cardName || names0[0] || "";
+          results[ti] = { state: "todo", card: nm, cur: {}, hidden: true };
+          return log(
+            `"${nm}": isian 27.a tersembunyi di Review${umkmBlank(inst) ? ' (Pilih UMKM dalam satu SLS kosong → diisi "TIDAK ADA" saat Edit)' : ""}, dicek saat Edit`,
           );
-          if (ti >= 0) {
-            results[ti] = { state: "todo", card: nm, cur: {}, umkm: true };
-            return log(`"${nm}": Pilih UMKM dalam satu SLS masih kosong → diisi "TIDAK ADA" saat Edit`);
-          }
-        } else {
-          const r = await fillUmkmTidakAda(inst);
-          if (r) log(`"${nm}": ${r}`);
-          pend = await waitBox("nilai_pendapatan", inst, 6000);
         }
       }
       if (!pend)
         return notes.push(
-          `kartu "${cardName || "-"}": isian 27.a tidak muncul${umkmEmpty(inst) ? " (Pilih UMKM dalam satu SLS masih kosong)" : ""}`,
+          `kartu "${cardName || "-"}": isian 27.a tidak muncul${umkmBlank(inst) ? " (Pilih UMKM dalam satu SLS masih kosong)" : ""}`,
         );
       await waitFor(() => namesAt(inst, cardName).length, 2000);
       const names = namesAt(inst, cardName);
