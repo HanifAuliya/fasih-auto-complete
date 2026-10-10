@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi R.27 - Pendapatan (27.a / 27.b)
 // @namespace    hanif-bps-hst
-// @version      2.1
+// @version      2.2
 // @description  Baca Excel koreksi, buka tiap dokumen, ganti 27.a (nilai_pendapatan) = R.27a dan 27.b (pendapatan_lain) = R.27b di kartu usaha yang tepat, lalu Kirim & Approve. Dokumen keluarga: kartu dicari di Blok II; dokumen usaha tunggal: langsung ke kartunya.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -28,7 +28,7 @@
   // Satu-satunya bagian yang beda antara skrip Koreksi R.27, Koreksi Gaji dan Koreksi NTB; sisanya sama persis.
   const APP = {
     name: "Koreksi R.27",
-    version: "2.1",
+    version: "2.2",
     title: "Koreksi Pendapatan R.27",
     badge: "27",
     launch: "Koreksi Pendapatan",
@@ -806,6 +806,81 @@
     for (const [id, n] of steps) await writeNum(id, inst, n);
   }
 
+  // ---------- "Pilih UMKM dalam satu SLS yang sama" ----------
+  // Selama isian ini kosong, FASIH menyembunyikan rincian sesudahnya (26.a–28.b) & Kirim kena galat.
+  // Kalau memang kosong (belum dipilih), pilih "TIDAK ADA". Yang sudah terisi / terkunci dibiarkan.
+  const dropdownValue = (container) => {
+    const el = container && container.querySelector('textarea, input[type="text"]');
+    return el ? el.value.trim() : "";
+  };
+  const DROP_OPTS = '[role="option"], [cmdk-item], [data-reka-collection-item], [role="listbox"] li, [role="dialog"] li';
+  const dropOptions = () =>
+    Array.from(document.querySelectorAll(DROP_OPTS)).filter((el) => visible(el) && !el.closest(OWN) && el.innerText.trim());
+  async function chooseFromDropdown(container, searchText, pick) {
+    const textarea = container.querySelector('textarea, input[type="text"]');
+    const toggle = container.querySelector('button[aria-haspopup="dialog"]');
+    triggerClick(toggle || textarea);
+    await sleep(W(400));
+    if (searchText) {
+      const search = document.querySelector('[role="dialog"] input:not([type="radio"]):not([type="checkbox"])') || textarea;
+      if (search) setFieldValue(search, searchText);
+    }
+    const target = await waitFor(() => pick(dropOptions()), 8000);
+    if (!target) {
+      pressKey("Escape");
+      return false;
+    }
+    triggerClick(target);
+    await sleep(W(500));
+    return true;
+  }
+  const umkmBox = (inst) => box("pilih_umkm_sls", inst);
+  const umkmEmpty = (inst) => {
+    const c = umkmBox(inst);
+    const ta = c && c.querySelector('textarea, input[type="text"]');
+    return !!(ta && !ta.disabled && !ta.hasAttribute("data-disabled") && !dropdownValue(c));
+  };
+  async function fillUmkmTidakAda(inst) {
+    const c = await waitBox("pilih_umkm_sls", inst, 1500);
+    if (!c || !umkmEmpty(inst)) return null;
+    const isTidak = (o) => /TIDAK\s+ADA/i.test(o.innerText);
+    for (let attempt = 0; attempt < 2 && umkmEmpty(inst); attempt++) {
+      await chooseFromDropdown(fresh(umkmBox(inst)), attempt ? "TIDAK ADA" : "", (opts) => opts.find(isTidak));
+      if (await waitFor(() => /TIDAK ADA/i.test(dropdownValue(fresh(umkmBox(inst)))), 3000)) return 'Pilih UMKM dalam satu SLS → "TIDAK ADA"';
+      const ta = fresh(umkmBox(inst)).querySelector('textarea, input[type="text"]');
+      if (ta && /^TIDAK ADA$/i.test(ta.value.trim())) setFieldValue(ta, ""); // sisa teks pencarian
+      closeDialogs();
+      await sleep(W(400));
+    }
+    throw Object.assign(new Error('isian "Pilih UMKM dalam satu SLS" kosong & pilihan "TIDAK ADA" tidak bisa dipilih — isi manual'), { soft: true });
+  }
+  // Semua kartu usaha dokumen ini (dipakai kalau Kirim kena galat "Pilih UMKM dalam satu SLS")
+  async function sweepUmkmTidakAda() {
+    const area = await gotoArea();
+    const notes = [];
+    const one = async (inst, name) => {
+      try {
+        const r = await fillUmkmTidakAda(inst);
+        if (r) notes.push(`${name ? `"${name}": ` : ""}${r}`);
+      } catch (e) {
+        notes.push(`${name ? `"${name}": ` : ""}${e.message}`);
+      }
+    };
+    if (area.kind === "direct") {
+      await one(instOf(visiblePend()), "");
+      return notes;
+    }
+    const n = usahaCards().length;
+    for (let idx = 0; idx < n; idx++) {
+      if (idx) await goSection(area.title, onCardList, true);
+      const card = usahaCards()[idx];
+      if (!card) continue;
+      await one(await openCard(card), card.name);
+    }
+    if (notes.length) log(notes.join("; "));
+    return notes;
+  }
+
   // Telusuri kartu usaha dokumen ini & cocokkan ke baris Excel.
   // write=false: cuma baca (aman di halaman Review). write=true: ganti nilainya.
   // Kartu dikenali dari nilainya (lama / baru / jumlahnya sama) DAN nama usahanya harus sesuai Excel.
@@ -849,8 +924,26 @@
     };
 
     const handle = async (inst, cardName) => {
-      const pend = await waitBox("nilai_pendapatan", inst, 5000);
-      if (!pend) return notes.push(`kartu "${cardName || "-"}": isian 27.a tidak muncul`);
+      let pend = await waitBox("nilai_pendapatan", inst, 5000);
+      if (!pend && umkmEmpty(inst)) {
+        // Rincian 26/27 baru muncul setelah "Pilih UMKM dalam satu SLS" dijawab
+        const nm = cardName || namesAt(inst, cardName)[0] || "";
+        if (!write) {
+          // Di Review belum bisa diisi: kartu yang namanya cocok ditandai perlu Edit (bukan "tidak cocok")
+          const names0 = namesAt(inst, cardName);
+          const ti = targets.findIndex((t, i) => !results[i] && Math.max(0, ...names0.map((n) => nameMatch(n, t.nama))) >= NAME_OK);
+          if (ti >= 0) {
+            results[ti] = { state: "todo", card: nm, cur: {}, umkm: true };
+            return log(`"${nm}": Pilih UMKM dalam satu SLS masih kosong → diisi "TIDAK ADA" saat Edit`);
+          }
+        } else {
+          const r = await fillUmkmTidakAda(inst);
+          if (r) log(`"${nm}": ${r}`);
+          pend = await waitBox("nilai_pendapatan", inst, 6000);
+        }
+      }
+      if (!pend)
+        return notes.push(`kartu "${cardName || "-"}": isian 27.a tidak muncul${umkmEmpty(inst) ? ' (Pilih UMKM dalam satu SLS masih kosong)' : ""}`);
       await waitFor(() => namesAt(inst, cardName).length, 2000);
       const names = namesAt(inst, cardName);
       const name = cardName || names[0] || "";
@@ -1579,7 +1672,20 @@
           }
           return;
         }
-        await submitCurrent();
+        try {
+          await submitCurrent();
+        } catch (e) {
+          // Galat "Pilih UMKM dalam satu SLS" di kartu lain: isi TIDAK ADA di semua kartu, lalu Kirim sekali lagi
+          if (!/Pilih UMKM/i.test(e.message) || cur.umkmSwept) throw e;
+          closeDialogs();
+          log("Galat Pilih UMKM dalam satu SLS → isi \"TIDAK ADA\" di semua kartu, lalu Kirim ulang");
+          const notes = await sweepUmkmTidakAda();
+          if (notes.length) {
+            const q = loadQueue().find((x) => x.id === item.id) || item;
+            updateItem(item.id, { result: `${q.result || ""}${q.result ? "; " : ""}${notes.join("; ")}` });
+          }
+          return setStage("submit", { umkmSwept: true, submitClicked: false });
+        }
         return setStage("approve");
       }
       case "approve": {

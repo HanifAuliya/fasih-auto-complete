@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi KBLI & Anomali
 // @namespace    hanif-bps-hst
-// @version      1.1
+// @version      1.2
 // @description  Baca Excel "Pengecekan KBLI" (Edit KBLI = 1), buka tiap dokumen, ganti KBLI akhir ke KBLI Baru di kartu usaha yang tepat, sesuaikan produk & kegiatan utama kalau ada Produk Baru, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" lalu Kirim & Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -26,7 +26,7 @@
 
   const APP = {
     name: "Koreksi KBLI",
-    version: "1.1",
+    version: "1.2",
     title: "Koreksi KBLI & Anomali",
     badge: "KBLI",
     launch: "Koreksi KBLI",
@@ -411,8 +411,9 @@
         const rawLink = get("link");
         const url = (rawLink.match(/https?:\/\/[^"'\s<>]+/) || [""])[0];
         const ids = (url || rawLink).match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) || [];
+        // KBLI Baru kosong = KBLI tidak diubah (dibiarkan seperti sebelumnya); produk/kegiatan utama tetap diproses
         const kbliBaru = padKbli(get("kbliBaru"));
-        if (!ids.length || !/^\d{5}$/.test(kbliBaru)) {
+        if (!ids.length || (kbliBaru && !/^\d{5}$/.test(kbliBaru))) {
           skipped++;
           return;
         }
@@ -755,7 +756,7 @@
     const kegInput = kegBox && kegBox.querySelector('input[type="text"]:not([disabled]), textarea:not([disabled])');
     const kegCur = kegInput ? kegInput.value.trim() : "";
     const want = wantedKegUtama(t, kegCur);
-    const kbliOk = code === t.kbliBaru;
+    const kbliOk = !t.kbliBaru || code === t.kbliBaru;
     const produkOk = !t.produkBaru || produkCur === t.produkBaru;
     const kegOk = !want || kegCur === want.value;
     const izinHalalBits = izinHalalGaps(inst);
@@ -884,7 +885,7 @@
     const pembelianBox0 = box("biaya_pembelian", inst);
     const pembelianInput0 = pembelianBox0 && pembelianBox0.querySelector("input");
     const pembelianBefore = pembelianInput0 ? pembelianInput0.value.trim() : "";
-    if (code !== t.kbliBaru) {
+    if (t.kbliBaru && code !== t.kbliBaru) {
       if (!(await setKbliCode(inst, t.kbliBaru)))
         throw new Error(`KBLI ${t.kbliBaru} tidak bisa dipilih (13.g / Master KBLI tidak muncul)`);
       notes.push(`KBLI ${code || "-"} → ${t.kbliBaru}`);
@@ -915,7 +916,7 @@
         }
       }
     }
-    const izinHalalNotes = await fillIzinHalalIfShown(inst, t.kbliBaru);
+    const izinHalalNotes = await fillIzinHalalIfShown(inst, t.kbliBaru || code);
     if (izinHalalNotes.length) {
       notes.push(...izinHalalNotes);
       changed = true;
@@ -2006,8 +2007,8 @@
     const diff = q.targets
       .map((t) => {
         const kbli =
-          t.kbliLama === t.kbliBaru
-            ? `<span class="kk-chg"><span class="k">KBLI</span><span class="u">${esc(t.kbliBaru)} (tetap)</span></span>`
+          !t.kbliBaru || t.kbliLama === t.kbliBaru
+            ? `<span class="kk-chg"><span class="k">KBLI</span><span class="u">${esc(t.kbliBaru || t.kbliLama || "-")} (tetap)</span></span>`
             : `<span class="kk-chg"><span class="k">KBLI</span><span class="o">${esc(t.kbliLama || "-")}</span>→<span class="a">${esc(t.kbliBaru)}</span></span>`;
         const produk = t.produkBaru
           ? `<span class="kk-chg"><span class="k">Produk</span><span class="o">${esc(t.produkLama)}</span>→<span class="a">${esc(t.produkBaru)}</span></span>`
@@ -2365,7 +2366,7 @@
       ui.selected.clear();
       openPanel();
       toast(
-        `${rows} baris → ${merged.length} dokumen dari sheet "${sheet}"${kept ? ` · ${kept} progres lama dipertahankan` : ""}${notFlagged ? ` · ${notFlagged} baris Edit KBLI ≠ 1 dilewati` : ""}${skipped ? ` · ${skipped} baris tanpa link/KBLI Baru dilewati` : ""}`,
+        `${rows} baris → ${merged.length} dokumen dari sheet "${sheet}"${kept ? ` · ${kept} progres lama dipertahankan` : ""}${notFlagged ? ` · ${notFlagged} baris Edit KBLI ≠ 1 dilewati` : ""}${skipped ? ` · ${skipped} baris tanpa link / KBLI Baru tidak valid dilewati` : ""}`,
       );
     } catch (e) {
       alert(`Gagal membaca Excel: ${e.message}`);
@@ -2417,7 +2418,7 @@
   async function importJson(file) {
     try {
       const data = JSON.parse(await file.text());
-      if (!Array.isArray(data.queue) || data.queue.some((q) => !q.targets || q.targets.some((t) => !t.kbliBaru)))
+      if (!Array.isArray(data.queue) || data.queue.some((q) => !q.targets || q.targets.some((t) => !("kbliBaru" in t))))
         throw new Error(`bukan file ekspor skrip ${APP.name}`);
       if (loadQueue().length && !confirm(`Timpa antrean sekarang (${loadQueue().length} dokumen) dengan isi file (${data.queue.length} dokumen)?`)) return;
       saveQueue(data.queue);
@@ -2547,8 +2548,10 @@
     const rows = q.targets
       .map((x) => {
         const now = card && t === x ? card.code : null;
-        const ok = now !== null && now === x.kbliBaru;
-        const kbliLine = `<div class="line">KBLI: <span class="o">${esc(x.kbliLama || "-")}</span> → <span class="n">${esc(x.kbliBaru)}</span>${now === null ? "" : ok ? " ✓" : ` (sekarang ${esc(now || "-")})`}</div>`;
+        const ok = now !== null && (!x.kbliBaru || now === x.kbliBaru);
+        const kbliLine = x.kbliBaru
+          ? `<div class="line">KBLI: <span class="o">${esc(x.kbliLama || "-")}</span> → <span class="n">${esc(x.kbliBaru)}</span>${now === null ? "" : ok ? " ✓" : ` (sekarang ${esc(now || "-")})`}</div>`
+          : `<div class="line">KBLI: <span class="n">tetap</span> (tidak diubah)${now ? ` · sekarang ${esc(now)}` : ""}</div>`;
         const produkLine = x.produkBaru ? `<div class="line">Produk: <span class="o">${esc(x.produkLama)}</span> → <span class="n">${esc(x.produkBaru)}</span></div>` : "";
         const kegLine = x.kegUtamaBaru ? `<div class="line">Keg. utama: <span class="o">${esc(x.kegUtamaLama)}</span> → <span class="n">${esc(x.kegUtamaBaru)}</span></div>` : "";
         return `<div class="doc" style="margin-top:8px">${esc(x.nama)}</div>${kbliLine}${produkLine}${kegLine}`;
@@ -2617,7 +2620,7 @@
       if (!t) return toast("Kartu yang terbuka tidak cocok dengan baris Excel dokumen ini.");
       const warn = [];
       if (card.name && nameMatch(card.name, t.nama) < NAME_OK) warn.push(`nama usaha di kartu "${card.name}" beda dengan Excel "${t.nama}"`);
-      if (card.code && card.code !== t.kbliLama && card.code !== t.kbliBaru) warn.push(`KBLI di kartu (${card.code}) beda dari KBLI lama/baru di Excel`);
+      if (t.kbliBaru && card.code && card.code !== t.kbliLama && card.code !== t.kbliBaru) warn.push(`KBLI di kartu (${card.code}) beda dari KBLI lama/baru di Excel`);
       if (warn.length && !confirm(`Perhatian: ${warn.join("; ")}.\n\nTetap ganti ke KBLI baru?`)) return;
       helpBusy = true;
       updateHelper();
