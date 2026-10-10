@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi KBLI & Anomali
 // @namespace    hanif-bps-hst
-// @version      1.3
+// @version      1.4
 // @description  Baca Excel "Pengecekan KBLI" (Edit KBLI = 1), buka tiap dokumen, ganti KBLI akhir ke KBLI Baru di kartu usaha yang tepat, sesuaikan produk & kegiatan utama kalau ada Produk Baru, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" lalu Kirim & Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -26,7 +26,7 @@
 
   const APP = {
     name: "Koreksi KBLI",
-    version: "1.3",
+    version: "1.4",
     title: "Koreksi KBLI & Anomali",
     badge: "KBLI",
     launch: "Koreksi KBLI",
@@ -821,26 +821,32 @@
 
   // "Pilih UMKM dalam satu SLS yang sama" yang dibiarkan kosong bikin galat saat Kirim. Kalau memang tidak ada
   // UMKM yang ditautkan (kosong), pilih "TIDAK ADA". Yang sudah terisi (UMKM lain / TIDAK ADA) atau terkunci dibiarkan.
-  const umkmBox = (inst) => box("pilih_umkm_sls", inst);
+  // Kotak instance kartu ini; kalau id-nya beda (kartu dibuka dengan nomor lain), pakai yang sedang tampil
+  const umkmBox = (inst) =>
+    box("pilih_umkm_sls", inst) || Array.from(document.querySelectorAll('[id^="pilih_umkm_sls"]')).find(visible) || null;
+  // Belum dipilih = kosong, ATAU masih "Wajib diisi" (teks ketikan/sisa pencarian bukan pilihan)
+  const umkmUnset = (c) => !dropdownValue(c) || /Wajib diisi/i.test(c.innerText || "");
   const umkmEmpty = (inst) => {
     const c = umkmBox(inst);
     const ta = c && c.querySelector('textarea, input[type="text"]');
-    return !!(ta && !ta.disabled && !ta.hasAttribute("data-disabled") && !dropdownValue(c));
+    return !!(ta && !ta.disabled && !ta.hasAttribute("data-disabled") && umkmUnset(c));
   };
   // Sama, tapi tanpa syarat "tidak terkunci": di halaman Review semua isian memang terkunci
   const umkmBlank = (inst) => {
     const c = umkmBox(inst);
-    return !!(c && c.querySelector('textarea, input[type="text"]') && !dropdownValue(c));
+    return !!(c && c.querySelector('textarea, input[type="text"]') && umkmUnset(c));
   };
   async function fillUmkmTidakAda(inst) {
-    const c = await waitBox("pilih_umkm_sls", inst, 1500);
-    if (!c || !umkmEmpty(inst)) return null;
+    await waitFor(() => umkmBox(inst), 1500);
+    if (!umkmBox(inst) || !umkmEmpty(inst)) return null;
     const isTidak = (o) => /TIDAK\s+ADA/i.test(o.innerText);
     for (let attempt = 0; attempt < 2 && umkmEmpty(inst); attempt++) {
-      await chooseFromDropdown(fresh(umkmBox(inst)), attempt ? "TIDAK ADA" : "", (opts) => opts.find(isTidak));
-      if (await waitFor(() => /TIDAK ADA/i.test(dropdownValue(fresh(umkmBox(inst)))), 3000)) return 'Pilih UMKM dalam satu SLS → "TIDAK ADA"';
+      const left = umkmBox(inst).querySelector('textarea, input[type="text"]');
+      if (left && left.value.trim()) setFieldValue(left, ""); // teks sisa, bukan pilihan
+      await chooseFromDropdown(umkmBox(inst), attempt ? "TIDAK ADA" : "", (opts) => opts.find(isTidak));
+      if (await waitFor(() => !umkmEmpty(inst) && /TIDAK ADA/i.test(dropdownValue(umkmBox(inst))), 3000)) return 'Pilih UMKM dalam satu SLS → "TIDAK ADA"';
       // sisa teks pencarian jangan sampai tertinggal di kotaknya
-      const ta = fresh(umkmBox(inst)).querySelector('textarea, input[type="text"]');
+      const ta = umkmBox(inst).querySelector('textarea, input[type="text"]');
       if (ta && /^TIDAK ADA$/i.test(ta.value.trim())) setFieldValue(ta, "");
       closeDialogs();
       await sleep(W(400));

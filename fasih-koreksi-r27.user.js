@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi R.27 - Pendapatan (27.a / 27.b)
 // @namespace    hanif-bps-hst
-// @version      2.3
+// @version      2.5
 // @description  Baca Excel koreksi, buka tiap dokumen, ganti 27.a (nilai_pendapatan) = R.27a dan 27.b (pendapatan_lain) = R.27b di kartu usaha yang tepat, lalu Kirim & Approve. Dokumen keluarga: kartu dicari di Blok II; dokumen usaha tunggal: langsung ke kartunya.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -28,7 +28,7 @@
   // Satu-satunya bagian yang beda antara skrip Koreksi R.27, Koreksi Gaji dan Koreksi NTB; sisanya sama persis.
   const APP = {
     name: "Koreksi R.27",
-    version: "2.3",
+    version: "2.5",
     title: "Koreksi Pendapatan R.27",
     badge: "27",
     launch: "Koreksi Pendapatan",
@@ -78,8 +78,9 @@
     red: { label: "Gagal", color: "#dc2626" },
     manual: { label: "Selesai manual", color: "#7c3aed" },
     forbidden: { label: "Forbidden", color: "#64748b" },
+    y2026: { label: "Mulai 2026", color: "#0284c7" },
   };
-  const FINISHED = ["done", "already", "manual"];
+  const FINISHED = ["done", "already", "manual", "y2026"];
 
   const STATUS_HINT = {
     pending: "kembali ke antrean, dikerjakan otomatis lagi",
@@ -90,6 +91,7 @@
     red: "tidak bisa dikerjakan",
     manual: "dikoreksi sendiri di FASIH",
     forbidden: "halaman Forbidden (akun tidak punya akses), dilewati",
+    y2026: "usaha mulai beroperasi 2026: rincian 27 jadi rincian 30 (sebulan terakhir), tidak dikoreksi",
   };
 
   // =========================================================================
@@ -834,25 +836,38 @@
     await sleep(W(500));
     return true;
   }
-  const umkmBox = (inst) => box("pilih_umkm_sls", inst);
+  // Kotak instance kartu ini; kalau id-nya beda (kartu dibuka dengan nomor lain), pakai yang sedang tampil
+  const umkmBox = (inst) =>
+    box("pilih_umkm_sls", inst) || Array.from(document.querySelectorAll('[id^="pilih_umkm_sls"]')).find(visible) || null;
+  // Belum dipilih = kosong, ATAU masih "Wajib diisi" (teks ketikan/sisa pencarian bukan pilihan)
+  const umkmUnset = (c) => !dropdownValue(c) || /Wajib diisi/i.test(c.innerText || "");
   const umkmEmpty = (inst) => {
     const c = umkmBox(inst);
     const ta = c && c.querySelector('textarea, input[type="text"]');
-    return !!(ta && !ta.disabled && !ta.hasAttribute("data-disabled") && !dropdownValue(c));
+    return !!(ta && !ta.disabled && !ta.hasAttribute("data-disabled") && umkmUnset(c));
   };
   // Sama, tapi tanpa syarat "tidak terkunci": di halaman Review semua isian memang terkunci
   const umkmBlank = (inst) => {
     const c = umkmBox(inst);
-    return !!(c && c.querySelector('textarea, input[type="text"]') && !dropdownValue(c));
+    return !!(c && c.querySelector('textarea, input[type="text"]') && umkmUnset(c));
+  };
+  // Tahun mulai beroperasi (rincian 25) di kartu yang terbuka; 0 kalau belum terbaca
+  const YEAR_NEW = 2026;
+  const yearOf = (inst) => {
+    const c = box("tahun_operasi", inst) || Array.from(document.querySelectorAll('[id^="tahun_operasi"]')).find(visible);
+    const i = c && c.querySelector("input");
+    return i ? Number((i.value.match(/\d{4}/) || [0])[0]) : 0;
   };
   async function fillUmkmTidakAda(inst) {
-    const c = await waitBox("pilih_umkm_sls", inst, 1500);
-    if (!c || !umkmEmpty(inst)) return null;
+    await waitFor(() => umkmBox(inst), 1500);
+    if (!umkmBox(inst) || !umkmEmpty(inst)) return null;
     const isTidak = (o) => /TIDAK\s+ADA/i.test(o.innerText);
     for (let attempt = 0; attempt < 2 && umkmEmpty(inst); attempt++) {
-      await chooseFromDropdown(fresh(umkmBox(inst)), attempt ? "TIDAK ADA" : "", (opts) => opts.find(isTidak));
-      if (await waitFor(() => /TIDAK ADA/i.test(dropdownValue(fresh(umkmBox(inst)))), 3000)) return 'Pilih UMKM dalam satu SLS → "TIDAK ADA"';
-      const ta = fresh(umkmBox(inst)).querySelector('textarea, input[type="text"]');
+      const left = umkmBox(inst).querySelector('textarea, input[type="text"]');
+      if (left && left.value.trim()) setFieldValue(left, ""); // teks sisa, bukan pilihan
+      await chooseFromDropdown(umkmBox(inst), attempt ? "TIDAK ADA" : "", (opts) => opts.find(isTidak));
+      if (await waitFor(() => !umkmEmpty(inst) && /TIDAK ADA/i.test(dropdownValue(umkmBox(inst))), 3000)) return 'Pilih UMKM dalam satu SLS → "TIDAK ADA"';
+      const ta = umkmBox(inst).querySelector('textarea, input[type="text"]');
       if (ta && /^TIDAK ADA$/i.test(ta.value.trim())) setFieldValue(ta, ""); // sisa teks pencarian
       closeDialogs();
       await sleep(W(400));
@@ -935,6 +950,19 @@
         const r = await fillUmkmTidakAda(inst);
         if (r) log(`"${cardName || namesAt(inst, cardName)[0] || ""}": ${r}`);
         pend = await waitBox("nilai_pendapatan", inst, 6000);
+      }
+      if (!pend) {
+        // Usaha yang mulai beroperasi 2026 tidak punya rincian 27 (pendapatannya jadi rincian 30, sebulan terakhir) -> dilewati
+        const thn = await waitFor(() => yearOf(inst) || null, 2000);
+        if (thn >= YEAR_NEW) {
+          const names0 = namesAt(inst, cardName);
+          const ti = targets.findIndex((t, i) => !results[i] && Math.max(0, ...names0.map((n) => nameMatch(n, t.nama))) >= NAME_OK);
+          if (ti >= 0) {
+            const nm = cardName || names0[0] || "";
+            results[ti] = { state: "y2026", card: nm, cur: {}, year: thn };
+            return log(`"${nm}": mulai beroperasi ${thn} → rincian 27 jadi rincian 30, dilewati`);
+          }
+        }
       }
       if (!pend && !write) {
         // Di Review semua isian terkunci & rincian 26/27 bisa tersembunyi (mis. Pilih UMKM dalam satu SLS kosong),
@@ -1515,6 +1543,7 @@
         const nm = (t.nama || res?.card || "usaha").split("(")[0].trim();
         if (!res) return `${nm}: kartu tidak ketemu`;
         if (res.state === "already") return `${nm}: sudah sesuai`;
+        if (res.state === "y2026") return `${nm}: mulai beroperasi ${res.year || YEAR_NEW} (rincian 27 jadi rincian 30), tidak dikoreksi`;
         return `${nm}: ${fmtChange(res.cur, t) || "sudah sesuai"}`;
       })
       .join(" · ");
@@ -1624,6 +1653,9 @@
         if (!ensureReview(item)) return;
         try {
           const { results, notes } = await scanDoc(item, false);
+          // Semua usaha dokumen ini mulai beroperasi 2026 (atau sudah sesuai): tidak perlu revoke
+          if (results.some((r) => r && r.state === "y2026") && results.every((r) => r && (r.state === "y2026" || r.state === "already")))
+            return finishItem(item.id, "y2026", `tidak diubah · ${summary(item, results)}`);
           if (results.every((r) => r && r.state === "already" && !(r.noteFail || []).length))
             return finishItem(item.id, "already", `tidak diubah, sudah sesuai${NOTE ? ` · catatan ${NOTE} ada` : ""} · ${summary(item, results)}`);
           if (results.every((r) => r && r.state === "already"))
@@ -1656,7 +1688,11 @@
         if (!onEditOf(did(item))) return setStage("edit");
         const { results, notes } = await scanDoc(item, true);
         const noteFail = results.flatMap((r) => (r && r.noteFail) || []);
-        updateItem(item.id, { result: summary(item, results), noteFail });
+        updateItem(item.id, {
+          result: summary(item, results),
+          noteFail,
+          onlyY2026: results.some((r) => r && r.state === "y2026") && !results.some((r) => r && r.state === "set"),
+        });
         if (results.some((r) => !r))
           throw Object.assign(new Error(`${summary(item, results)}${notes.length ? ` (${notes.join("; ")})` : ""}`), { soft: true });
         return setStage("submit", { submitClicked: false, changed: results.some((r) => r.state === "set") });
@@ -1708,7 +1744,7 @@
         }
         const q = loadQueue().find((x) => x.id === item.id) || item;
         const nf = (q.noteFail || []).length ? ` · ⚠ catatan ${NOTE} belum masuk di ${q.noteFail.join(", ")}` : "";
-        return finishItem(item.id, nf ? "yellow" : "done", `${q.result || "terkirim"} · terkirim${conf.approve && !note ? " & approve" : ""}${note}${nf}`);
+        return finishItem(item.id, nf ? "yellow" : q.onlyY2026 ? "y2026" : "done", `${q.result || "terkirim"} · terkirim${conf.approve && !note ? " & approve" : ""}${note}${nf}`);
       }
       default:
         throw new Error(`tahap tidak dikenal: ${cur.stage}`);
@@ -1960,13 +1996,14 @@
 
   function renderDynamic(root) {
     const c = counts();
-    const doneN = c.done + c.already + c.manual;
+    const doneN = c.done + c.already + c.manual + c.y2026;
     const pct = (n) => (c.all ? (100 * n) / c.all : 0);
     root.querySelector("[data-prog]").innerHTML = `
       <div class="track">
         <div class="seg" style="width:${pct(c.done)}%;background:#86efac"></div>
         <div class="seg" style="width:${pct(c.already)}%;background:#5eead4"></div>
         <div class="seg" style="width:${pct(c.manual)}%;background:#c4b5fd"></div>
+        <div class="seg" style="width:${pct(c.y2026)}%;background:#7dd3fc"></div>
         <div class="seg" style="width:${pct(c.yellow + c.red + c.tested)}%;background:#fcd34d"></div>
       </div>
       <div class="lbl"><span>${doneN} dari ${c.all} dokumen beres${c.forbidden ? ` · ${c.forbidden} forbidden dilewati` : ""}</span><span>${c.all ? Math.round(pct(doneN)) : 0}%</span></div>`;
