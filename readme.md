@@ -11,8 +11,9 @@ Ada beberapa skrip di folder ini, untuk dua tahap pekerjaan yang berbeda:
 | [`fasih-koreksi-gaji.user.js`](fasih-koreksi-gaji.user.js) | FASIH Koreksi Gaji + R.27 (gaji / 27.a / 27.b) | Sama persis dengan Koreksi R.27 (semua fitur di bagian 3), ditambah isian `gaji` = kolom Gaji dari Excel upah/gaji. Pintasan Alt+6. |
 | [`fasih-koreksi-ntb.user.js`](fasih-koreksi-ntb.user.js) | FASIH Koreksi Anomali NTB (26.a - 28.b) | Sama persis dengan Koreksi R.27 (bagian 3), untuk Excel Pengecekan Anomali NTB: ganti 26.a–26.d, 27.a dan 28.b (dari kolom r28c) = kolom `rXX input`, plus catatan `#DC_04` di tiap rincian yang diubah. Muat puluhan ribu dokumen. Pintasan Alt+5. |
 | [`fasih-ganti-wilayah-oss.user.js`](fasih-ganti-wilayah-oss.user.js) | FASIH OSS -> Keluarga: Pindah + Tautkan | Pindahkan assignment OSS ke SLS keluarganya (Ganti Wilayah), lalu tautkan ke usaha keluarga lewat "Pilih UMKM dalam satu SLS" — atau tutup/gandakan kalau memang tidak ada yang cocok. |
+| [`fasih-koreksi-kbli.user.js`](fasih-koreksi-kbli.user.js) | FASIH Koreksi KBLI & Anomali | Untuk Excel "Pengecekan KBLI": ganti KBLI akhir ke `KBLI Baru` di kartu usaha yang tepat (hanya baris Edit KBLI = 1), sesuaikan produk & kegiatan utama, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" dengan catatan `#DC_01`, lalu kirim & approve. |
 
-Semuanya independen — bisa dipasang salah satu atau dua-duanya sekaligus.
+Semuanya independen — bisa dipasang salah satu, beberapa, atau semuanya sekaligus.
 
 ## Instalasi
 
@@ -43,12 +44,12 @@ Untuk Chrome/Edge:
    > Khusus file [`script`](script): namanya tanpa akhiran `.user.js`, jadi Tampermonkey **tidak bisa** drag-drop langsung — harus copy-paste manual seperti di atas. File yang namanya sudah `*.user.js` ([`fasih-koreksi-r27.user.js`](fasih-koreksi-r27.user.js), [`fasih-ganti-wilayah-oss.user.js`](fasih-ganti-wilayah-oss.user.js)) sebenarnya bisa langsung di-drag ke halaman Dashboard Tampermonkey untuk dipasang otomatis, tapi copy-paste manual tetap berlaku sama kalau lebih mudah.
 4. Simpan dengan **Ctrl+S** (atau menu **File → Save**).
 5. Cek status skrip itu di daftar Dashboard: saklarnya harus **hijau (Enabled)**. Skrip baru biasanya otomatis aktif, tapi tidak ada salahnya dicek ulang.
-6. Ulangi langkah 2–5 untuk tiap skrip lain yang mau dipasang — ketiganya independen, boleh pasang satu, dua, atau semuanya sekaligus.
+6. Ulangi langkah 2–5 untuk tiap skrip lain yang mau dipasang — semuanya independen, boleh pasang satu, beberapa, atau semuanya sekaligus.
 
 ### 4. Pastikan jalan di FASIH
 
 1. Buka halaman `https://fasih-sm.bps.go.id/...` (halaman **DATA survei**, bukan halaman login).
-2. Tombol pelontar mengambang akan muncul di pojok kiri bawah — ikonnya tergantung skrip mana yang aktif: **⚡ FASIH Otomatis** (Batch Otomatis), **🔀 OSS → Keluarga** (Ganti Wilayah OSS), **27 Koreksi Pendapatan** (R.27), **Rp Koreksi Gaji** (Koreksi Gaji), atau **NTB Koreksi NTB** (Koreksi Anomali NTB). Kalau lebih dari satu skrip dipasang, semua tombolnya numpuk di situ.
+2. Tombol pelontar mengambang akan muncul di pojok kiri bawah — ikonnya tergantung skrip mana yang aktif: **⚡ FASIH Otomatis** (Batch Otomatis), **🔀 OSS → Keluarga** (Ganti Wilayah OSS), **27 Koreksi Pendapatan** (R.27), **Rp Koreksi Gaji** (Koreksi Gaji), **NTB Koreksi NTB** (Koreksi Anomali NTB), atau **KBLI Koreksi KBLI** (Koreksi KBLI & Anomali). Kalau lebih dari satu skrip dipasang, semua tombolnya numpuk di situ.
 3. Buka Console browser (tekan **F12** → tab **Console**) dan refresh halaman. Harus ada baris log seperti `[FASIH Batch Otomatis v2.0] Skrip termuat di ...` (teksnya beda-beda tergantung skrip). **Kalau log ini tidak muncul sama sekali**, skrip belum benar-benar jalan — balik cek langkah 2 (Allow User Scripts) dan langkah 3.5 (status Enabled).
 4. Kalau muncul izin browser semacam "Izinkan ekstensi ini membaca dan mengubah data Anda di situs ini" saat halaman FASIH pertama kali dibuka, klik **Allow/Izinkan** — tanpa ini skrip tidak bisa membaca/mengisi form.
 
@@ -234,6 +235,20 @@ Ketiga skrip ini **isinya sama persis**; yang beda cuma blok `KONFIGURASI` di ba
 **🏷 Atur status** (baris dicentang): pilih status hasil cek manual (Selesai, Sudah sesuai, Selesai manual, Perlu cek, Gagal, Forbidden, Belum) + catatan; ikut ke Laporan CSV.
 
 **Ekspor**: ⬇ Laporan CSV (nilai lama/baru tiap isian, status, keterangan, hasil, link dokumen yang dipakai) dan 💾 Ekspor / 📂 Impor JSON; nama file memuat nama wilayah.
+
+## 4. `fasih-koreksi-kbli.user.js` — Koreksi KBLI & Anomali
+
+Skrip ini memakai kerangka yang sama dengan skrip Koreksi di bagian 3 (cek dulu di Review, pencarian dokumen lewat Filter Kecamatan → Desa → SLS kalau link salah/Forbidden, mode uji, Jeda/Lanjut, panel bantu **Kerjakan manual**, Atur status, Laporan CSV, Ekspor/Impor JSON). Yang berbeda adalah isian yang dikoreksi.
+
+**Kolom Excel**: `link`, `nama_usaha`, `kbli_akhir`, `Edit KBLI (1=Ya)`, `KBLI Baru`, `Produk`, `Produk Baru`, `keg_utama` (opsional: kolom `Kegiatan utama` baru). Nama kolom dicocokkan tanpa spasi, tanda baca, dan huruf besar/kecil. Hanya baris dengan **Edit KBLI = 1** yang dikerjakan.
+
+**Alur per dokumen**: Buka → (opsional) cek di Review → Edit/Revoke → di kartu usaha yang tepat:
+- KBLI akhir diganti ke `KBLI Baru`. Kalau `KBLI Baru` kosong, KBLI dibiarkan, tapi produk/kegiatan utama tetap diproses.
+- Kalau `Produk Baru` terisi, produk diganti dan kegiatan utama ikut disesuaikan: memakai kolom `Kegiatan utama` baru kalau ada, atau penyesuaian kata otomatis (mis. padi hibrida → inbrida). Yang tidak bisa disesuaikan otomatis ditandai untuk dicek manual.
+- Anomali KBLI dijawab **"Ya, Sesuai Kondisi Lapangan"** dan catatan `#DC_01` ditambahkan (tidak diisi dua kali kalau tag itu sudah ada).
+- Kirim → Approve.
+
+Status baris sama dengan bagian 3: Selesai, Sudah sesuai, Selesai manual, Perlu cek, Gagal, Forbidden, Belum.
 
 ## Catatan
 
