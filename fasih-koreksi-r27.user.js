@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi R.27 - Pendapatan (27.a / 27.b)
 // @namespace    hanif-bps-hst
-// @version      2.7
+// @version      2.8
 // @description  Baca Excel koreksi, buka tiap dokumen, ganti 27.a (nilai_pendapatan) = R.27a dan 27.b (pendapatan_lain) = R.27b di kartu usaha yang tepat, lalu Kirim & Approve. Dokumen keluarga: kartu dicari di Blok II; dokumen usaha tunggal: langsung ke kartunya.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -28,7 +28,7 @@
   // Satu-satunya bagian yang beda antara skrip Koreksi R.27, Koreksi Gaji dan Koreksi NTB; sisanya sama persis.
   const APP = {
     name: "Koreksi R.27",
-    version: "2.7",
+    version: "2.8",
     title: "Koreksi Pendapatan R.27",
     badge: "27",
     launch: "Koreksi Pendapatan",
@@ -2600,13 +2600,13 @@
     }
   }
 
-  // Rincian dokumen yang sedang dikerjakan: yang diubah (lama → baru) + isi kartu yang sedang terbuka (✓ = sudah sesuai)
+  // Rincian dokumen yang sedang dikerjakan: semua isian (lama → baru, termasuk yang 0 / tetap) + isi kartu yang sedang terbuka (✓ = sudah sesuai)
   function hudChanges(it, card) {
     const open = card ? targetFor(it, card) : null;
     return it.targets
       .map((x) => {
         const live = card && open === x;
-        const rows = FIELDS.filter(([k]) => x.old[k] !== x.neu[k] || (live && card.cur[k] !== x.neu[k]))
+        const rows = FIELDS
           .map(([k, , l]) => {
             const now = live ? card.cur[k] : null;
             const ok = now !== null && now === x.neu[k];

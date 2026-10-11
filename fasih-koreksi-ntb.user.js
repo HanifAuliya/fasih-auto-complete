@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi Anomali NTB (26.a - 28.b)
 // @namespace    hanif-bps-hst
-// @version      1.9
+// @version      1.10
 // @description  Baca Excel Pengecekan Anomali NTB, buka tiap dokumen, ganti 26.a gaji, 26.b biaya produksi, 26.c biaya pembelian, 26.d biaya operasional, 27.a nilai penjualan dan 28.b aset (dari r28c) = kolom "rXX input" + catatan #DC_04 di tiap rincian yang diubah di kartu usaha yang tepat (nama usaha wajib cocok), lalu Kirim & Approve. Isian yang memang tidak ada di kartu (tergantung KBLI) dilewati bila nilai Excel-nya 0. Link salah/Forbidden: dicari lewat daftar assignment (BKU lalu keluarga). Yang gagal bisa dikerjakan manual lewat panel bantu.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -28,7 +28,7 @@
   // Satu-satunya bagian yang beda antara skrip Koreksi R.27, Koreksi Gaji dan Koreksi NTB; sisanya sama persis.
   const APP = {
     name: "Koreksi NTB",
-    version: "1.9",
+    version: "1.10",
     title: "Koreksi Anomali NTB",
     badge: "NTB",
     launch: "Koreksi NTB",
@@ -3408,13 +3408,13 @@
     }
   }
 
-  // Rincian dokumen yang sedang dikerjakan: yang diubah (lama → baru) + isi kartu yang sedang terbuka (✓ = sudah sesuai)
+  // Rincian dokumen yang sedang dikerjakan: semua isian (lama → baru, termasuk yang 0 / tetap) + isi kartu yang sedang terbuka (✓ = sudah sesuai)
   function hudChanges(it, card) {
     const open = card ? targetFor(it, card) : null;
     return it.targets
       .map((x) => {
         const live = card && open === x;
-        const rows = FIELDS.filter(([k]) => x.old[k] !== x.neu[k] || (live && card.cur[k] !== x.neu[k]))
+        const rows = FIELDS
           .map(([k, , l]) => {
             const now = live ? card.cur[k] : null;
             const ok = now !== null && now === x.neu[k];
