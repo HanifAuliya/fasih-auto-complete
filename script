@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Batch Otomatis - Tahap 1 + 2: Excel -> Cari -> Isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      3.27
+// @version      3.31
 // @description  Membaca Excel penyisiran (Tindak Lanjut Fasih = false), mencari & membuka dokumen dengan filter wilayah, lalu mengisi Blok P + Blok II (usaha lama / tambah baru) dan mengirim tanpa konfirmasi. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -2866,6 +2866,7 @@
     opened: "dibuka",
     filled: "terisi (uji)",
     done: "terkirim",
+    notfound: "tidak ditemukan",
   };
   // Pilihan "Atur status" (cek manual): status yang bisa dipilih + penjelasannya
   const STATUS_HINT = {
@@ -2876,6 +2877,7 @@
     opened: "sedang/ sudah dibuka & dikerjakan manual",
     filled: "terisi tapi belum dikirim",
     done: "sudah beres (dikirim manual di FASIH), tidak diproses lagi",
+    notfound: "dokumen / usahanya tidak ditemukan di FASIH, tidak diproses lagi",
   };
   const STATUS_COLOR = {
     pending: "#2563eb",
@@ -2885,6 +2887,7 @@
     opened: "#7c3aed",
     filled: "#0891b2",
     done: "#15803d",
+    notfound: "#64748b",
   };
 
   // =========================================================================
@@ -7646,9 +7649,29 @@
     }
   }
 
+  // Aksi yang butuh halaman daftar data: kalau sedang di halaman lain, pindah dulu ke daftar lalu jalankan
+  // otomatis setelah halaman daftar termuat (lihat runPendingAction).
+  const LIST_URL_KEY = "fasih_t1_list_url";
+  const PENDING_KEY = "fasih_t1_pending";
+  const knownListUrl = () =>
+    loadJson(LIST_URL_KEY, "") || loadRun().listUrl || loadState().listUrl || "";
+  function goListThen(action) {
+    const url = knownListUrl();
+    if (!url) {
+      alert(
+        'Buka dulu halaman DATA survei (tabel dengan kotak "Cari...") sekali, supaya skrip tahu alamatnya. Setelah itu tombol ini bisa langsung dipakai dari halaman mana pun.',
+      );
+      return false;
+    }
+    saveJson(PENDING_KEY, { ...action, at: Date.now() });
+    document.getElementById("fasih-t1-panel")?.remove();
+    location.href = url;
+    return true;
+  }
+
   function startRun(limit, testMode, approve, onlyIds) {
     if (!isListPage()) {
-      alert('Mulai dari halaman DATA survei (tabel dengan kotak "Cari...").');
+      goListThen({ act: "run", limit, testMode, approve, onlyIds });
       return;
     }
     if (!loadJson(WILAYAH_KEY, []).length) {
@@ -7904,6 +7927,7 @@
       opened: 0,
       filled: 0,
       done: 0,
+      notfound: 0,
     };
     queue.forEach((q) => {
       counts[q.status] = (counts[q.status] || 0) + 1;
@@ -8524,7 +8548,8 @@
               ${stat("pending", "Belum dicek", STATUS_COLOR.pending)}${stat("green", "Hijau / siap", STATUS_COLOR.green)}
               ${stat("done", "Terkirim", STATUS_COLOR.done)}${stat("yellow", "Kuning", STATUS_COLOR.yellow)}
               ${stat("red", "Merah", STATUS_COLOR.red)}${stat("filled", "Terisi (uji)", STATUS_COLOR.filled)}
-              ${stat("opened", "Dibuka manual", STATUS_COLOR.opened)}${stat("all", "Semua", "#0f172a")}
+              ${stat("opened", "Dibuka manual", STATUS_COLOR.opened)}${stat("notfound", "Tidak ditemukan", STATUS_COLOR.notfound)}
+              ${stat("all", "Semua", "#0f172a")}
             </div></div>`
               : ""
           }
@@ -8787,21 +8812,30 @@
         : null;
 
       if (
-        ["check", "next", "open", "choose", "wilayah"].includes(act) &&
-        !isListPage()
-      ) {
-        alert(
-          'Buka dulu halaman DATA survei (tabel dengan kotak "Cari..."), lalu ulangi.',
-        );
-        return;
-      }
-      if (
-        ["check", "next", "open"].includes(act) &&
+        ["check", "next", "open", "choose"].includes(act) &&
         !loadJson(WILAYAH_KEY, []).length
       ) {
         alert(
           'Daftar wilayah belum dibaca. Klik "🗺 Baca daftar wilayah" dulu agar pencarian memakai filter Kecamatan & Desa.',
         );
+        return;
+      }
+      // Bukan di halaman daftar data: pindah dulu ke sana, aksinya dijalankan otomatis setelah termuat
+      if (
+        ["check", "next", "open", "choose", "wilayah"].includes(act) &&
+        !isListPage()
+      ) {
+        if (act === "check") {
+          const s = loadState();
+          s.checking = !s.checking;
+          saveState(s);
+          if (!s.checking) return openPanel();
+        }
+        goListThen({
+          act: act === "check" ? "noop" : act,
+          id: el.dataset.id || "",
+          kode: el.dataset.kode || "",
+        });
         return;
       }
 
@@ -8826,7 +8860,12 @@
           alert("Centang dulu baris yang statusnya mau diatur.");
           return;
         }
-        openStatusPicker(ids);
+        openStatusPicker(ids, () => {
+          const s = loadState();
+          s.selected = []; // baris sudah pindah status -> centang dikosongkan
+          saveState(s);
+          openPanel();
+        });
         return;
       }
       if (act === "setdesa-sel") {
@@ -9065,6 +9104,7 @@
       }
       if (act === "filter") {
         const s = loadState();
+        if (s.filter !== el.dataset.filter) s.selected = []; // ganti kategori status -> centang dikosongkan
         s.filter = el.dataset.filter;
         saveState(s);
         openPanel(el.dataset.filter);
@@ -9211,8 +9251,18 @@
       .fo-help .tb { width:100%; border-collapse:collapse; margin-top:6px; font-size:12px; font-variant-numeric:tabular-nums; }
       .fo-help .tb td { padding:2px 4px; }
       .fo-help .tb td:first-child { color:#a5b4fc; }
-      .fo-help .tb td:last-child { text-align:right; color:#fff; font-weight:650; }
-      .fo-help .tb tr.zero td:last-child { color:#7d83a8; font-weight:500; }
+      .fo-help .tb tr.zero td:nth-child(2) { color:#7d83a8; font-weight:500; }
+      .fo-help .tb td.v { text-align:right; color:#fff; font-weight:650; }
+      .fo-help .tb td.live { text-align:right; width:64px; font-size:11.5px; color:#7d83a8; }
+      .fo-help .tb td.live.ok { color:#86efac; font-weight:700; }
+      .fo-help .tb td.live.diff { color:#fcd34d; }
+      .fo-help .tb th { text-align:right; font-size:10.5px; font-weight:600; color:#7d83a8; padding:0 4px; }
+      .fo-help .tb th:first-child { text-align:left; }
+      .fo-help .usaha.done { box-shadow:inset 0 0 0 1px rgba(134,239,172,.45); background:rgba(34,197,94,.08); }
+      .fo-help .filled { margin-top:10px; padding:10px 12px; border-radius:10px; font-weight:700; font-size:13.5px;
+        background:rgba(34,197,94,.16); color:#86efac; box-shadow:inset 0 0 0 1px rgba(134,239,172,.4); }
+      .fo-help .filled.test { background:rgba(34,211,238,.14); color:#67e8f9; box-shadow:inset 0 0 0 1px rgba(103,232,249,.4); }
+      .fo-help .filled small { display:block; font-weight:500; font-size:11.5px; opacity:.85; margin-top:2px; }
       .fo-help .warnline { margin-top:6px; color:#fcd34d; font-size:12px; }
       .fo-help .opts { display:flex; gap:14px; flex-wrap:wrap; margin-top:10px; font-size:12.5px; }
       .fo-help .opts label { display:inline-flex; gap:6px; align-items:center; cursor:pointer; }
@@ -9267,21 +9317,40 @@
       .join("");
   }
 
+  // Nilai isian yang sedang tampil di form (kartu usaha yang terbuka); null kalau isiannya tidak tampil
+  function liveValues(key) {
+    return Array.from(document.querySelectorAll(`[id^="${key}#"]`))
+      .filter(visible)
+      .map((el) => (el.querySelector("input, textarea") || {}).value)
+      .filter((x) => x !== undefined)
+      .map((x) => String(x).replace(/[^0-9]/g, ""));
+  }
+
   function usahaHtml(item) {
     const v = item.values || {};
     const kbli = itemKbli(item);
-    const rows = VALUE_ROWS.map(
-      ([label, key]) =>
-        `<tr class="${Number(v[key]) ? "" : "zero"}"><td>${label}</td><td>${fmtVal(key, v[key])}</td></tr>`,
-    ).join("");
+    const p = usahaProfile(kbli, item.namaUsaha);
+    const finished = item.status === "done" || item.status === "filled";
+    const rows = VALUE_ROWS.map(([label, key]) => {
+      const want = String(
+        key === "biaya_produksi" ? biayaProduksiValue(item, p) : v[key] ?? "",
+      );
+      const live = liveValues(key);
+      const cell = !live.length
+        ? `<td class="live">${finished ? "✓" : ""}</td>`
+        : live.some((x) => String(Number(x || 0)) === String(Number(want || 0)))
+          ? `<td class="live ok">✓ terisi</td>`
+          : `<td class="live diff" title="Nilai di form sekarang">${fmtVal(key, live[0] || "")}</td>`;
+      return `<tr class="${Number(v[key]) ? "" : "zero"}"><td>${label}</td><td class="v">${fmtVal(key, v[key])}</td>${cell}</tr>`;
+    }).join("");
     const issues = (item.issues || []).length
       ? `<div class="warnline">⚠ ${escapeHtml(item.issues.join("; "))}</div>`
       : "";
-    return `<div class="usaha">
-      <b>${escapeHtml(item.namaUsaha || "(tanpa nama usaha)")}</b>${item.jumlahUsaha > 1 ? ` <span class="m">usaha ${item.usahaKe}/${item.jumlahUsaha}</span>` : ""}
+    return `<div class="usaha${finished ? " done" : ""}">
+      <b>${finished ? "✅ " : ""}${escapeHtml(item.namaUsaha || "(tanpa nama usaha)")}</b>${item.jumlahUsaha > 1 ? ` <span class="m">usaha ${item.usahaKe}/${item.jumlahUsaha}</span>` : ""}
       <span class="sub">Pemilik: ${escapeHtml(item.pemilik || item.krt)} · Produk: ${escapeHtml(item.produk || "-")}</span>
       <span class="sub">KBLI: ${kbli ? escapeHtml(KB.describeKbli(kbli)) : '<span style="color:#fcd34d;">belum ditentukan</span>'}</span>
-      ${item.values ? `<table class="tb">${rows}</table>` : `<div class="warnline">⚠ Angka Excel belum terbaca — "📥 Muat Excel" ulang dengan file yang sama.</div>`}
+      ${item.values ? `<table class="tb"><tr><th>Isian</th><th>Excel</th><th>Form</th></tr>${rows}</table>` : `<div class="warnline">⚠ Angka Excel belum terbaca — "📥 Muat Excel" ulang dengan file yang sama.</div>`}
       ${issues}
     </div>`;
   }
@@ -9440,6 +9509,15 @@
           helpSig3 = "";
           return updateManualHelper();
         }
+        if (act === "notfound" && group.length) {
+          applyStatus(
+            group.map((i) => i.id),
+            "notfound",
+            "ditandai dari panel isi manual",
+          );
+          helpSig3 = "";
+          return updateManualHelper();
+        }
         if (act === "status" && group.length)
           return openStatusPicker(
             group.map((i) => i.id),
@@ -9485,6 +9563,7 @@
       doc.id,
       mini,
       group.map((q) => [q.id, q.status, q.values, q.issues, itemKbli(q)]),
+      VALUE_ROWS.map(([, key]) => liveValues(key).join(",")).join("|"), // isian form berubah -> tabel ikut
       !!document.querySelector(".fasih-form-sidebar"), // saran nama baru bisa dibaca setelah halaman termuat
     ]);
     if (sig === helpSig3) return;
@@ -9513,9 +9592,20 @@
     if (noKbli.length) blockers.push(`${noKbli.length} usaha belum punya KBLI`);
     const onEdit = /\/edit/.test(location.pathname);
     const run = loadRun();
+    const allSent = group.every((i) => i.status === "done");
+    const allFilled = group.every((i) => i.status === "done" || i.status === "filled");
+    const doneAt = group.map((i) => i.doneAt).filter(Boolean).sort().pop();
+    const banner = allFilled
+      ? `<div class="filled${allSent ? "" : " test"}">${allSent ? "✅ Sudah terisi & terkirim" : "✅ Sudah terisi (belum dikirim)"}
+          <small>${doneAt ? `${new Date(doneAt).toLocaleString("id-ID")} · ` : ""}${escapeHtml(picked.reason || "")}</small></div>`
+      : group.every((i) => i.status === "notfound")
+        ? `<div class="filled" style="background:rgba(100,116,139,.2);color:#cbd5e1;box-shadow:inset 0 0 0 1px rgba(148,163,184,.4);">✗ Ditandai tidak ditemukan
+          <small>${escapeHtml(picked.reason || "")}</small></div>`
+        : "";
     el.innerHTML = `${top}
       <div class="sub" style="margin-top:6px;">${escapeHtml(picked.alamat)} · urut ${escapeHtml(picked.noUrut || "-")} · ${group.length} usaha · ${escapeHtml(STATUS_LABEL[picked.status] || picked.status)}
         <button class="fo-btn sm" data-help="change" style="margin-left:6px;">Ganti</button></div>
+      ${banner}
       ${group.map(usahaHtml).join("")}
       ${blockers.length ? `<div class="warnline">⚠ Belum bisa diisi: ${escapeHtml(blockers.join("; "))}</div>` : ""}
       <div class="opts">
@@ -9525,10 +9615,11 @@
       <div class="sub">${onEdit ? "Mengisi langsung di halaman edit ini." : "Skrip akan klik Edit (revoke kalau perlu) dulu."} Dokumen keluarga: Blok P, Blok I &amp; Blok II diisi seperti proses otomatis. Dokumen BKU: semua halaman usahanya diisi dari baris Excel ini.</div>
       <div class="fo-rowflex" style="margin-top:10px;">
         ${noKbli.length ? `<button class="fo-btn" data-help="kbli">🏷 Tentukan KBLI</button>` : ""}
-        <button class="fo-btn go" data-help="fill" ${blockers.length ? "disabled" : ""}>▶ Isi dokumen ini</button>
+        <button class="fo-btn${allFilled ? "" : " go"}" data-help="fill" ${blockers.length ? "disabled" : ""}>${allFilled ? "↻ Isi ulang" : "▶ Isi dokumen ini"}</button>
       </div>
       <div class="fo-rowflex" style="margin-top:8px;">
-        <button class="fo-btn" data-help="done" title="Sudah dikerjakan & dikirim manual di FASIH: status baris jadi terkirim (tidak diproses lagi)">✓ Tandai selesai</button>
+        ${allSent ? "" : `<button class="fo-btn" data-help="done" title="Sudah dikerjakan & dikirim manual di FASIH: status baris jadi terkirim (tidak diproses lagi)">✓ Tandai selesai</button>`}
+        ${group.every((i) => i.status === "notfound") ? "" : `<button class="fo-btn" data-help="notfound" title="Dokumen / usahanya tidak ditemukan di FASIH: tidak diproses lagi">✗ Tidak ditemukan</button>`}
         <button class="fo-btn" data-help="status" title="Pilih status lain (kuning, merah, belum dicek, …) + catatan">🏷 Atur status…</button>
       </div>`;
   }
@@ -9565,9 +9656,47 @@
     }
   });
 
+  let pendingBusy = false;
+  async function runPendingAction() {
+    const p = loadJson(PENDING_KEY, null);
+    if (!p || pendingBusy || !isListPage()) return;
+    saveJson(PENDING_KEY, null);
+    if (Date.now() - (p.at || 0) > 3 * 60000) return; // sudah terlalu lama, abaikan
+    pendingBusy = true;
+    try {
+      await waitTableSettled(); // tabel daftar selesai dimuat dulu
+      const item = p.id ? loadQueue().find((q) => q.id === p.id) : null;
+      if (p.act === "run") startRun(p.limit, p.testMode, p.approve, p.onlyIds);
+      else if ((p.act === "open" || p.act === "choose") && item)
+        await findAndOpen(item, p.act === "choose" ? p.kode : null);
+      else if (p.act === "next") {
+        const next =
+          loadQueue().find((q) => q.status === "green") ||
+          loadQueue().find((q) => q.status === "pending");
+        if (next) await findAndOpen(next, null);
+        else alert("Tidak ada baris hijau / belum dicek yang tersisa.");
+      } else if (p.act === "wilayah") {
+        try {
+          const result = await buildWilayahIndex();
+          alert(
+            `Daftar wilayah tersimpan: ${result.kecamatan} kecamatan, ${result.desa} desa.`,
+          );
+        } catch (err) {
+          alert(`Gagal membaca daftar wilayah: ${err.message}`);
+        }
+        openPanel();
+      }
+    } finally {
+      pendingBusy = false;
+    }
+  }
+
   // Halaman FASIH berupa SPA: pasang tombol saat tabel muncul & lanjutkan cek jika sedang berjalan
   setInterval(() => {
     ensureLauncher();
+    if (isListPage() && loadJson(LIST_URL_KEY, "") !== location.href)
+      saveJson(LIST_URL_KEY, location.href); // diingat untuk "pindah ke daftar dulu"
+    runPendingAction();
     updateManualHelper();
     if (loadState().checking && !checkingNow && isListPage()) runCheckAll();
   }, 1000);
