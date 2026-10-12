@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Batch Otomatis - Tahap 1 + 2: Excel -> Cari -> Isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      3.26
+// @version      3.27
 // @description  Membaca Excel penyisiran (Tindak Lanjut Fasih = false), mencari & membuka dokumen dengan filter wilayah, lalu mengisi Blok P + Blok II (usaha lama / tambah baru) dan mengirim tanpa konfirmasi. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -5361,14 +5361,7 @@
         found++;
         if (cat) cats.add(cat);
       }
-      if (await fixTahun2026(inst))
-        runLog(`Usaha "${card.name}": tahun berdiri 2026 → 2025`);
-      // Kartu mana pun (juga yang tidak ada di Excel): 'Pilih UMKM dalam satu SLS' kosong -> Tidak Ada
-      const umkm = box("pilih_umkm_sls", inst);
-      if (umkm && visible(umkm) && !dropdownValue(umkm)) {
-        await ensureUmkmTidakAda(inst);
-        runLog(`Usaha "${card.name}": Pilih UMKM SLS kosong → Tidak Ada`);
-      }
+      // Kartu hanya dibaca di sini: isinya tidak diubah (kartu usaha lain tidak boleh disentuh)
       const p = await waitBox("pengusaha_var", inst, 4000);
       owners.set(idx, p ? dropdownValue(p) : "");
       if (p && dropdownValue(p) && kb && ["1", "2"].includes(radioValue(kb))) {
@@ -7064,6 +7057,13 @@
       inst && box("keberadaan_usaha", inst)
         ? itemForInstance(inst, items)
         : null;
+    // Kartu usaha yang tidak ada di Excel: jangan disentuh, cukup dicatat
+    if (inst && box("keberadaan_usaha", inst) && !item) {
+      warn(
+        `galat di kartu usaha lain (bukan dari Excel), tidak diubah: ${label} (${err.messages.join(", ")})`,
+      );
+      return;
+    }
     // Usaha yang tidak ada di Excel: pakai nama usaha/produk yang tertulis di formnya
     const pseudo = item || {
       namaUsaha:
