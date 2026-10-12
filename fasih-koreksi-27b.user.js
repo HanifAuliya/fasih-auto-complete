@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         FASIH Koreksi Pindah 27.b ke 27.a
 // @namespace    hanif-bps-hst
-// @version      1.1
-// @description  Baca Excel "27b to 27a", buka tiap dokumen, pindahkan pendapatan lain (27.b) ke nilai pendapatan (27.a): 27.a = kolom R.27a, 27.b = kolom R.27b (0) + catatan #DC_04 di tiap rincian yang diubah di kartu usaha yang tepat (nama usaha wajib cocok), lalu Kirim & Approve. Link salah/Forbidden: dicari lewat daftar assignment (BKU lalu keluarga). Yang gagal bisa dikerjakan manual lewat panel bantu.
+// @version      1.2
+// @description  Baca Excel "27b to 27a", buka tiap dokumen, pindahkan pendapatan lain (27.b) ke nilai pendapatan (27.a): 27.a = kolom R.27a, 27.b = kolom R.27b (0) di kartu usaha yang tepat (tanpa catatan) (nama usaha wajib cocok), lalu Kirim & Approve. Link salah/Forbidden: dicari lewat daftar assignment (BKU lalu keluarga). Yang gagal bisa dikerjakan manual lewat panel bantu.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
 // @grant        none
@@ -28,7 +28,7 @@
   // Satu-satunya bagian yang beda antara skrip Koreksi R.27, Koreksi Gaji, Koreksi NTB dan Koreksi 27b ke 27a; sisanya sama persis.
   const APP = {
     name: "Koreksi 27b ke 27a",
-    version: "1.1",
+    version: "1.2",
     title: "Pindah 27.b ke 27.a",
     badge: "27b",
     launch: "Koreksi 27b→27a",
@@ -67,7 +67,7 @@
   // [] = kartu dikenali dari nama usaha saja: apa pun isi 27.a/27.b di FASIH sekarang, 27.b dibuat 0 & 27.a = R.27a.
   const MATCH_KEYS = [];
   // Catatan yang ditambahkan di tiap rincian yang nilainya diubah (tombol Catatan). "" = tidak menambah catatan.
-  const NOTE = "#DC_04";
+  const NOTE = ""; // skrip ini tidak menambah catatan
   // ===== akhir KONFIGURASI =====
 
   const DEFAULT_CONF = {
