@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi Anomali NTB (26.a - 28.b)
 // @namespace    hanif-bps-hst
-// @version      1.10
+// @version      1.11
 // @description  Baca Excel Pengecekan Anomali NTB, buka tiap dokumen, ganti 26.a gaji, 26.b biaya produksi, 26.c biaya pembelian, 26.d biaya operasional, 27.a nilai penjualan dan 28.b aset (dari r28c) = kolom "rXX input" + catatan #DC_04 di tiap rincian yang diubah di kartu usaha yang tepat (nama usaha wajib cocok), lalu Kirim & Approve. Isian yang memang tidak ada di kartu (tergantung KBLI) dilewati bila nilai Excel-nya 0. Link salah/Forbidden: dicari lewat daftar assignment (BKU lalu keluarga). Yang gagal bisa dikerjakan manual lewat panel bantu.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -28,7 +28,7 @@
   // Satu-satunya bagian yang beda antara skrip Koreksi R.27, Koreksi Gaji dan Koreksi NTB; sisanya sama persis.
   const APP = {
     name: "Koreksi NTB",
-    version: "1.10",
+    version: "1.11",
     title: "Koreksi Anomali NTB",
     badge: "NTB",
     launch: "Koreksi NTB",
@@ -273,8 +273,16 @@
   }
 
   const rateInfo = () => loadJson(RATE_KEY, {});
-  const rateLimited = () => Date.now() < (rateInfo().until || 0);
+  // Jeda otomatis saat server membalas 429 dimatikan untuk skrip ini: 429 cuma dicatat di Console,
+  // skrip tetap jalan (jeda bersama dari skrip FASIH lain juga tidak diikuti)
+  const RATE_PAUSE = false;
+  const rateLimited = () =>
+    RATE_PAUSE && Date.now() < (rateInfo().until || 0);
   function noteRateLimit(url) {
+    if (!RATE_PAUSE)
+      return console.warn(
+        `[${APP.name}] 429 dari server (${String(url || "").slice(0, 120)}), jeda dimatikan — lanjut.`,
+      );
     const prev = rateInfo();
     if (Date.now() < (prev.until || 0)) return;
     const count =
