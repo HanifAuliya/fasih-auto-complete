@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Batch Otomatis - Tahap 1 + 2: Excel -> Cari -> Isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      3.31
+// @version      3.34
 // @description  Membaca Excel penyisiran (Tindak Lanjut Fasih = false), mencari & membuka dokumen dengan filter wilayah, lalu mengisi Blok P + Blok II (usaha lama / tambah baru) dan mengirim tanpa konfirmasi. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -4342,7 +4342,7 @@
       openedAt: new Date().toISOString(),
     });
     const state = loadState();
-    state.listUrl = location.href;
+    state.listUrl = cleanListUrl(location.href);
     saveState(state);
     if (loadState().newTab) {
       window.open(href, "_blank");
@@ -6686,9 +6686,11 @@
     const items = docItems(run).map((i) => ({ ...i, kbli: itemKbli(i) }));
     const ctx = { hp: "" };
 
-    // Cek Galat dulu; perbaiki lewat tombol "Lihat" lalu ulangi (maks. 3 putaran)
+    // Cek Galat dulu; perbaiki lewat tombol "Lihat" lalu ulangi (maks. 3 putaran).
+    // "Kirim ulang" (mode uji, setelah diperbaiki sendiri): cek sekali saja, tanpa perbaikan otomatis.
     let dialogKirim = null;
-    for (let round = 1; round <= 3; round++) {
+    const rounds = run.resend ? 1 : 3;
+    for (let round = 1; round <= rounds; round++) {
       runLog(`Cek galat sebelum kirim (${round})`);
       const opened = await openKirimDialog();
       if (!opened.galat || opened.galat.n === 0) {
@@ -6707,8 +6709,20 @@
         .map((e) => `${e.section} · ${e.title} (${e.messages.join(", ")})`)
         .join("; ");
       runLog(`Galat ${opened.galat.n}: ${summary}`);
-      if (round === 3) {
+      if (round === rounds) {
         closeDialogs();
+        // Mode uji: jangan pindah ke dokumen berikutnya, tunggu diperbaiki lalu "Kirim ulang"
+        if (run.testMode) {
+          setPhase("paused", {
+            galatReason: `Galat ${opened.galat.n}: ${summary}`,
+            resend: false,
+            submitClicked: false,
+          });
+          runLog(
+            'MODE UJI: masih ada galat. Perbaiki di form, lalu klik "↻ Kirim ulang" (atau "Lewati").',
+          );
+          return "galat";
+        }
         throw new Error(
           `masih ada galat setelah diperbaiki otomatis: ${summary}`,
         );
@@ -7386,14 +7400,15 @@
   // ---------- Mesin utama ----------
   let runnerBusy = false;
 
-  function finishDoc(status, reason) {
+  function finishDoc(status, reason, noHold) {
     const run = loadRun();
     (run.itemIds || []).forEach((id) =>
       updateItem(id, { status, reason, doneAt: new Date().toISOString() }),
     );
     run.processed = (run.processed || 0) + (run.itemIds || []).length;
     // Mode uji: dokumen gagal -> berhenti di halaman ini, tunggu Anda klik "Lanjut"
-    const hold = run.testMode && (status === "yellow" || status === "red");
+    const hold =
+      !noHold && run.testMode && (status === "yellow" || status === "red");
     Object.assign(run, {
       itemIds: [],
       docKode: "",
@@ -7401,6 +7416,8 @@
       phase: hold ? "hold" : "find",
       phaseAt: Date.now(),
       holdReason: hold ? reason : "",
+      galatReason: "",
+      resend: false,
     });
     if (!hold) {
       // setiap dokumen selesai: catat untuk batas per jam, lalu jeda
@@ -7412,6 +7429,7 @@
       run.nextAt = Date.now() + gap[0] + Math.random() * (gap[1] - gap[0]);
     }
     if (run.limit && run.processed >= run.limit) run.running = hold; // tetap tampilkan alasan sebelum berhenti
+    if (!run.running) run.clearSearch = true;
     saveRun(run);
     runLog(`${status === "done" ? "✅" : "⚠️"} ${reason}`);
     updateRunBar();
@@ -7439,6 +7457,45 @@
       ready.find(sameDesa) ||
       ready[0]
     );
+  }
+
+  // Alamat halaman daftar tanpa kata pencarian (mis. ?search=ABDURRAHMAN), supaya kembalinya ke daftar awal
+  function cleanListUrl(href) {
+    try {
+      const u = new URL(href || location.href);
+      const input = searchInput();
+      const q = input ? input.value.trim().toUpperCase() : "";
+      if (q)
+        Array.from(u.searchParams.entries())
+          .filter(([, v]) => v.trim().toUpperCase() === q)
+          .forEach(([k]) => u.searchParams.delete(k));
+      return u.toString();
+    } catch (e) {
+      return href || location.href;
+    }
+  }
+
+  // Proses selesai: kosongkan kotak "Cari..." di halaman daftar (kembali ke pencarian awal)
+  let clearingSearch = false;
+  async function clearListSearch() {
+    const run = loadRun();
+    if (run.running || !run.clearSearch || clearingSearch || !isListPage()) return;
+    clearingSearch = true;
+    try {
+      run.clearSearch = false;
+      saveRun(run);
+      const input = searchInput();
+      if (!input || !input.value.trim()) return;
+      const before = tableText();
+      setInputValue(input, "");
+      await sleep(300);
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }),
+      );
+      await waitTableSettled(before);
+    } finally {
+      clearingSearch = false;
+    }
   }
 
   // Kembali ke daftar sekali saja; halaman daftar FASIH butuh waktu untuk muncul (jangan dimuat ulang terus)
@@ -7477,6 +7534,7 @@
     const item = nextItemToProcess(run);
     if (!item) {
       run.running = false;
+      run.clearSearch = true;
       saveRun(run);
       runLog("Selesai: tidak ada baris tersisa.");
       return;
@@ -7538,7 +7596,7 @@
     setPhase("review", {
       docKode: result.row.kode,
       submitClicked: false,
-      listUrl: location.href,
+      listUrl: cleanListUrl(location.href),
       docStartedAt: Date.now(),
     });
     location.href = href;
@@ -7572,6 +7630,14 @@
         run.phase !== "paused" &&
         Date.now() - (run.phaseAt || 0) > PHASE_TIMEOUT_MS
       ) {
+        if (run.testMode && run.phase === "submit") {
+          setPhase("paused", {
+            galatReason: "Gagal kirim: macet lebih dari 4 menit",
+            resend: false,
+            submitClicked: false,
+          });
+          return;
+        }
         finishDoc("red", `macet di tahap "${run.phase}" lebih dari 4 menit`);
         return;
       }
@@ -7622,7 +7688,7 @@
         }
         if (!onEdit) return;
         runLog("Mengirim dokumen");
-        await submitDocument(run);
+        if ((await submitDocument(run)) === "galat") return; // mode uji: dijeda, tunggu "Kirim ulang"
         if (run.approve) return setPhase("approve");
         return finishDoc("done", withWarnings("terkirim"));
       }
@@ -7643,6 +7709,18 @@
     } catch (e) {
       console.error("[Tahap 2]", e);
       pressKey(document.activeElement || document.body, "Escape");
+      // Mode uji: gagal kirim -> jangan lanjut ke dokumen berikutnya, tunggu "↻ Kirim ulang" / "Lewati"
+      const now = loadRun();
+      if (now.testMode && now.phase === "submit") {
+        closeDialogs();
+        setPhase("paused", {
+          galatReason: `Gagal kirim: ${e.message}`,
+          resend: false,
+          submitClicked: false,
+        });
+        runLog('MODE UJI: gagal kirim. Perbaiki bila perlu, lalu klik "↻ Kirim ulang" (atau "Lewati").');
+        return;
+      }
       finishDoc(run.phase === "find" ? "red" : "yellow", e.message);
     } finally {
       runnerBusy = false;
@@ -7696,7 +7774,7 @@
       phase: "find",
       phaseAt: Date.now(),
       itemIds: [],
-      listUrl: location.href,
+      listUrl: cleanListUrl(location.href),
       navAt: 0,
       total: onlyIds
         ? onlyIds.length
@@ -7717,6 +7795,7 @@
   function stopRun() {
     const run = loadRun();
     run.running = false;
+    run.clearSearch = true;
     saveRun(run);
     saveJson(PAUSE_KEY, { on: false });
     runLog("Dihentikan.");
@@ -7801,15 +7880,26 @@
         if (act === "panel") openPanel();
         if (act === "pause") setUserPause(true, "Dijeda oleh Anda");
         if (act === "resume") setUserPause(false);
-        if (act === "send") setPhase("submit");
-        if (act === "skip")
-          finishDoc("filled", "MODE UJI: terisi, belum dikirim");
+        if (act === "send") {
+          const g = loadRun().galatReason;
+          setPhase("submit", {
+            resend: !!g && /^Galat/.test(g),
+            galatReason: "",
+          });
+          if (g) runLog("Kirim ulang: cek galat lagi");
+        }
+        if (act === "skip") {
+          const g = loadRun().galatReason;
+          if (g) finishDoc("yellow", `MODE UJI: tidak dikirim, ${g}`, true);
+          else finishDoc("filled", "MODE UJI: terisi, belum dikirim");
+        }
         if (act === "next") {
           const r = loadRun();
           r.phase = "find";
           r.phaseAt = Date.now();
           r.holdReason = "";
           if (r.limit && r.processed >= r.limit) r.running = false;
+          if (!r.running) r.clearSearch = true;
           saveRun(r);
           updateRunBar();
           goList(r);
@@ -7864,7 +7954,13 @@
     const total = target || run.total || 0;
     const done = run.processed || 0;
     const pct = total ? Math.min(100, Math.round((100 * done) / total)) : 0;
-    const notice = up.on ? upText : hold ? run.holdReason : "";
+    const notice = up.on
+      ? upText
+      : hold
+        ? run.holdReason
+        : paused && run.galatReason
+          ? `${run.galatReason} — perbaiki bila perlu, lalu klik "↻ Kirim ulang"`
+          : "";
     const logs = (run.logs || []).length
       ? run.logs
       : run.lastLog
@@ -7878,7 +7974,7 @@
         <span style="flex:1"></span>
         ${
           paused
-            ? `<button class="fo-btn go" data-bar="send">✓ Kirim sekarang</button>
+            ? `<button class="fo-btn go" data-bar="send">${run.galatReason ? "↻ Kirim ulang" : "✓ Kirim sekarang"}</button>
           <button class="fo-btn" data-bar="skip">Lewati</button>`
             : ""
         }
@@ -8982,7 +9078,7 @@
           itemIds: group.map((i) => i.id),
           docKode: item.kode || "(link manual)",
           submitClicked: false,
-          listUrl: isListPage() ? location.href : loadRun().listUrl || "",
+          listUrl: isListPage() ? cleanListUrl(location.href) : loadRun().listUrl || "",
           navAt: 0,
           docStartedAt: Date.now(),
         });
@@ -9694,8 +9790,9 @@
   // Halaman FASIH berupa SPA: pasang tombol saat tabel muncul & lanjutkan cek jika sedang berjalan
   setInterval(() => {
     ensureLauncher();
-    if (isListPage() && loadJson(LIST_URL_KEY, "") !== location.href)
-      saveJson(LIST_URL_KEY, location.href); // diingat untuk "pindah ke daftar dulu"
+    if (isListPage() && loadJson(LIST_URL_KEY, "") !== cleanListUrl(location.href))
+      saveJson(LIST_URL_KEY, cleanListUrl(location.href)); // diingat untuk "pindah ke daftar dulu"
+    clearListSearch();
     runPendingAction();
     updateManualHelper();
     if (loadState().checking && !checkingNow && isListPage()) runCheckAll();
