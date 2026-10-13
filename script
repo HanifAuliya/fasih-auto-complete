@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Batch Otomatis - Tahap 1 + 2: Excel -> Cari -> Isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      3.34
+// @version      3.35
 // @description  Membaca Excel penyisiran (Tindak Lanjut Fasih = false), mencari & membuka dokumen dengan filter wilayah, lalu mengisi Blok P + Blok II (usaha lama / tambah baru) dan mengirim tanpa konfirmasi. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -7804,6 +7804,7 @@
   // ---------- Bar status (selalu tampil saat berjalan / dijeda) ----------
   const BAR_POS_KEY = "fasih_t2_bar_pos";
   const BAR_MIN_KEY = "fasih_t2_bar_min";
+  const BAR_ISIAN_KEY = "fasih_t2_bar_isian"; // panel isian (Excel vs form) di bar progres dibuka
   function placeBar(bar) {
     bar.classList.toggle("min", !!loadJson(BAR_MIN_KEY, false));
     const pos = loadJson(BAR_POS_KEY, null);
@@ -7870,6 +7871,10 @@
       placeBar(bar);
       bar.addEventListener("click", (e) => {
         const act = e.target.closest("[data-bar]")?.dataset.bar;
+        if (act === "isian") {
+          saveJson(BAR_ISIAN_KEY, !loadJson(BAR_ISIAN_KEY, false));
+          updateRunBar();
+        }
         if (act === "min") {
           const minimized = !bar.classList.contains("min");
           bar.classList.toggle("min", minimized);
@@ -7954,6 +7959,8 @@
     const total = target || run.total || 0;
     const done = run.processed || 0;
     const pct = total ? Math.min(100, Math.round((100 * done) / total)) : 0;
+    const showIsian = items.length > 0 && !!loadJson(BAR_ISIAN_KEY, false);
+    if (showIsian) ensureHelpStyles();
     const notice = up.on
       ? upText
       : hold
@@ -7966,6 +7973,7 @@
       : run.lastLog
         ? [run.lastLog]
         : [];
+    const isianScroll = (bar.querySelector(".fo-help") || {}).scrollTop || 0;
     bar.innerHTML = `
       <div class="top">
         <span class="dot${paused || hold || up.on ? " paused" : ""}"></span>
@@ -7980,6 +7988,7 @@
         }
         ${hold ? `<button class="fo-btn go" data-bar="next">Lanjut ke berikutnya →</button>` : ""}
         ${!paused && !hold && !up.rate ? (up.on ? `<button class="fo-btn go" data-bar="resume">▶ Lanjut</button>` : `<button class="fo-btn" data-bar="pause">⏸ Jeda</button>`) : ""}
+        ${items.length ? `<button class="fo-btn" data-bar="isian" title="Tampilkan / sembunyikan isian Excel vs form">${showIsian ? "▾" : "▸"} Isian</button>` : ""}
         <button class="fo-btn" data-bar="min" title="Perkecil / besarkan bar">${bar.classList.contains("min") ? "＋" : "–"}</button>
         <button class="fo-btn" data-bar="panel" title="Buka panel (Alt+7)">☰</button>
         <button class="fo-btn stop" data-bar="stop">■ Stop</button>
@@ -7991,6 +8000,7 @@
           `<div class="st ${i < iNow ? "done" : i === iNow ? (paused || hold ? "wait" : "now") : ""}">${i < iNow ? "✓ " : ""}${label}</div>`,
       ).join("")}</div>
       <div class="log">${logs.map((l) => `<div>${escapeHtml(l)}</div>`).join("") || "<div>…</div>"}</div>
+      ${showIsian ? `<div class="fo-help" style="max-height:42vh;overflow:auto;margin-top:2px;">${items.map(usahaHtml).join("")}</div>` : ""}
       <div class="foot">
         <div class="prog"><i style="width:${pct}%"></i></div>
         <span class="chip ok">✓ ${c.done || 0}</span>
@@ -7998,11 +8008,17 @@
         <span class="chip bad">● ${c.red || 0}</span>
         ${total ? `<span class="pct">${pct}%</span>` : ""}
       </div>`;
+    const isianBox = bar.querySelector(".fo-help");
+    if (isianBox) isianBox.scrollTop = isianScroll;
   }
 
   setInterval(() => {
     runnerTick();
-    if (loadRun().running && !document.getElementById("fasih-t2-bar"))
+    if (
+      loadRun().running &&
+      (!document.getElementById("fasih-t2-bar") ||
+        loadJson(BAR_ISIAN_KEY, false)) // panel isian: kolom Form ikut isi form terbaru
+    )
       updateRunBar();
     // Panel dibiarkan terbuka: jumlah & progress bar tetap ikut berjalan
     if (document.getElementById("fasih-t1-panel")) refreshPanelCounts();
