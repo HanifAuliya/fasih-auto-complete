@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Batch Otomatis - Tahap 1 + 2: Excel -> Cari -> Isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      3.35
+// @version      3.36
 // @description  Membaca Excel penyisiran (Tindak Lanjut Fasih = false), mencari & membuka dokumen dengan filter wilayah, lalu mengisi Blok P + Blok II (usaha lama / tambah baru) dan mengirim tanpa konfirmasi. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -4482,6 +4482,20 @@
     '[role="option"], [cmdk-item], [data-reka-collection-item], [role="listbox"] li, [role="dialog"] li';
 
   const loadRun = () => loadJson(RUN_KEY, { running: false });
+  // Pilihan Mode uji / Approve setelah kirim disimpan begitu diubah (bukan hanya saat proses dijalankan)
+  const prefTestMode = () => {
+    const s = loadState();
+    return s.testMode !== undefined ? s.testMode : loadRun().testMode !== false;
+  };
+  const prefApprove = () => {
+    const s = loadState();
+    return s.approveOff !== undefined ? !s.approveOff : !loadRun().approveOff;
+  };
+  function savePref(changes) {
+    const s = loadState();
+    Object.assign(s, changes);
+    saveState(s);
+  }
   const loadPause = () => loadJson(PAUSE_KEY, { on: false });
 
   // on=true: jeda (reason tampil di bar; autoMs>0 = lanjut sendiri setelah sekian ms)
@@ -8709,10 +8723,10 @@
                   ? `<div class="fo-hint">Sedang berjalan · ${currentSpeed().name}${run.testMode ? " · Mode uji" : ""}${run.approveOff ? "" : " · Approve setelah kirim"}</div>`
                   : `
               <div class="fo-seg">
-                <label><input type="radio" name="t2mode" value="test" ${run.testMode !== false ? "checked" : ""}><span>Mode uji</span></label>
-                <label><input type="radio" name="t2mode" value="auto" ${run.testMode === false ? "checked" : ""}><span>Otomatis penuh</span></label>
+                <label><input type="radio" name="t2mode" value="test" ${prefTestMode() ? "checked" : ""}><span>Mode uji</span></label>
+                <label><input type="radio" name="t2mode" value="auto" ${prefTestMode() ? "" : "checked"}><span>Otomatis penuh</span></label>
               </div>
-              <label class="fo-switch" style="margin-top:10px;"><input type="checkbox" data-approve ${run.approveOff ? "" : "checked"}><i></i>Approve setelah kirim</label>
+              <label class="fo-switch" style="margin-top:10px;"><input type="checkbox" data-approve ${prefApprove() ? "checked" : ""}><i></i>Approve setelah kirim</label>
               <div class="fo-hint" style="margin-top:8px;">Mode uji berhenti di halaman CATATAN tiap dokumen · Otomatis penuh langsung kirim tanpa berhenti.</div>
               <div class="fo-divider"></div>
               <div class="fo-rowflex" style="align-items:center;">
@@ -8777,6 +8791,7 @@
               <button class="fo-btn sm" data-act="check">${state.checking ? "⏸ Hentikan cek" : "🔍 Cek kecocokan semua"}</button>
               <button class="fo-btn sm" data-act="next">Buka berikutnya (manual)</button>
               <button class="fo-btn sm" data-act="reset-status">↻ Kuning/merah → cek ulang</button>
+              <button class="fo-btn sm" data-act="showhelp" title="Munculkan lagi panel isi manual yang ditutup (✕) di halaman dokumen (Alt+8)">✍ Tampilkan panel isi manual</button>
               <label class="fo-switch" style="margin-left:auto;"><input type="checkbox" data-act="newtab" ${state.newTab ? "checked" : ""}><i></i>Buka manual di tab baru</label>
             </div>
           </details>`
@@ -8830,6 +8845,12 @@
     );
     const turboBox = overlay.querySelector("[data-turbo]");
     if (turboBox) turboBox.onchange = () => saveTurbo(turboBox.checked);
+    overlay.querySelectorAll('[name="t2mode"]').forEach(
+      (r) => (r.onchange = () => savePref({ testMode: r.value === "test" })),
+    );
+    const approveBox = overlay.querySelector("[data-approve]");
+    if (approveBox)
+      approveBox.onchange = () => savePref({ approveOff: !approveBox.checked });
 
     overlay.querySelector("[data-delay]").onchange = (e) => {
       const s = loadState();
@@ -8882,6 +8903,8 @@
         delayMs: loadState().delayMs,
         importedFileName: loadState().importedFileName,
         importedAt: loadState().importedAt,
+        testMode: loadState().testMode,
+        approveOff: loadState().approveOff,
         filter: "pending",
         excelFileName: file.name,
         excelLoadedAt: new Date().toISOString(),
@@ -9202,6 +9225,14 @@
         return;
       }
       if (act === "close") overlay.remove();
+      if (act === "showhelp") {
+        saveJson(HELP_HIDE_KEY, "");
+        helpSig3 = "";
+        overlay.remove();
+        if (!docHere())
+          alert("Panel isi manual muncul di halaman dokumen FASIH (Review / Edit). Buka dokumennya dulu.");
+        updateManualHelper();
+      }
       if (act === "load") fileInput.click();
       if (act === "report") downloadReport();
       if (act === "export-data") exportAllData();
@@ -9566,6 +9597,11 @@
         saveJson(HELP_POS_KEY, null);
         placeHelp(el);
       });
+      el.addEventListener("change", (e) => {
+        if (e.target.matches("[data-test]")) savePref({ testMode: e.target.checked });
+        if (e.target.matches("[data-approve3]"))
+          savePref({ approveOff: !e.target.checked });
+      });
       el.addEventListener("input", (e) => {
         if (!e.target.matches(".q")) return;
         const list = el.querySelector("[data-list]");
@@ -9721,8 +9757,8 @@
       ${group.map(usahaHtml).join("")}
       ${blockers.length ? `<div class="warnline">⚠ Belum bisa diisi: ${escapeHtml(blockers.join("; "))}</div>` : ""}
       <div class="opts">
-        <label><input type="checkbox" data-test checked> Mode uji (berhenti sebelum Kirim)</label>
-        <label><input type="checkbox" data-approve3 ${run.approveOff ? "" : "checked"}> Approve setelah kirim</label>
+        <label><input type="checkbox" data-test ${prefTestMode() ? "checked" : ""}> Mode uji (berhenti sebelum Kirim)</label>
+        <label><input type="checkbox" data-approve3 ${prefApprove() ? "checked" : ""}> Approve setelah kirim</label>
       </div>
       <div class="sub">${onEdit ? "Mengisi langsung di halaman edit ini." : "Skrip akan klik Edit (revoke kalau perlu) dulu."} Dokumen keluarga: Blok P, Blok I &amp; Blok II diisi seperti proses otomatis. Dokumen BKU: semua halaman usahanya diisi dari baris Excel ini.</div>
       <div class="fo-rowflex" style="margin-top:10px;">
