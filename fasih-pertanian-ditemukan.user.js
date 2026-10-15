@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Pertanian Ditemukan - Excel -> buka link -> kartu usaha yang sama jadi Ditemukan -> isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      1.0
+// @version      1.1
 // @description  Membaca Excel usaha keluarga (kolom Link ke dokumen), membuka dokumennya langsung, membuka kartu usaha yang namanya sama dengan Excel (mis. UTP TANAMAN PANGAN <MURHAN>), mengubah keberadaan usahanya jadi 1. Ditemukan lalu mengisi rinciannya dari Excel dan mengirim. Tidak menambah kartu usaha baru. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -12,7 +12,7 @@
   "use strict";
 
   console.log(
-    "[FASIH Pertanian Ditemukan v1.0] Skrip termuat di",
+    "[FASIH Pertanian Ditemukan v1.1] Skrip termuat di",
     location.pathname,
   );
 
@@ -4948,9 +4948,13 @@
     if (normalize(card.name) === normalize(item.namaUsaha)) return 1;
     const a = ownerTag(card.name);
     const b = ownerTag(item.namaUsaha);
-    if (!a || !b || nameSimilarity(a, b) < 0.85) return 0;
     const sim = nameSimilarity(stripOwner(card.name), stripOwner(item.namaUsaha));
-    return sim >= 0.85 ? sim : 0;
+    if (sim < 0.85) return 0;
+    // FASIH menampilkan "UTP TANAMAN PANGAN <SYAMSUDIN>" tanpa bagian <...> (dianggap tag HTML):
+    // kartu tanpa nama pemilik dianggap cocok, asal hanya satu (dicek di fillDocument)
+    if (!a) return 0.9;
+    if (!b || nameSimilarity(a, b) < 0.85) return 0;
+    return sim;
   }
   const CARD_OK = 0.85;
 
@@ -6428,6 +6432,15 @@
     if (noCard.length)
       throw new Error(
         `kartu usaha ${noCard.map((i) => `"${i.namaUsaha}"`).join(", ")} tidak ada di dokumen — tidak diisi (kartu di FASIH: ${usahaCards().map((c) => c.name).join(", ") || "-"})`,
+      );
+    // Kartu tanpa nama pemilik: kalau ada beberapa kartu bernama sama, tidak bisa dipastikan yang mana
+    const ambiguous = items.filter((item) => {
+      const cards = usahaCards().filter((c) => cardScore(c, item) >= CARD_OK);
+      return !cards.some((c) => ownerTag(c.name)) && cards.length > 1;
+    });
+    if (ambiguous.length)
+      throw new Error(
+        `ada ${ambiguous.length > 1 ? "beberapa" : "lebih dari satu"} kartu bernama sama tanpa nama pemilik untuk ${ambiguous.map((i) => `"${i.namaUsaha}"`).join(", ")} — tidak bisa dipastikan kartu yang mana, kerjakan manual (kartu di FASIH: ${usahaCards().map((c) => c.name).join(", ")})`,
       );
 
     // 1) Blok P: aktifkan jenis usaha keluarga
@@ -9823,6 +9836,6 @@
   }, 1000);
 
   console.log(
-    "[FASIH Pertanian Ditemukan v1.0] Aktif. Tombol di kiri bawah (Alt+2).",
+    "[FASIH Pertanian Ditemukan v1.1] Aktif. Tombol di kiri bawah (Alt+2).",
   );
 })();
