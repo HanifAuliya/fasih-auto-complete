@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Pertanian Ditemukan - Excel -> buka link -> kartu usaha yang sama jadi Ditemukan -> isi -> Kirim
 // @namespace    hanif-bps-hst
-// @version      1.1
+// @version      1.2
 // @description  Membaca Excel usaha keluarga (kolom Link ke dokumen), membuka dokumennya langsung, membuka kartu usaha yang namanya sama dengan Excel (mis. UTP TANAMAN PANGAN <MURHAN>), mengubah keberadaan usahanya jadi 1. Ditemukan lalu mengisi rinciannya dari Excel dan mengirim. Tidak menambah kartu usaha baru. Mode uji berhenti sebelum Kirim.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -12,7 +12,7 @@
   "use strict";
 
   console.log(
-    "[FASIH Pertanian Ditemukan v1.1] Skrip termuat di",
+    "[FASIH Pertanian Ditemukan v1.2] Skrip termuat di",
     location.pathname,
   );
 
@@ -5285,6 +5285,11 @@
     for (const name of names) {
       const owner = isOwnerName(owners, name);
       if (!owner && !decideAll) continue;
+      // Mode "empty": anggota yang semua pertanyaannya sudah terjawab tidak perlu dibuka
+      if (decideAll === "empty") {
+        const shown = artQuestions(name);
+        if (shown.length && shown.every((q) => radioValue(q))) continue;
+      }
       const qs = await openMemberQuestions(name);
       if (qs === "absent") {
         runLog(`Blok I: ${name} tidak tinggal di rumah, dilewati`);
@@ -5311,7 +5316,10 @@
         const cat = questionCategory(q);
         const current = radioValue(q);
         let want;
-        if (!owner) want = "2";
+        if (!owner) {
+          if (decideAll === "empty" && current) continue; // sudah dijawab: biarkan
+          want = "2";
+        }
         else if (noMatch && q0 === qs[0]) want = "1";
         else if (cats && cats.size) {
           if (!cat) {
@@ -5354,7 +5362,8 @@
       const missingAk = inst ? requiredLabels(inst) : [];
       if (missingAk.length)
         warn(`anggota ${name} ada isian kosong: ${missingAk.join("; ")}`);
-      runLog(`Blok I: ${name} memiliki usaha: ${done.join(", ") || "-"}`);
+      if (done.length || decideAll !== "empty")
+        runLog(`Blok I: ${name} memiliki usaha: ${done.join(", ") || "-"}`);
     }
   }
 
@@ -6499,7 +6508,7 @@
       catsByOwner.get(o).add(usahaProfile(i.kbli, i.namaUsaha).blokP);
     });
     try {
-      await setMembersUsaha(excelOwners, false, catsByOwner);
+      if (excelOwners.length) await setMembersUsaha(excelOwners, false, catsByOwner);
     } catch (e) {
       warn(`Blok I: ${e.message}`);
     }
@@ -6569,15 +6578,10 @@
         // Jangan tinggalkan usaha sebelum isian wajib terisi & isian penting benar (terutama usaha baru)
         let missing = requiredLabels(inst);
         let wrong = checkUsaha(inst, item, isNew);
-        for (
-          let pass = 2;
-          (missing.length || wrong.length) && pass <= 3;
-          pass++
-        ) {
-          runLog(
-            `Usaha "${card.name}" belum pas (${missing.length + wrong.length} isian), isi ulang ke-${pass}`,
-          );
-          await sleep(2000);
+        // Isi ulang sekali saja, hanya kalau masih ada isian wajib kosong (sisanya dicatat, Kirim yang menilai)
+        if (missing.length) {
+          runLog(`Usaha "${card.name}" masih ${missing.length} isian kosong, isi ulang sekali`);
+          await sleep(1200);
           notes = await fillUsaha(inst, item, ctx);
           missing = requiredLabels(inst);
           wrong = checkUsaha(inst, item, isNew);
@@ -6659,28 +6663,12 @@
         `kartu usaha belum 100%: ${unfinished.map((c) => `${c.name} (${cardPercent(c)}%)`).join("; ")}`,
       );
 
-    // 5) Blok I lagi: Ya untuk semua penanggung jawab usaha (termasuk usaha lain), Tidak untuk anggota lain.
-    // Baca ulang semua kartu dari nol di sini; setMembersUsaha(decideAll=true) mengubah siapa pun yang
-    // tidak ada di daftar owners menjadi Tidak.
+    // 5) Blok I: pertanyaan "memiliki usaha" yang masih kosong -> Tidak (jawaban yang sudah ada dibiarkan).
+    //    Tidak membuka ulang semua kartu usaha; galat jumlah roster (kalau ada) diperbaiki saat Kirim.
     try {
-      const {
-        owners: allOwners,
-        found,
-        cats,
-        catsByOwner: cardCats,
-      } = await readAllOwners(new Map(), new Map());
-      await syncBlokPTypes(cats);
-      // Jenis usaha dari kartu lama tidak dijadikan Ya (FASIH akan menambah kartu "Usaha <NAMA>" lagi)
-      void cardCats;
-      await setMembersUsaha(
-        Array.from(new Set(allOwners.concat(excelOwners))),
-        true,
-        catsByOwner,
-      );
-      // 6) Jumlah roster usaha di halaman P harus sama dengan usaha Ditemukan/Baru di Blok II
-      await syncRoster(found);
+      await setMembersUsaha([], "empty");
     } catch (e) {
-      warn(`Blok I / roster (akhir): ${e.message}`);
+      warn(`Blok I (akhir): ${e.message}`);
     }
 
     // Simpan catatan ke baris Excel; tetap lanjut ke CATATAN & Kirim
@@ -9836,6 +9824,6 @@
   }, 1000);
 
   console.log(
-    "[FASIH Pertanian Ditemukan v1.1] Aktif. Tombol di kiri bawah (Alt+2).",
+    "[FASIH Pertanian Ditemukan v1.2] Aktif. Tombol di kiri bawah (Alt+2).",
   );
 })();
