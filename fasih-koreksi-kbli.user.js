@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi KBLI & Anomali
 // @namespace    hanif-bps-hst
-// @version      1.6
+// @version      1.7
 // @description  Baca Excel "Pengecekan KBLI" (Edit KBLI = 1), buka tiap dokumen, ganti KBLI akhir ke KBLI Baru di kartu usaha yang tepat, sesuaikan produk & kegiatan utama kalau ada Produk Baru, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" lalu Kirim & Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -30,7 +30,7 @@
 
   const APP = {
     name: "Koreksi KBLI",
-    version: "1.6",
+    version: "1.7",
     title: "Koreksi KBLI & Anomali",
     badge: "KBLI",
     launch: "Koreksi KBLI",
@@ -581,12 +581,18 @@
     const textarea = container.querySelector('textarea, input[type="text"]');
     const toggle = container.querySelector('button[aria-haspopup="dialog"]');
     triggerClick(toggle || textarea);
-    await sleep(W(400));
     if (searchText) {
-      const search = document.querySelector('[role="dialog"] input:not([type="radio"]):not([type="checkbox"])') || textarea;
+      // Modal Master KBLI berat: tunggu kotak cariannya benar-benar tampil, jangan jeda tetap (jeda ikut
+      // dipercepat di mode Turbo/Kilat sehingga kode sempat diketik sebelum modalnya siap)
+      const searchBox = () =>
+        Array.from(document.querySelectorAll('[role="dialog"] input:not([type="radio"]):not([type="checkbox"]), input[cmdk-input]')).find(
+          (el) => visible(el) && !el.closest(OWN),
+        );
+      const search = (await waitFor(searchBox, 6000)) || textarea;
+      await sleep(300);
       if (search) setFieldValue(search, searchText);
-    }
-    const target = await waitFor(() => pick(visibleOptions2()), 8000);
+    } else await sleep(Math.max(400, W(400)));
+    const target = await waitFor(() => pick(visibleOptions2()), 12000);
     if (!target) {
       pressKey("Escape");
       return false;
@@ -648,17 +654,38 @@
   // Pastikan KBLI kartu ini = code. Kalau salah satu saran GenAI (13.g) sudah persis sama, dipakai saja
   // (tidak usah pindah ke Master KBLI, supaya perubahan ke form seminim mungkin). Kalau belum, radio
   // 13.g dipindah ke "Pilih dari Master KBLI" dulu agar kotak pencariannya muncul, baru dipilih di sana.
+  let kbliFail = "";
   async function setKbliCode(inst, code) {
+    kbliFail = "";
     if (genaiCode(inst) === code) return true;
     let kbliBox = await waitBox("kbli", inst, 1500);
     if (!kbliBox) {
       const genai = await waitBox("kbli_genai", inst, 3000);
-      if (!genai || !(await setRadio(genai, "999999"))) return false;
-      kbliBox = await waitBox("kbli", inst, 5000);
-      if (!kbliBox) return false;
+      if (!genai) {
+        kbliFail = "isian 13.g Kode KBLI tidak muncul";
+        return false;
+      }
+      // Salah satu saran GenAI kodenya sudah sama -> pilih itu saja
+      const sugg = Array.from(genai.querySelectorAll('input[type="radio"]')).find((r) => {
+        if (r.value === "999999") return false;
+        const l = genai.querySelector(`label[for="${r.id}"]`) || r.closest('[role="group"]');
+        return ((l && l.innerText) || "").match(/\b(\d{5})\b/)?.[1] === code;
+      });
+      if (sugg && (await setRadio(genai, sugg.value))) return true;
+      if (!(await setRadio(genai, "999999"))) {
+        kbliFail = 'pilihan "Pilih dari Master KBLI" di 13.g tidak bisa diklik';
+        return false;
+      }
+      kbliBox = await waitBox("kbli", inst, 8000);
+      if (!kbliBox) {
+        kbliFail = "kotak Master KBLI tidak muncul setelah pilih Master KBLI";
+        return false;
+      }
     }
     if ((dropdownValue(kbliBox) || kbliBox.innerText).includes(code)) return true;
-    return selectKbli(kbliBox, code);
+    if (await selectKbli(kbliBox, code)) return true;
+    kbliFail = `kode ${code} tidak ketemu / tidak bisa dipilih di daftar Master KBLI`;
+    return false;
   }
 
   // Pasangan kata yang disamakan di kegiatan utama saat produk berubah (mis. padi hibrida -> inbrida).
@@ -910,7 +937,7 @@
     const pembelianBefore = pembelianInput0 ? pembelianInput0.value.trim() : "";
     if (t.kbliBaru && code !== t.kbliBaru) {
       if (!(await setKbliCode(inst, t.kbliBaru)))
-        throw new Error(`KBLI ${t.kbliBaru} tidak bisa dipilih (13.g / Master KBLI tidak muncul)`);
+        throw new Error(`KBLI ${t.kbliBaru} tidak bisa dipilih (${kbliFail || "13.g / Master KBLI tidak muncul"})`);
       notes.push(`KBLI ${code || "-"} → ${t.kbliBaru}`);
       changed = true;
       if (parseRupiah(pembelianBefore) > 0 || !pembelianBox0) {
