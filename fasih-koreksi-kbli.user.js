@@ -17,6 +17,10 @@
   const RUN_KEY = "kk_run";
   const AREA_KEY = "kk_area_titles";
   const LIST_KEY = "kk_list_url"; // halaman daftar assignment terakhir yang dibuka (untuk cari lewat filter)
+  // Halaman awal survei SE2026 (daftar assignment) — dipakai sebagai tujuan "pulang" kalau belum pernah
+  // ketahuan LIST_KEY-nya, dan begitu run berhenti (selesai/di-Stop) supaya tidak dibiarkan di halaman
+  // dokumen: dibiarkan lama di sana bisa dianggap sesi "tidak login" oleh FASIH.
+  const HOME_URL = "https://fasih-sm.bps.go.id/app/surveys/a0429e96-51a5-477b-a415-485f9c153004/fd68e454-ba45-4b85-8205-f3bf777ded24/data?page=1&perPage=10";
   const HELPER_KEY = "kk_helper_hidden";
   const HELPER_POS_KEY = "kk_helper_pos"; // posisi panel bantu yang digeser
   const HELPER_MIN_KEY = "kk_helper_min"; // panel bantu diperkecil
@@ -1542,13 +1546,21 @@
   function loginPage() {
     if (Date.now() - loginAt < 1000) return loginLast;
     loginAt = Date.now();
-    if (!document.body || document.querySelector(".fasih-form-sidebar")) return (loginLast = false);
-    if (document.querySelector('input[type="password"]')) return (loginLast = true);
+    // Semua halaman aplikasi (sudah login) ada di bawah /app/... (lihat semua URL dokumen/daftar di
+    // skrip ini) -> selama masih di situ JANGAN PERNAH dianggap halaman login, walau sesaat (pas
+    // pindah halaman / baru dimuat) shell-nya (.fasih-form-sidebar) belum ke-render. Dulu ini salah
+    // deteksi: ada <input type="password"> tersembunyi (bukan form login sungguhan, mis. honeypot
+    // anti-autofill browser) yang ketangkep walau akun masih login -> script dijeda otomatis padahal
+    // tidak logout. Password/teks "masuk" baru dianggap bukti logout kalau memang sudah KELUAR dari /app/.
+    if (!document.body || /^\/app\//.test(location.pathname) || document.querySelector(".fasih-form-sidebar") || isListPage())
+      return (loginLast = false);
+    const pwVisible = Array.from(document.querySelectorAll('input[type="password"]')).some(visible);
     const text = Array.from(document.body.children)
       .filter((el) => !/^kk-/.test(el.id || "") && !/^(SCRIPT|STYLE)$/.test(el.tagName))
       .map((el) => el.innerText || "")
       .join(" ");
-    return (loginLast = /\b(masuk|login|sign in)\b/i.test(text) && /\b(sso|nip|kata sandi|password|single sign)\b/i.test(text));
+    const textHints = /\b(masuk|login|sign in)\b/i.test(text) && /\b(sso|nip|kata sandi|password|single sign)\b/i.test(text);
+    return (loginLast = pwVisible || textHints);
   }
   function beepAlert() {
     try {
@@ -1663,8 +1675,8 @@
     try {
       if (!run.cur) {
         if (Date.now() < (run.nextAt || 0)) return;
-        const listUrl = loadJson(LIST_KEY, "");
-        if (listUrl && Date.now() - (run.hbAt || 0) > HEARTBEAT_MS && !isListPage()) {
+        const listUrl = loadJson(LIST_KEY, "") || HOME_URL;
+        if (Date.now() - (run.hbAt || 0) > HEARTBEAT_MS && !isListPage()) {
           run.hbAt = Date.now();
           saveRun(run);
           log("↻ Singgah ke halaman daftar assignment (jaga sesi tetap aktif)");
@@ -1720,13 +1732,8 @@
         return setStage(conf.checkFirst ? "check" : "edit");
       }
       case "find": {
-        const listUrl = loadJson(LIST_KEY, "");
+        const listUrl = loadJson(LIST_KEY, "") || HOME_URL;
         if (!isListPage()) {
-          if (!listUrl)
-            throw Object.assign(
-              new Error("link Excel tidak membuka dokumen yang benar & halaman daftar assignment belum dikenal — buka halaman daftar assignment sekali, lalu ulangi"),
-              { soft: true },
-            );
           if (location.pathname !== new URL(listUrl).pathname) {
             const r = loadRun();
             if (Date.now() - (r.navAt || 0) < 8000) return;
@@ -1870,7 +1877,7 @@
     saveRun(r);
     log(on ? "⏸ Dijeda — klik Lanjut untuk meneruskan" : "▶ Dilanjutkan");
   }
-  function stopRun(msg) {
+  function stopRun(msg, goHome = true) {
     const r = loadRun();
     r.running = false;
     r.paused = null;
@@ -1880,6 +1887,10 @@
     log(msg || "Dihentikan.");
     updateHud();
     if (/Selesai/.test(msg || "")) toast(`Selesai — ${r.processed || 0} dokumen diproses.`);
+    // Jangan dibiarkan di halaman dokumen terakhir setelah berhenti -> FASIH bisa menganggap sesi
+    // "tidak login" kalau dibiarkan lama di sana. goHome=false dipakai alur yang sengaja langsung
+    // pindah ke dokumen lain sendiri (mis. "Kerjakan manual"), supaya tidak dobel navigasi.
+    if (goHome && !isListPage()) location.href = HOME_URL;
   }
 
   // =========================================================================
@@ -2263,7 +2274,7 @@
       const man = e.target.closest("[data-manual]");
       if (man) {
         e.preventDefault();
-        if (loadRun().running) stopRun("Dihentikan untuk dikerjakan manual.");
+        if (loadRun().running) stopRun("Dihentikan untuk dikerjakan manual.", false);
         try {
           localStorage.removeItem(HELPER_KEY);
         } catch (err) {}
