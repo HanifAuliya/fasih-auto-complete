@@ -1048,204 +1048,17 @@
   }
 
   // =========================================================================
-  // CARI LEWAT FILTER di halaman daftar assignment (kalau link Excel tidak membuka dokumen yang benar)
+  // HALAMAN DAFTAR ASSIGNMENT (dipakai heartbeat & deteksi halaman login — bukan untuk cari dokumen;
+  // kalau link Excel tidak membuka dokumen yang benar, dokumen itu langsung dianggap gagal/link salah,
+  // tidak dicari manual lewat filter)
   // =========================================================================
   const REVIEW_HREF = /\/app\/assignment\/[0-9a-f-]{36}\/[0-9a-f-]{36}/i;
   const searchInput = () => document.querySelector('input[placeholder^="Cari"]:not([cmdk-input])');
-  const tableText = () => (document.querySelector("table tbody") || {}).innerText || "";
   const isListPage = () =>
     !REVIEW_HREF.test(location.pathname) &&
     !/\/app\/assignment-detail\//i.test(location.pathname) &&
     !!searchInput() &&
     !!document.querySelector("table thead");
-  function setInputValue(input, value) {
-    input.focus();
-    const proto = input.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(proto, "value").set.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-  }
-  function isLoading() {
-    const spin = Array.from(document.querySelectorAll('[class*="animate-spin"], [class*="skeleton"], [aria-busy="true"]')).some(
-      (el) => visible(el) && !el.closest(OWN),
-    );
-    return spin || /loading|memuat/i.test(tableText());
-  }
-  async function waitTableSettled(before) {
-    if (before !== undefined) await waitFor(() => tableText() !== before || isLoading(), 6000);
-    let start = Date.now();
-    let last = tableText();
-    let stableSince = Date.now();
-    while (Date.now() - start < 30000 && !stopRequested) {
-      const held = await sleep(250);
-      start += held;
-      stableSince += held;
-      const now = tableText();
-      if (now !== last || isLoading()) {
-        last = now;
-        stableSince = Date.now();
-      } else if (Date.now() - stableSince >= W(1200)) break;
-    }
-    await sleep(W(300));
-  }
-  function parseOption(text) {
-    const m = String(text || "").trim().match(/^\[?(\d+)\]?\s*(.*)$/);
-    return m ? { code: m[1], name: m[2].trim() } : { code: "", name: String(text || "").trim() };
-  }
-  const filterButton = () =>
-    Array.from(document.querySelectorAll('button[aria-haspopup="dialog"]')).find(
-      (b) => b.querySelector(".tabler-icon-filter") && !b.closest("th"),
-    );
-  function fieldButton(label) {
-    const lab = Array.from(document.querySelectorAll("label")).find((l) => squash(l.innerText) === squash(label) && !l.closest(OWN));
-    return lab ? lab.parentElement.querySelector('button[role="combobox"]') : null;
-  }
-  const visibleOptions = () =>
-    Array.from(document.querySelectorAll('[cmdk-item], [role="option"]')).filter((el) => visible(el) && !el.closest(OWN) && el.innerText.trim());
-  const optionText = (el) => el.getAttribute("data-value") || el.innerText;
-  const shownText = (btn) => ((btn && (btn.querySelector("span") || btn).innerText) || "").trim();
-
-  async function pickByName(getBtn, name, label) {
-    if (!name) return false;
-    const btn = getBtn() || (await waitFor(getBtn, 8000));
-    if (!btn) return false;
-    const want = normalize(name);
-    const same = (t) => normalize(parseOption(t).name) === want || normalize(t) === want;
-    if (same(shownText(btn))) return true;
-    triggerClick(btn);
-    await waitFor(() => visibleOptions().length, 6000);
-    let count = -1;
-    for (let i = 0; i < 8 && visibleOptions().length !== count; i++) {
-      count = visibleOptions().length;
-      await sleep(W(200));
-    }
-    const find = () => visibleOptions().find((el) => same(optionText(el)) || same(el.innerText));
-    let target = find();
-    const input = document.querySelector("input[cmdk-input]");
-    if (!target && input) {
-      setInputValue(input, name);
-      target = await waitFor(find, 4000);
-    }
-    if (!target) {
-      pressKey("Escape");
-      await sleep(300);
-      log(`⚠ filter ${label} "${name}" tidak ada di pilihan, dilewati`);
-      return false;
-    }
-    triggerClick(target);
-    await waitFor(() => same(shownText(getBtn())), 5000);
-    await sleep(W(500));
-    return true;
-  }
-  async function clearCombo(getBtn) {
-    const btn = getBtn();
-    if (!btn || !parseOption(shownText(btn)).code) return;
-    triggerClick(btn);
-    await waitFor(() => visibleOptions().length, 4000);
-    const all = visibleOptions().find((el) => !parseOption(el.innerText).code || /^(SEMUA|ALL|-+)$/i.test(el.innerText.trim()));
-    if (all) triggerClick(all);
-    else pressKey("Escape");
-    await sleep(W(400));
-  }
-  async function applyFilterNames(item, withSls) {
-    const btn = filterButton();
-    if (!btn) return log("⚠ tombol Filter tidak ada, langsung cari nama");
-    const before = tableText();
-    if (!fieldButton("KECAMATAN")) {
-      triggerClick(btn);
-      if (!(await waitFor(() => fieldButton("KECAMATAN"), 6000))) return log("⚠ isian Filter tidak muncul, langsung cari nama");
-    }
-    if (await pickByName(() => fieldButton("KECAMATAN"), item.kec, "Kecamatan"))
-      if (await pickByName(() => fieldButton("DESA"), item.desa, "Desa"))
-        if (fieldButton("SLS")) {
-          if (withSls) await pickByName(() => fieldButton("SLS"), item.sls, "SLS");
-          else await clearCombo(() => fieldButton("SLS"));
-        }
-    const field = fieldButton("KECAMATAN");
-    const scope = (field && field.closest('[role="dialog"]')) || document;
-    const apply = Array.from(scope.querySelectorAll("button")).find((b) => /^(TERAPKAN|APPLY|SIMPAN|TAMPILKAN|OK)$/i.test(b.innerText.trim()));
-    if (apply) triggerClick(apply);
-    else pressKey("Escape");
-    await sleep(400);
-    if (fieldButton("KECAMATAN") && filterButton()) triggerClick(filterButton());
-    await waitTableSettled(before);
-  }
-  async function searchList(query) {
-    const input = searchInput();
-    if (!input) throw new Error('kotak "Cari..." tidak ditemukan');
-    if (input.value.trim().toUpperCase() !== query.toUpperCase()) {
-      const before = tableText();
-      setInputValue(input, query);
-      await sleep(W(300));
-      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
-      await waitTableSettled(before);
-    }
-    return Array.from(document.querySelectorAll("table tbody tr")).filter((tr) => tr.querySelectorAll("td").length > 2);
-  }
-  async function rowLink(tr) {
-    const direct = Array.from(tr.querySelectorAll("a[href]")).find((a) => REVIEW_HREF.test(a.href));
-    if (direct) return direct.href;
-    const links = () => Array.from(document.querySelectorAll("a[href]")).filter((a) => REVIEW_HREF.test(a.href) && !a.closest(OWN));
-    const before = new Set(links().map((a) => a.href));
-    const kodeBtn = tr.querySelector("td button:not([title]):not([aria-haspopup])");
-    if (!kodeBtn) return null;
-    triggerClick(kodeBtn);
-    const a = await waitFor(() => links().find((x) => visible(x) && !before.has(x.href)), 4000);
-    return a ? a.href : null;
-  }
-  // Nama yang dicari: nama usaha utuh, bagian sebelum kurung, dan nama di dalam kurung (biasanya pemilik)
-  function nameQueries(item) {
-    const bku = [];
-    const kel = [];
-    for (const t of item.targets) {
-      const nm = String(t.nama || "").trim();
-      bku.push(nm, nm.split("(")[0]);
-      kel.push((nm.match(/\(([^)]+)\)/) || [])[1]);
-    }
-    const clean = (a) => a.map((x) => String(x || "").replace(/\s+/g, " ").trim()).filter((x) => x.length >= 3);
-    const seen = new Set();
-    return [...clean(bku).map((q) => ({ q, kind: "BKU" })), ...clean(kel).map((q) => ({ q, kind: "keluarga" }))].filter(
-      (x) => !seen.has(normalize(x.q)) && seen.add(normalize(x.q)),
-    );
-  }
-  async function findInList(item) {
-    await waitTableSettled();
-    const queries = nameQueries(item);
-    const cands = [];
-    for (const withSls of item.sls ? [true, false] : [false]) {
-      log(`Cari lewat filter: ${[item.kec, item.desa, withSls ? item.sls : ""].filter(Boolean).join(" › ") || "(tanpa wilayah)"}`);
-      await applyFilterNames(item, withSls);
-      for (const { q, kind } of queries) {
-        const want = normalize(q);
-        const rows = await searchList(q);
-        const exact = rows.filter((tr) => Array.from(tr.querySelectorAll("td")).some((td) => normalize(td.innerText) === want));
-        for (const tr of exact.slice(0, 4)) {
-          const href = await rowLink(tr);
-          pressKey("Escape");
-          if (href && !cands.some((c) => c.href === href)) cands.push({ href, q, kind });
-        }
-        if (exact.length) log(`"${q}" (${kind}): ${exact.length} dokumen di daftar`);
-      }
-      if (cands.length) break;
-      if (withSls) log(`Tidak ada di ${item.sls}, cari di seluruh desa ${item.desa}`);
-    }
-    if (!cands.length)
-      throw Object.assign(new Error(`tidak ketemu di daftar (BKU maupun keluarga; cari: ${queries.map((x) => x.q).join(" / ")})`), { soft: true });
-    return cands.slice(0, 6);
-  }
-  const hasNextCand = (item) => !!item.findCands && (item.findIdx || 0) + 1 < item.findCands.length;
-  function openCandidate(item, idx) {
-    const c = item.findCands[idx];
-    const m = c.href.match(/\/app\/assignment\/([0-9a-f-]{36})\/([0-9a-f-]{36})/i);
-    updateItem(item.id, { findIdx: idx, docId: m[2].toLowerCase(), prefix: m[1].toLowerCase(), url: c.href, foundBy: "filter", foundAs: `${c.kind} "${c.q}"` });
-    log(`Buka ${c.kind} "${c.q}" (kandidat ${idx + 1}/${item.findCands.length})`);
-    setStage("open");
-    const r = loadRun();
-    r.navAt = Date.now();
-    saveRun(r);
-    location.href = c.href;
-  }
-  const needFind = (why) => Object.assign(new Error(why), { needFind: true });
 
   // ---------- Review -> Edit (revoke bila perlu) ----------
   async function reviewToEdit() {
@@ -1534,7 +1347,7 @@
     ["submit", "Kirim"],
     ["approve", "Approve"],
   ];
-  const STEP_LABEL = { ...Object.fromEntries(STEPS), find: "Cari via filter" };
+  const STEP_LABEL = Object.fromEntries(STEPS);
   const STAGE_TIMEOUT_MS = 4 * 60 * 1000;
   const HEARTBEAT_MS = 5 * 60 * 1000; // singgah ke halaman daftar tiap segini, jaga sesi SSO tetap aktif
   let busy = false;
@@ -1613,10 +1426,7 @@
     const r = loadRun();
     if (Date.now() - (r.navAt || 0) < 4000) return false;
     const tries = (r.cur && r.cur.navTries) || 0;
-    if (tries >= 4) {
-      if (!item.searched || hasNextCand(item)) throw needFind("link tidak membuka dokumen");
-      throw new Error("dokumen tidak bisa dibuka (cek link / akses akun)");
-    }
+    if (tries >= 4) throw Object.assign(new Error("link tidak benar / dokumen tidak bisa dibuka (cek link di Excel / akses akun)"), { soft: true });
     r.cur.navTries = tries + 1;
     r.navAt = Date.now();
     saveRun(r);
@@ -1648,8 +1458,6 @@
       .join(" · ");
 
   function finishItem(id, status, reason) {
-    const it = loadQueue().find((q) => q.id === id);
-    if (it && it.foundBy === "filter") reason += ` · dokumen dicari lewat filter (${it.foundAs || "-"})`;
     updateItem(id, { status, reason, doneAt: new Date().toISOString() });
     const r = loadRun();
     r.cur = null;
@@ -1695,19 +1503,10 @@
       if (Date.now() - (run.phaseAt || 0) > STAGE_TIMEOUT_MS)
         return finishItem(item.id, "red", `macet di tahap "${STEP_LABEL[cur.stage] || cur.stage}"`);
       try {
-        if (cur.stage !== "find" && forbiddenPage()) throw forbiddenError();
+        if (forbiddenPage()) throw forbiddenError();
         await runStage(run, cur, item);
       } catch (e) {
         console.error(`[${APP.name}]`, e);
-        const untouched = !cur.revoked && ["open", "check", "edit"].includes(cur.stage);
-        if ((e.needFind || e.forbidden) && untouched && !item.searched) {
-          log(`⚠ ${e.forbidden ? "halaman Forbidden" : e.message} → cari dokumen lewat filter`);
-          return setStage("find");
-        }
-        if ((e.needFind || e.forbidden) && untouched && hasNextCand(item)) {
-          log(`⚠ ${e.forbidden ? "halaman Forbidden" : e.message} → coba kandidat berikutnya`);
-          return openCandidate(item, (item.findIdx || 0) + 1);
-        }
         if (e.forbidden) {
           const edited = cur.revoked || ["fill", "anomali", "submit"].includes(cur.stage) ? " (dokumen sempat dibuka edit, cek manual)" : "";
           return finishItem(item.id, "forbidden", `halaman Forbidden (tidak ada akses), dilewati${edited}`);
@@ -1731,44 +1530,23 @@
         if (!ensureReview(item)) return;
         return setStage(conf.checkFirst ? "check" : "edit");
       }
-      case "find": {
-        const listUrl = loadJson(LIST_KEY, "") || HOME_URL;
-        if (!isListPage()) {
-          if (location.pathname !== new URL(listUrl).pathname) {
-            const r = loadRun();
-            if (Date.now() - (r.navAt || 0) < 8000) return;
-            r.navAt = Date.now();
-            saveRun(r);
-            log("Buka halaman daftar assignment");
-            location.href = listUrl;
-            return;
-          }
-          if (!(await waitFor(isListPage, 20000))) throw new Error("halaman daftar assignment tidak termuat");
-        }
-        updateItem(item.id, { searched: true, findCands: null, findIdx: 0 });
-        const cands = await findInList(item);
-        const fresh = updateItem(item.id, { findCands: cands });
-        return openCandidate(fresh, 0);
-      }
       case "check": {
         if (!ensureReview(item)) return;
         try {
           const { results, notes } = await scanDoc(item, false);
           if (results.length && results.every((r) => r && r.already))
             return finishItem(item.id, "already", `tidak diubah, sudah sesuai · ${summary(item, results)}`);
-          if (results.every((r) => !r)) {
-            const why = `tidak ada kartu yang sesuai nama_usaha Excel (${notes.join("; ") || "-"})`;
-            if (!item.searched || hasNextCand(item)) throw needFind(why);
-            throw Object.assign(new Error(`${why} — tidak di-revoke, cek manual`), { soft: true });
-          }
-          if (results.some((r) => !r) && item.foundBy === "filter" && hasNextCand(item))
-            throw needFind(`sebagian usaha tidak ada di dokumen ini (${notes.join("; ") || "-"})`);
+          if (results.every((r) => !r))
+            throw Object.assign(
+              new Error(`link tidak benar / tidak ada kartu yang sesuai nama_usaha Excel (${notes.join("; ") || "-"}) — tidak di-revoke, cek manual`),
+              { soft: true },
+            );
           if (results.some((r) => !r)) log(`⚠ cek Review: ${notes.join("; ") || "sebagian kartu belum ketemu"}, lanjut ke Edit`);
           // Selaras posisi dgn targets (null = usaha itu belum ketemu kartunya) — dipakai scanDoc(write=true)
           // nanti biar tahu langsung nama kartu yg cocok, tanpa cocokkan nama dari awal lagi.
           updateItem(item.id, { cardHints: results.map((r) => (r ? r.card : null)) });
         } catch (e) {
-          if (e.needFind || e.forbidden || e.soft) throw e;
+          if (e.forbidden || e.soft) throw e;
           log(`⚠ cek Review gagal (${e.message}), lanjut ke Edit`);
         }
         return setStage("edit");
@@ -2309,8 +2087,6 @@
           if (/yellow|red|tested/.test(x.status)) {
             x.status = "pending";
             x.reason = "";
-            x.searched = false;
-            x.findCands = null;
             n++;
           }
         });
