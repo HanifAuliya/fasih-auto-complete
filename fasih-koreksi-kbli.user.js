@@ -989,25 +989,36 @@
 
     const cards = usahaCards();
     if (!cards.length) throw new Error("tidak ada kartu usaha di Blok II");
+    // Tahap Check (write=false) baru saja mencocokkan nama & menyimpan hasilnya di item.cardHints
+    // (selaras posisi dgn targets). Tahap Fill (write=true) pakai itu langsung kalau masih cocok,
+    // jadi tidak perlu mencocokkan nama dari nol lagi — kartu tetap dibuka & diisi seperti biasa.
+    const hints = write && Array.isArray(item.cardHints) && item.cardHints.length === targets.length ? item.cardHints : null;
     const order = cards
-      .map((c, idx) => ({ idx, score: Math.max(...targets.map((t) => nameMatch(c.name, t.nama))) }))
-      .sort((a, b) => b.score - a.score);
+      .map((c, idx) => ({ idx, score: Math.max(...targets.map((t) => nameMatch(c.name, t.nama))), hinted: !!(hints && hints.includes(c.name)) }))
+      .sort((a, b) => (b.hinted ? 1 : 0) - (a.hinted ? 1 : 0) || b.score - a.score);
     log(`${cards.length} kartu usaha di "${area.title}", ${targets.length} target dari Excel`);
     const tried = new Set(); // target yang sudah ketemu kartunya (walau akhirnya gagal diisi -> bukan "tidak cocok")
     let first = true;
     for (const o of order) {
       if (results.every(Boolean)) break;
-      if (o.score < NAME_OK) continue;
+      if (o.score < NAME_OK && !o.hinted) continue;
       if (!first) await goSection(area.title, onCardList, true);
       first = false;
       const card = usahaCards()[o.idx];
       if (!card) continue;
       const inst = await openCard(card);
-      const scored = targets
-        .map((t, i) => ({ i, s: nameMatch(card.name, t.nama) }))
-        .filter((x) => !results[x.i])
-        .sort((a, b) => b.s - a.s);
-      const best = scored[0];
+      let best = null;
+      if (hints) {
+        const hi = targets.findIndex((t, i) => hints[i] && hints[i] === card.name && !results[i]);
+        if (hi >= 0) best = { i: hi, s: 1 };
+      }
+      if (!best) {
+        const scored = targets
+          .map((t, i) => ({ i, s: nameMatch(card.name, t.nama) }))
+          .filter((x) => !results[x.i])
+          .sort((a, b) => b.s - a.s);
+        best = scored[0];
+      }
       if (!best || best.s < NAME_OK) continue;
       tried.add(best.i);
       const t = targets[best.i];
@@ -1738,7 +1749,9 @@
           if (results.some((r) => !r) && item.foundBy === "filter" && hasNextCand(item))
             throw needFind(`sebagian usaha tidak ada di dokumen ini (${notes.join("; ") || "-"})`);
           if (results.some((r) => !r)) log(`⚠ cek Review: ${notes.join("; ") || "sebagian kartu belum ketemu"}, lanjut ke Edit`);
-          updateItem(item.id, { cardHints: results.filter(Boolean).map((r) => r.card) });
+          // Selaras posisi dgn targets (null = usaha itu belum ketemu kartunya) — dipakai scanDoc(write=true)
+          // nanti biar tahu langsung nama kartu yg cocok, tanpa cocokkan nama dari awal lagi.
+          updateItem(item.id, { cardHints: results.map((r) => (r ? r.card : null)) });
         } catch (e) {
           if (e.needFind || e.forbidden || e.soft) throw e;
           log(`⚠ cek Review gagal (${e.message}), lanjut ke Edit`);
@@ -1972,9 +1985,9 @@
       .kk-help { left:auto; right:16px; transform:none; width:min(400px,94vw); z-index:1000001; }
       .kk-help .kk-pill { background:color-mix(in srgb,var(--c) 30%,transparent); color:#fff; }
       .kk-help .kk-row { margin-top:6px; }
-      .kk-help .line { font-size:12px; margin-top:4px; }
-      .kk-help .line .o { color:#9aa0c3; text-decoration:line-through; }
-      .kk-help .line .n { color:#fff; font-weight:650; }
+      .kk-hud .line { font-size:12px; margin-top:4px; }
+      .kk-hud .line .o { color:#9aa0c3; text-decoration:line-through; }
+      .kk-hud .line .n { color:#fff; font-weight:650; }
       .kk-help .kk-btn:disabled { opacity:.4; }
       .kk-hud .top { cursor:move; user-select:none; touch-action:none; }
       .kk-hud .top .grip { color:#7d83a8; font-size:14px; line-height:1; }
@@ -2480,6 +2493,23 @@
     return pool.find((x) => card.code === x.kbliBaru) || pool.find((x) => card.code === x.kbliLama) || (t.length === 1 ? t[0] : null);
   }
 
+  // Baris "apa yang diubah" per usaha (KBLI/produk/kegiatan utama lama → baru) — dipakai di panel
+  // bantu manual DAN di bar progres saat berjalan otomatis, supaya keduanya nunjukin info yang sama.
+  function diffRows(q, card, t) {
+    return q.targets
+      .map((x) => {
+        const now = card && t === x ? card.code : null;
+        const ok = now !== null && (!x.kbliBaru || now === x.kbliBaru);
+        const kbliLine = x.kbliBaru
+          ? `<div class="line">KBLI: <span class="o">${esc(x.kbliLama || "-")}</span> → <span class="n">${esc(x.kbliBaru)}</span>${now === null ? "" : ok ? " ✓" : ` (sekarang ${esc(now || "-")})`}</div>`
+          : `<div class="line">KBLI: <span class="n">tetap</span> (tidak diubah)${now ? ` · sekarang ${esc(now)}` : ""}</div>`;
+        const produkLine = x.produkBaru ? `<div class="line">Produk: <span class="o">${esc(x.produkLama)}</span> → <span class="n">${esc(x.produkBaru)}</span></div>` : "";
+        const kegLine = x.kegUtamaBaru ? `<div class="line">Keg. utama: <span class="o">${esc(x.kegUtamaLama)}</span> → <span class="n">${esc(x.kegUtamaBaru)}</span></div>` : "";
+        return `<div class="doc" style="margin-top:8px">${esc(x.nama)}</div>${kbliLine}${produkLine}${kegLine}`;
+      })
+      .join("");
+  }
+
   // Panel bantu & bar progres bisa digeser (tarik bagian judul) & posisinya diingat;
   // klik dua kali judul = kembali ke tempat semula
   function placeEl(el, key) {
@@ -2556,18 +2586,7 @@
     helpSig = sig;
     const st = STATUS[q.status] || STATUS.pending;
     const t = card ? targetFor(q, card) : null;
-    const rows = q.targets
-      .map((x) => {
-        const now = card && t === x ? card.code : null;
-        const ok = now !== null && (!x.kbliBaru || now === x.kbliBaru);
-        const kbliLine = x.kbliBaru
-          ? `<div class="line">KBLI: <span class="o">${esc(x.kbliLama || "-")}</span> → <span class="n">${esc(x.kbliBaru)}</span>${now === null ? "" : ok ? " ✓" : ` (sekarang ${esc(now || "-")})`}</div>`
-          : `<div class="line">KBLI: <span class="n">tetap</span> (tidak diubah)${now ? ` · sekarang ${esc(now)}` : ""}</div>`;
-        const produkLine = x.produkBaru ? `<div class="line">Produk: <span class="o">${esc(x.produkLama)}</span> → <span class="n">${esc(x.produkBaru)}</span></div>` : "";
-        const kegLine = x.kegUtamaBaru ? `<div class="line">Keg. utama: <span class="o">${esc(x.kegUtamaLama)}</span> → <span class="n">${esc(x.kegUtamaBaru)}</span></div>` : "";
-        return `<div class="doc" style="margin-top:8px">${esc(x.nama)}</div>${kbliLine}${produkLine}${kegLine}`;
-      })
-      .join("");
+    const rows = diffRows(q, card, t);
     const nameWarn = card && t && card.name && nameMatch(card.name, t.nama) < NAME_OK ? ` ⚠ nama di kartu "${esc(card.name)}" beda dengan Excel` : "";
     const hint = !editing
       ? "Klik Edit (revoke kalau perlu), lalu buka kartu usahanya."
@@ -2701,7 +2720,9 @@
     const limited = rateLimited();
     const total = run.total || 0;
     const done = run.processed || 0;
-    const sig = JSON.stringify([run.cur, run.paused, run.logs, limited, done, run.testMode, run.hold, hudMini]);
+    const card = it ? openCardNow() : null;
+    const t = it && card ? targetFor(it, card) : null;
+    const sig = JSON.stringify([run.cur, run.paused, run.logs, limited, done, run.testMode, run.hold, hudMini, card && card.code, card && card.name]);
     if (sig === hudSig) return;
     hudSig = sig;
     hud.innerHTML = `
@@ -2726,6 +2747,7 @@
       }
       ${limited ? `<div class="doc wait">⛔ Server membatasi (429) — lanjut otomatis ${new Date(rateInfo().until).toLocaleTimeString("id-ID")}</div>` : ""}
       ${it ? `<div class="doc">▶ ${esc(it.targets.map((t) => t.nama).join(" + "))} <span class="dim">· ${esc([it.desa, it.sls].filter(Boolean).join(" · "))}</span></div>` : ""}
+      ${it ? diffRows(it, card, t) : ""}
       ${it ? `<div class="steps">${STEPS.map(([k, l], i) => `<div class="st ${i < iNow ? "done" : i === iNow ? "now" : ""}">${i < iNow ? "✓ " : ""}${l}</div>`).join("")}</div>` : ""}
       <div class="log">${(run.logs || []).map((l) => `<div>${esc(l)}</div>`).join("") || "<div>…</div>"}</div>
       <div class="bar"><i style="width:${total ? Math.min(100, (100 * done) / total) : 0}%"></i></div>`;
