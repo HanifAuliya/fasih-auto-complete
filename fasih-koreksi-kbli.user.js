@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi KBLI & Anomali
 // @namespace    hanif-bps-hst
-// @version      1.5
+// @version      1.6
 // @description  Baca Excel "Pengecekan KBLI" (Edit KBLI = 1), buka tiap dokumen, ganti KBLI akhir ke KBLI Baru di kartu usaha yang tepat, sesuaikan produk & kegiatan utama kalau ada Produk Baru, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" lalu Kirim & Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -30,7 +30,7 @@
 
   const APP = {
     name: "Koreksi KBLI",
-    version: "1.5",
+    version: "1.6",
     title: "Koreksi KBLI & Anomali",
     badge: "KBLI",
     launch: "Koreksi KBLI",
@@ -1391,9 +1391,19 @@
       /* abaikan kalau audio diblokir browser */
     }
   }
+  // Dianggap logout hanya kalau tanda halaman login terus ada >= 10 detik (bukan sesaat waktu pindah
+  // halaman / redirect), dan begitu halaman aplikasi FASIH (/app/...) tampil lagi, lanjut sendiri.
+  const LOGIN_CONFIRM_MS = 10000;
+  let loginSince = 0;
+  const appAlive = () =>
+    !!document.body &&
+    /^\/app\//.test(location.pathname) &&
+    (!!document.querySelector(".fasih-form-sidebar") || isListPage() || document.body.innerText.trim().length > 200);
   function haltForLogout() {
     const r = loadRun();
     if (!r.running || r.hold) return;
+    if (!loginSince) loginSince = Date.now();
+    if (Date.now() - loginSince < LOGIN_CONFIRM_MS) return;
     r.hold = { at: Date.now(), reason: "logout" };
     saveRun(r);
     log("⏸ Dijeda otomatis — sesi FASIH berakhir (logout). Login ulang, lalu klik ▶ Lanjut. Progres tidak hilang.");
@@ -1476,8 +1486,15 @@
 
   async function tick() {
     const run = loadRun();
+    // Dijeda karena "logout" tapi halaman aplikasi FASIH tampil lagi (masih login) -> lanjut otomatis
+    if (run.running && run.hold && run.hold.reason === "logout" && appAlive()) {
+      loginSince = 0;
+      log("🔓 Sesi FASIH aktif lagi — lanjut otomatis");
+      return setHold(false);
+    }
     if (!run.running || busy || rateLimited() || run.paused || run.hold) return;
     if (loginPage()) return haltForLogout();
+    loginSince = 0;
     busy = true;
     stopRequested = false;
     try {
