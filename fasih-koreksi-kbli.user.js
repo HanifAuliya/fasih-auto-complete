@@ -771,16 +771,22 @@
   }
 
   // Tag catatan yang dipasang di bagian KBLI (13.g) tiap kartu yang diproses skrip ini, sebagai jejak
-  // bahwa kartu itu sudah dicek/dikoreksi lewat prosedur Pengecekan KBLI.
-  const KBLI_CATATAN_TAG = "#DC_01";
+  // bahwa kartu itu sudah dicek/dikoreksi lewat prosedur Pengecekan KBLI. Teksnya tetap, selalu "#1"
+  // persis untuk semua dokumen (bukan nomor urut apa pun).
+  const KBLI_CATATAN_TAG = "#1";
+  // Skrip koreksi lain (R.27, Gaji, NTB, dst) punya tag sendiri berpola #DC_xx. Kalau salah satu dari
+  // itu sudah ada di thread 13.g, kartu ini dianggap sudah pernah "dicek" oleh proses koreksi (apa pun
+  // skripnya) -> tidak usah tambah #1 lagi di atasnya.
+  const DC_TAG_RE = /^#DC_[A-Z0-9]+$/;
   // Tombol "Catatan" ada di tiap rincian (desktop/mobile beda elemen, cuma satu yang kelihatan).
   // Kotak catatannya sendiri muncul sebagai popover terpisah (bukan anak dari kbli_genai/kbli), jadi
   // dicari dari seluruh halaman lewat placeholder-nya, bukan dibatasi ke dalam kontainer KBLI.
   // Catatan di FASIH itu thread chat (bukan satu kotak nilai): kotak "Tambah catatan di sini..." SELALU
   // kosong (itu kotak ketik pesan baru), catatan yang sudah ada muncul sebagai pesan-pesan di ATAS kotak
-  // itu. Begitu terkirim, pesan tidak bisa dihapus. Pesan lain (dari petugas lain, soal hal lain) tidak
-  // masalah dibiarkan apa adanya -> yang dicegah HANYA mengirim tag yang sama (#DC_01) dua kali.
-  // Hasil: { found } = tombol Catatan tidak ketemu; { found: true, added, alreadyTagged }.
+  // itu. Begitu terkirim, pesan tidak bisa dihapus. Pesan lain (dari petugas lain, soal hal lain, atau
+  // pagar+angka lain yang bukan tag kita, mis. "#2" dari obrolan biasa) dibiarkan apa adanya -> yang
+  // dicegah HANYA mengirim tag yang sama (persis "#1") atau tag #DC_xx dua kali.
+  // Hasil: { found } = tombol Catatan tidak ketemu; { found: true, added, alreadyTagged, existingTag }.
   async function addKbliCatatan(inst, text) {
     const containers = [box("kbli_genai", inst), box("kbli", inst)].filter(Boolean);
     let btn = null;
@@ -799,9 +805,11 @@
       return { found: false };
     }
     await sleep(W(300)); // thread pesan lama (kalau ada) dimuat sesaat setelah popover terbuka
-    const alreadyTagged = Array.from(document.querySelectorAll('[class*="wrap-break-word"]')).some(
-      (el) => visible(el) && el.textContent.trim() === text,
-    );
+    const existingTag = Array.from(document.querySelectorAll('[class*="wrap-break-word"]'))
+      .filter(visible)
+      .map((el) => el.textContent.trim())
+      .find((msg) => msg === text || DC_TAG_RE.test(msg));
+    const alreadyTagged = !!existingTag;
     let added = false;
     if (!alreadyTagged) {
       setFieldValue(ta, text);
@@ -816,7 +824,7 @@
       }
     }
     closeDialogs();
-    return { found: true, added, alreadyTagged };
+    return { found: true, added, alreadyTagged, existingTag: existingTag || null };
   }
 
   // "Pilih UMKM dalam satu SLS yang sama" yang dibiarkan kosong bikin galat saat Kirim. Kalau memang tidak ada
@@ -960,7 +968,7 @@
     }
     const catatan = await addKbliCatatan(inst, KBLI_CATATAN_TAG);
     if (catatan.added) notes.push(`catatan KBLI: ${KBLI_CATATAN_TAG}`);
-    else if (catatan.found && catatan.alreadyTagged) notes.push(`catatan KBLI dibiarkan, tag ${KBLI_CATATAN_TAG} sudah ada di thread`);
+    else if (catatan.found && catatan.alreadyTagged) notes.push(`catatan KBLI dibiarkan, tag ${catatan.existingTag} sudah ada di thread`);
     else if (!catatan.found) notes.push("tombol Catatan di bagian KBLI tidak ketemu, tag tidak ditambahkan (cek manual)");
     return { changed, already: !changed, summary: notes.join("; ") || "sudah sesuai" };
   }
