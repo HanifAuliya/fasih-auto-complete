@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi Anomali NTB (26.a - 28.b)
 // @namespace    hanif-bps-hst
-// @version      1.11
+// @version      1.12
 // @description  Baca Excel Pengecekan Anomali NTB, buka tiap dokumen, ganti 26.a gaji, 26.b biaya produksi, 26.c biaya pembelian, 26.d biaya operasional, 27.a nilai penjualan dan 28.b aset (dari r28c) = kolom "rXX input" + catatan #DC_04 di tiap rincian yang diubah di kartu usaha yang tepat (nama usaha wajib cocok), lalu Kirim & Approve. Isian yang memang tidak ada di kartu (tergantung KBLI) dilewati bila nilai Excel-nya 0. Link salah/Forbidden: dicari lewat daftar assignment (BKU lalu keluarga). Yang gagal bisa dikerjakan manual lewat panel bantu.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -28,7 +28,7 @@
   // Satu-satunya bagian yang beda antara skrip Koreksi R.27, Koreksi Gaji dan Koreksi NTB; sisanya sama persis.
   const APP = {
     name: "Koreksi NTB",
-    version: "1.11",
+    version: "1.12",
     title: "Koreksi Anomali NTB",
     badge: "NTB",
     launch: "Koreksi NTB",
@@ -95,8 +95,9 @@
   // Isian yang dipakai untuk mengenali kartu (nilai lama/baru harus cocok). null = semua isian di FIELDS.
   // 28.b tidak dipakai: nilai lamanya di Excel (r28c awal) bukan isi 28.b sekarang, jadi cuma diisi.
   const MATCH_KEYS = ["r26a", "r26b", "r26c", "r26d", "r27a"];
-  // Catatan yang ditambahkan di tiap rincian yang nilainya diubah (tombol Catatan). "" = tidak menambah catatan.
-  const NOTE = "#DC_04";
+  // Catatan bawaan yang ditambahkan di tiap rincian yang nilainya diubah (tombol Catatan).
+  // Bisa diganti / dikosongkan di panel (② Pengaturan); kosong = tidak menambah catatan.
+  const NOTE_DEFAULT = "#DC_04";
   // ===== akhir KONFIGURASI =====
 
   const DEFAULT_CONF = {
@@ -104,6 +105,7 @@
     checkFirst: true, // cek dulu di halaman Review: kalau sudah benar, tidak perlu revoke
     approve: true,
     forceOnGalat: false, // galat -> Submit Paksa (default: berhenti, perlu cek)
+    note: NOTE_DEFAULT, // catatan di rincian yang diubah; "" = tanpa catatan
   };
 
   const SPEEDS = [
@@ -260,6 +262,8 @@
   });
   const loadConf = () => ({ ...DEFAULT_CONF, ...loadJson(CONF_KEY, {}) });
   const saveConf = (c) => saveJson(CONF_KEY, c);
+  // Catatan yang sedang dipakai (diatur di panel); kosong = tidak menambah catatan
+  const noteText = () => String(loadConf().note ?? NOTE_DEFAULT).trim();
   const loadRun = () => loadJson(RUN_KEY, { running: false });
   const saveRun = (r) => saveJson(RUN_KEY, r);
 
@@ -1013,7 +1017,15 @@
     if (!(await waitFor(() => !noteDialog(), 4000))) pressKey("Escape");
     await waitFor(() => !noteDialog(), 3000);
   }
-  // Pastikan thread catatan rincian `id` memuat NOTE; kalau sudah ada, tidak ditambah lagi (hindari duplikat)
+  // Tag catatan utuh (bukan potongan): "#1" tidak cocok dengan "#10", "#DC_04" tidak cocok dengan "#DC_045"
+  const hasTag = (text, tag) =>
+    !!tag &&
+    new RegExp(tag.replace(/[^\w#]/g, (ch) => "\\" + ch) + "(?!\\w)", "i").test(text);
+  // Rincian dianggap sudah dicatat kalau thread-nya sudah memuat #DC_04 (catatan lama) ATAU catatan yang
+  // sedang dipasang di panel -> tidak ditambah lagi. Hasil: tag yang ditemukan, atau "".
+  const noteFound = (text) =>
+    [noteText(), NOTE_DEFAULT].find((tag) => hasTag(text, tag)) || "";
+  // Pastikan thread catatan rincian `id` sudah bercatatan; kalau sudah ada, tidak ditambah lagi (hindari duplikat)
   async function ensureNote(id, inst, label) {
     const c = box(id, inst);
     const btn =
@@ -1031,10 +1043,11 @@
         throw new Error(
           `dialog yang terbuka untuk "${head.innerText.trim().slice(0, 40)}"`,
         );
-      if (d.el.innerText.includes(NOTE)) return "ada";
+      const found = noteFound(d.el.innerText);
+      if (found) return `ada:${found}`;
       if (d.ta.disabled || d.ta.readOnly)
         throw new Error("kotak catatan terkunci");
-      setFieldValue(d.ta, NOTE);
+      setFieldValue(d.ta, noteText());
       const save = await waitFor(() => {
         const b = d.el.querySelector('button[title="Simpan"]');
         return b && !b.disabled ? b : null;
@@ -1043,7 +1056,7 @@
       triggerClick(save);
       if (
         !(await waitFor(
-          () => noteDialog() && noteDialog().el.innerText.includes(NOTE),
+          () => noteDialog() && hasTag(noteDialog().el.innerText, noteText()),
           10000,
         ))
       )
@@ -1056,7 +1069,7 @@
   // Catatan di semua rincian yang nilainya diubah (menurut Excel, atau isinya di dokumen tadinya beda).
   // Rincian yang tidak ada di kartu (KBLI) dilewati. Hasil: daftar rincian yang gagal
   async function addNotes(inst, t, cur) {
-    if (!NOTE) return [];
+    if (!noteText()) return [];
     const fails = [];
     for (const [k, id, label] of FIELDS) {
       if (t.old[k] === t.neu[k] && (!cur || cur[k] === t.neu[k])) continue;
@@ -1064,7 +1077,7 @@
       try {
         const r = await ensureNote(id, inst, label);
         log(
-          `Catatan ${label}: ${r === "ada" ? `${NOTE} sudah ada` : `${NOTE} ditambahkan`}`,
+          `Catatan ${label}: ${r.startsWith("ada") ? `${r.slice(4)} sudah ada, tidak ditambah` : `${noteText()} ditambahkan`}`,
         );
       } catch (e) {
         fails.push(`${label} (${e.message})`);
@@ -2239,11 +2252,11 @@
             return finishItem(
               item.id,
               "already",
-              `tidak diubah, sudah sesuai${NOTE ? ` · catatan ${NOTE} ada` : ""} · ${summary(item, results)}`,
+              `tidak diubah, sudah sesuai${noteText() ? ` · catatan ${noteText()} ada` : ""} · ${summary(item, results)}`,
             );
           if (results.every((r) => r && r.state === "already"))
             log(
-              `Nilai sudah sesuai, tapi catatan ${NOTE} belum bisa ditambah di Review → lewat Edit`,
+              `Nilai sudah sesuai, tapi catatan ${noteText()} belum bisa ditambah di Review → lewat Edit`,
             );
           // Tidak ada satu kartu pun yang cocok: kemungkinan link membuka dokumen lain -> cari dulu, jangan revoke
           if (results.every((r) => !r)) {
@@ -2353,7 +2366,7 @@
         }
         const q = loadQueue().find((x) => x.id === item.id) || item;
         const nf = (q.noteFail || []).length
-          ? ` · ⚠ catatan ${NOTE} belum masuk di ${q.noteFail.join(", ")}`
+          ? ` · ⚠ catatan ${noteText()} belum masuk di ${q.noteFail.join(", ")}`
           : "";
         return finishItem(
           item.id,
@@ -2740,6 +2753,10 @@
                 <label class="knt-tog"><input type="checkbox" data-conf="checkFirst" ${conf.checkFirst ? "checked" : ""}><span class="sw"></span><span>Cek dulu di Review<small>Kalau nilainya sudah benar, dokumen tidak di-revoke</small></span></label>
                 <label class="knt-tog"><input type="checkbox" data-conf="approve" ${conf.approve ? "checked" : ""}><span class="sw"></span><span>Approve setelah kirim</span></label>
                 <label class="knt-tog"><input type="checkbox" data-conf="forceOnGalat" ${conf.forceOnGalat ? "checked" : ""}><span class="sw"></span><span>Submit Paksa kalau ada galat<small>Mati: dokumen bergalat ditandai "Perlu cek"</small></span></label>
+                <div style="padding:7px 0;font-size:13px">Catatan di rincian yang diubah
+                  <input data-note-conf value="${esc(conf.note ?? NOTE_DEFAULT)}" placeholder="kosong = tanpa catatan" style="display:block;width:100%;margin-top:6px;border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:13px;outline:none">
+                  <small class="knt-hint" data-note-hint>${noteText() ? `Aktif: "${esc(noteText())}" ditambahkan di tiap rincian yang diubah` : "Mati: tidak menambah catatan"}</small>
+                </div>
               </div>
             </div>
           </div>
@@ -2814,6 +2831,17 @@
           ? ui.selected.add(sel.dataset.sel)
           : ui.selected.delete(sel.dataset.sel);
         renderDynamic(overlay);
+      }
+      const nc = e.target.closest("[data-note-conf]");
+      if (nc) {
+        const c = loadConf();
+        c.note = nc.value.trim();
+        saveConf(c);
+        const h = overlay.querySelector("[data-note-hint]");
+        if (h)
+          h.textContent = c.note
+            ? `Aktif: "${c.note}" ditambahkan di tiap rincian yang diubah`
+            : "Mati: tidak menambah catatan";
       }
       const cf = e.target.closest("[data-conf]");
       if (cf) {
@@ -3398,7 +3426,7 @@
         const noteFail = await addNotes(card.inst, t, card.cur);
         if (noteFail.length)
           alert(
-            `Nilai sudah diganti, tapi catatan ${NOTE} belum masuk di: ${noteFail.join(", ")}`,
+            `Nilai sudah diganti, tapi catatan ${noteText()} belum masuk di: ${noteFail.join(", ")}`,
           );
         updateItem(q.id, {
           result: `${t.nama.split("(")[0].trim()}: ${fmtChange(card.cur, t) || "sudah sesuai"} (manual)`,
