@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Approve (status EDITED BY Admin Kabupaten, dari belakang)
 // @namespace    hanif-bps-hst
-// @version      1.5
+// @version      1.13
 // @description  Tanpa Excel/link: buka halaman data survei dengan filter status "EDITED BY Admin Kabupaten" (100 baris per halaman), ambil dokumen dari halaman & baris PALING BELAKANG (yang depan mungkin masih dikerjakan manual), buka Review lalu langsung Approve (tanpa Edit / Kirim), lalu kembali ke daftar. Dokumen yang gagal di-approve dilewati & dicatat. Mode uji berhenti sebelum Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -17,10 +17,14 @@
   const STATUS_FILTER = "EDITED BY Admin Kabupaten";
   const PER_PAGE = 100;
 
-  const APP = { name: "Submit & Approve", version: "1.5", hotkey: "0", launchBottom: 400 };
+  const APP = { name: "Submit & Approve", version: "1.13", hotkey: "0", launchBottom: 400 };
   const RUN_KEY = "fsa_run";
   const CONF_KEY = "fsa_conf";
   const POS_KEY = "fsa_pos";
+  // Dokumen yang sudah di-approve skrip ini: server FASIH lambat memperbarui daftar, jadi dokumen itu
+  // masih tampil berstatus EDITED beberapa saat. Diingat DONE_KEEP_MS supaya tidak dibuka ulang.
+  const DONE_KEY = "fsa_done";
+  const DONE_KEEP_MS = 6 * 60 * 60 * 1000;
   const PHASE_TIMEOUT_MS = 4 * 60 * 1000;
   // Sekali buka daftar, ambil link Review sekian dokumen dari baris paling bawah, lalu approve
   // satu per satu langsung dari link itu (tidak bolak-balik ke daftar tiap dokumen)
@@ -28,6 +32,10 @@
   // Setelah daftar habis: cek ulang dari halaman 1 sebanyak ini (jeda RECHECK_MS) sebelum berhenti
   const RECHECKS = 2;
   const RECHECK_MS = 30000;
+  // Jaringan lambat: tunggu tombol ✔ / Revoke selama ini, lalu muat ulang halaman Review
+  // sampai RETRIES kali sebelum dokumen dianggap gagal
+  const APPROVE_WAIT_MS = 60000;
+  const RETRIES = 3;
 
   // =========================================================================
   // UTILITAS
@@ -50,6 +58,33 @@
   const saveRun = (r) => saveJson(RUN_KEY, r);
   const loadConf = () => ({ approve: true, testMode: false, limit: 0, ...loadJson(CONF_KEY, {}) });
   const saveConf = (c) => saveJson(CONF_KEY, c);
+  function loadDone() {
+    const d = loadJson(DONE_KEY, {});
+    const now = Date.now();
+    for (const k of Object.keys(d)) if (now - d[k] > DONE_KEEP_MS) delete d[k];
+    return d;
+  }
+  // Daftar dokumen yang ditarik dari tabel (tampil di kotak kendali; yang gagal bisa diulang)
+  const ITEMS_KEY = "fsa_items";
+  const ITEM_STATUS = {
+    antre: { label: "Antre", color: "#6366f1" },
+    done: { label: "Approve", color: "#16a34a" },
+    already: { label: "Sudah approve", color: "#0d9488" },
+    failed: { label: "Gagal", color: "#dc2626" },
+  };
+  const loadItems = () => loadJson(ITEMS_KEY, {});
+  function setItem(kode, patch) {
+    if (!kode) return;
+    const all = loadItems();
+    all[kode] = { ...(all[kode] || { kode }), ...patch, at: Date.now() };
+    saveJson(ITEMS_KEY, all);
+  }
+  function markDone(kode) {
+    if (!kode) return;
+    const d = loadDone();
+    d[kode] = Date.now();
+    saveJson(DONE_KEY, d);
+  }
 
   let stopRequested = false;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -227,18 +262,41 @@
     return false;
   }
 
-  // Link Review dokumen pada satu baris (langsung di baris, atau muncul setelah kodenya diklik)
+  // Klik kode dokumen di tabel -> muncul kartu kecil berisi tombol "Review" (tombol itu dibungkus link
+  // /app/assignment/...). Hasil: alamat Review (string), { button } kalau tombolnya tanpa link, atau null.
+  const reviewBtn = () =>
+    Array.from(document.querySelectorAll("button, a")).find(
+      (b) => visible(b) && !b.closest(OWN) && /^\s*Review\s*$/i.test(b.innerText || ""),
+    ) || null;
+  async function closeReviewCard() {
+    if (!reviewBtn()) return;
+    pressKey("Escape");
+    if (await waitFor(() => !reviewBtn(), 1500)) return;
+    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); // klik di luar kartu
+    await waitFor(() => !reviewBtn(), 1500);
+  }
   async function rowLink(row) {
     const direct = Array.from(row.tr.querySelectorAll("a[href]")).find((a) => REVIEW_HREF.test(a.href));
     if (direct) return direct.href;
-    const links = () =>
-      Array.from(document.querySelectorAll("a[href]")).filter((a) => REVIEW_HREF.test(a.href) && !a.closest(OWN));
-    const before = new Set(links().map((a) => a.href));
-    for (const target of [row.kodeBtn, row.tr.querySelector('[role="checkbox"]'), row.tr]) {
+    await closeReviewCard(); // kartu dari baris sebelumnya ditutup dulu supaya tidak tertukar
+    // Kartu Review bisa muncul di dalam baris tabel itu sendiri, atau melayang di halaman
+    const inRow = () => Array.from(row.tr.querySelectorAll("a[href]")).find((a) => REVIEW_HREF.test(a.href));
+    for (const target of [row.kodeBtn, row.tr]) {
       if (!target) continue;
-      triggerClick(target);
-      const a = await waitFor(() => links().find((x) => visible(x) && !before.has(x.href)), 4000);
-      if (a) return a.href;
+      for (const click of [() => triggerClick(target), () => target.click()]) {
+        click();
+        const mine = () => {
+          const b = reviewBtn();
+          const tr = b && b.closest("tr");
+          return b && (!tr || tr === row.tr) ? b : null;
+        };
+        const got = await waitFor(() => inRow() || mine(), 4000);
+        if (!got) continue;
+        if (got.tagName === "A" && REVIEW_HREF.test(got.href)) return got.href;
+        const a = got.closest("a[href]") || got.querySelector("a[href]");
+        if (a && REVIEW_HREF.test(a.href)) return a.href;
+        return { button: got };
+      }
     }
     return null;
   }
@@ -411,22 +469,57 @@
         .filter((b) => b && visible(b) && !b.disabled && !b.closest(OWN));
       return bs.find((b) => /bg-success/.test(b.className)) || bs[0] || null;
     };
-    const check = await waitFor(findCheck, 25000);
-    if (!check) throw new Error("tombol Approve (✔) tidak aktif");
-    await sleep(600);
-    triggerClick(check);
-    const ok = await waitFor(() => {
+    const revokeBtn = () => buttonByIcon("rotate-clockwise");
+    // Jaringan lambat: tunggu sampai halaman Review benar-benar termuat (tombol ✔ atau Revoke tampil)
+    const check = await waitFor(() => findCheck() || (revokeBtn() ? "already" : null), APPROVE_WAIT_MS);
+    if (check === "already") {
+      await sleep(800); // beri waktu tombol ✔ muncul kalau halamannya masih memuat
+      if (!findCheck()) return "already";
+    }
+    if (!check) throw Object.assign(new Error("tombol Approve (✔) tidak aktif"), { retry: true });
+    // Tombol Konfirmasi di dialog approve (utamakan yang di dalam dialog & berwarna hijau)
+    const findKonf = () => {
       const bs = Array.from(document.querySelectorAll("button")).filter(
-        (b) => visible(b) && !b.disabled && b.innerText.trim().toUpperCase() === "KONFIRMASI" && !b.closest(OWN),
+        (b) => visible(b) && !b.closest(OWN) && /^(KONFIRMASI|YA|APPROVE|SETUJU)\b/i.test(b.innerText.trim()),
       );
-      return bs.find((b) => /bg-success/.test(b.className)) || bs[0] || null;
-    }, 10000);
-    if (!ok) throw new Error("konfirmasi approve tidak muncul");
-    await sleep(300);
-    triggerClick(ok);
-    // Selesai begitu dialog konfirmasi tertutup & tombol ✔ tidak aktif lagi (maks. 6 detik)
-    await waitFor(() => !buttonByText("Konfirmasi") && !findCheck(), 6000);
-    await sleep(500);
+      const pick = (list) => list.find((b) => /bg-success/.test(b.className)) || list[0] || null;
+      return pick(bs.filter(inDialog)) || pick(bs.filter((b) => !findCheck() || b !== findCheck()));
+    };
+    // Berhasil = tombol Revoke tampil, atau dialog sudah tertutup & tombol ✔ hilang
+    const approved = () => !!revokeBtn() || (!findKonf() && !findCheck());
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      if (stopRequested) return;
+      await sleep(600);
+      // Dialog konfirmasi belum ada -> klik ✔ (lagi)
+      if (!findKonf()) {
+        const chk = findCheck();
+        if (!chk) {
+          if (revokeBtn()) return; // sudah ter-approve
+          throw Object.assign(new Error("tombol Approve (✔) tidak aktif"), { retry: true });
+        }
+        if (attempt > 1) log(`Klik ✔ lagi (percobaan ${attempt})`);
+        triggerClick(chk);
+      }
+      const ok = await waitFor(() => {
+        const b = findKonf();
+        return b && !b.disabled ? b : null;
+      }, 15000);
+      if (!ok) continue;
+      await sleep(500); // tunggu animasi dialog selesai supaya klik tidak hilang
+      triggerClick(ok);
+      // Klik dengan event belum tentu diterima -> cadangan klik bawaan kalau dialog masih terbuka
+      if (!(await waitFor(() => !findKonf() || approved(), 3000))) {
+        const again = findKonf();
+        if (again && !again.disabled) again.click();
+      }
+      // Tunggu server (jaringan lambat): dialog tertutup & tombol ✔ hilang / Revoke tampil
+      if (await waitFor(approved, 30000)) {
+        await sleep(500);
+        if (approved()) return;
+      }
+      if (findKonf()) log(`⚠ Konfirmasi belum terkirim, coba lagi (${attempt}/3)`);
+    }
+    throw Object.assign(new Error("konfirmasi approve tidak terpencet / belum tersimpan"), { retry: true });
   }
 
   // =========================================================================
@@ -437,7 +530,16 @@
     const r = loadRun();
     const cur = r.cur || {};
     r.idleChecks = 0; // ada dokumen yang diproses -> hitungan "sudah habis" diulang
-    if (ok) r.done = (r.done || 0) + 1;
+    setItem(cur.kode, {
+      nama: cur.nama,
+      href: cur.href,
+      status: ok ? (/^sudah/.test(reason) ? "already" : "done") : "failed",
+      reason,
+    });
+    if (ok) {
+      r.done = (r.done || 0) + 1;
+      markDone(cur.kode);
+    }
     else {
       r.failed = [...(r.failed || []), { kode: cur.kode, nama: cur.nama, reason }];
       r.skip = [...new Set([...(r.skip || []), cur.kode])];
@@ -504,7 +606,12 @@
         await waitTable();
         await ensureStatusFilter();
         const skip = new Set(run.skip || []);
-        const rows = readRows().filter((r) => (!r.status || isEdited(r.status)) && !skip.has(r.kode));
+        const done = loadDone();
+        const edited = readRows().filter((r) => !r.status || isEdited(r.status));
+        // Sudah di-approve tapi masih tampil EDITED (server belum memperbarui daftar) -> tidak dibuka lagi
+        const stale = edited.filter((r) => done[r.kode]).length;
+        if (stale) log(`${stale} dokumen sudah di-approve tapi masih tampil di daftar (server belum update), dilewati`);
+        const rows = edited.filter((r) => !skip.has(r.kode) && !done[r.kode]);
         if (!rows.length) {
           if (page > 1) {
             log(`Halaman ${page} sudah habis → halaman ${page - 1}`);
@@ -527,11 +634,34 @@
         for (const row of picks) {
           if (stopRequested || !loadRun().running) break;
           const href = await rowLink(row);
-          pressKey("Escape");
-          if (href) batch.push({ kode: row.kode, nama: row.nama, href });
+          if (href && href.button) {
+            // Tombol Review tanpa link: tidak bisa dikumpulkan, klik langsung (kalau antrean masih kosong)
+            if (batch.length) break;
+            triggerClick(href.button);
+            if (!(await waitFor(onReview, 20000))) {
+              const r = loadRun();
+              r.failed = [...(r.failed || []), { kode: row.kode, nama: row.nama, reason: "klik Review tidak membuka dokumen" }];
+              setItem(row.kode, { nama: row.nama, status: "failed", reason: "klik Review tidak membuka dokumen" });
+              r.skip = [...new Set([...(r.skip || []), row.kode])];
+              saveRun(r);
+              return;
+            }
+            log(`▶ ${row.kode} ${row.nama}`);
+            return setPhase("review", { cur: { kode: row.kode, nama: row.nama, href: location.href }, batch: [], confirmed: false });
+          }
+          await closeReviewCard();
+          if (href && batch.some((x) => x.href === href)) {
+            log(`⚠ ${row.kode}: link Review sama dengan dokumen lain di antrean, dilewati dulu`);
+            continue;
+          }
+          if (href) {
+            batch.push({ kode: row.kode, nama: row.nama, href });
+            setItem(row.kode, { nama: row.nama, href, status: "antre", reason: "", page });
+          }
           else {
             const r = loadRun();
             r.failed = [...(r.failed || []), { kode: row.kode, nama: row.nama, reason: "tombol Review tidak muncul di daftar" }];
+            setItem(row.kode, { nama: row.nama, status: "failed", reason: "tombol Review tidak muncul di daftar" });
             r.skip = [...new Set([...(r.skip || []), row.kode])];
             saveRun(r);
           }
@@ -554,17 +684,72 @@
           return log('MODE UJI: siap Approve. Periksa, lalu klik "Approve sekarang" atau "Lewati"');
         }
         log("Approve");
-        await approveDocument();
-        return finishDoc(true, "approve");
+        const res = await approveDocument();
+        return finishDoc(true, res === "already" ? "sudah di-approve (tombol Revoke tampil), dilewati" : "approve");
       }
     } catch (e) {
       console.error(`[${APP.name}]`, e);
       pressKey("Escape");
+      const now = loadRun();
+      // Halaman Review belum termuat sempurna (jaringan lambat) -> muat ulang & coba lagi, bukan langsung gagal
+      if (e.retry && now.cur && (now.cur.tries || 0) + 1 < RETRIES) {
+        now.cur.tries = (now.cur.tries || 0) + 1;
+        now.phaseAt = Date.now();
+        now.navAt = Date.now();
+        saveRun(now);
+        log(`⏳ ${e.message} — jaringan lambat? muat ulang halaman (percobaan ${now.cur.tries + 1}/${RETRIES})`);
+        location.reload();
+        return;
+      }
       if (["list", "probe"].includes(loadRun().phase)) log(`⚠ ${e.message}`);
       else finishDoc(false, e.message);
     } finally {
       busy = false;
     }
+  }
+
+  // Ulangi dokumen yang gagal: yang punya link langsung dibuka & di-approve; yang belum punya link
+  // (tombol Review tidak muncul) cukup dikeluarkan dari daftar dilewati supaya ikut terambil lagi dari tabel.
+  function retryItems(kodes) {
+    const all = loadItems();
+    const list = kodes.map((k) => all[k]).filter(Boolean);
+    if (!list.length) return;
+    const r0 = loadRun();
+    const set = new Set(kodes);
+    const skip = (r0.skip || []).filter((k) => !set.has(k));
+    const failed = (r0.failed || []).filter((f) => !set.has(f.kode));
+    list.forEach((it) => setItem(it.kode, { status: "antre", reason: "diulang" }));
+    const withLink = list.filter((it) => it.href).map((it) => ({ kode: it.kode, nama: it.nama, href: it.href }));
+    if (r0.running) {
+      // Sedang berjalan: masukkan ke depan antrean
+      r0.batch = [...withLink, ...(r0.batch || [])];
+      r0.skip = skip;
+      r0.failed = failed;
+      saveRun(r0);
+      return log(`↻ ${list.length} dokumen dimasukkan lagi ke antrean`);
+    }
+    const conf = loadConf();
+    conf.testMode = false;
+    saveConf(conf);
+    const first = withLink.shift();
+    saveRun({
+      running: true,
+      limit: 0,
+      phase: first ? "review" : "probe",
+      phaseAt: Date.now(),
+      page: r0.page || 1,
+      cur: first || null,
+      batch: withLink,
+      idleChecks: 0,
+      nextAt: 0,
+      done: 0,
+      failed,
+      skip,
+      logs: [],
+      boxOpen: true,
+    });
+    log(`↻ Ulangi ${list.length} dokumen`);
+    if (first) goto(first.href);
   }
 
   function startRun(testMode) {
@@ -608,7 +793,7 @@
       #fsa-box, #fsa-box *, #fsa-launch { box-sizing:border-box; font-family:"Inter",ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif; }
       #fsa-launch { position:fixed; left:16px; z-index:999999; border:none; border-radius:999px; padding:10px 16px 10px 12px; background:linear-gradient(120deg,#0f766e,#0891b2); color:#fff; font:650 13px "Inter",ui-sans-serif,system-ui,sans-serif; cursor:pointer; box-shadow:0 10px 28px rgba(8,145,178,.4); }
       #fsa-launch b { background:rgba(255,255,255,.22); border-radius:7px; padding:2px 6px; font-size:11.5px; margin-right:6px; }
-      #fsa-box { position:fixed; right:16px; bottom:16px; z-index:1000002; width:min(460px,94vw); background:rgba(17,19,36,.94); color:#eef0ff; border-radius:16px; padding:14px 16px; box-shadow:0 20px 50px rgba(10,10,30,.45); font-size:13px; }
+      #fsa-box { position:fixed; right:16px; bottom:16px; z-index:1000002; width:min(900px,96vw); background:rgba(17,19,36,.94); color:#eef0ff; border-radius:16px; padding:14px 16px; box-shadow:0 20px 50px rgba(10,10,30,.45); font-size:13px; }
       #fsa-box .top { display:flex; align-items:center; gap:8px; flex-wrap:wrap; cursor:move; user-select:none; }
       #fsa-box .t { font-weight:700; }
       #fsa-box .m { color:#9aa0c3; font-size:12px; }
@@ -623,11 +808,26 @@
       #fsa-box .log div:last-child { color:#fde68a; }
       #fsa-box .fail { margin-top:8px; max-height:120px; overflow:auto; font-size:12px; color:#fcd34d; }
       #fsa-box .hint { color:#9aa0c3; font-size:11.5px; margin-top:8px; line-height:1.45; }
+      #fsa-box .cols { display:flex; gap:14px; align-items:stretch; }
+      #fsa-box .col-l { flex:1 1 0; min-width:0; }
+      #fsa-box .col-r { flex:1 1 0; min-width:0; display:flex; flex-direction:column; border-left:1px solid rgba(255,255,255,.1); padding-left:14px; }
+      #fsa-box .col-r .empty { margin-top:10px; color:#9aa0c3; font-size:12px; }
+      @media (max-width:760px) { #fsa-box .cols { flex-direction:column; } #fsa-box .col-r { border-left:none; padding-left:0; } }
+      #fsa-box .tabs { display:flex; gap:4px; flex-wrap:wrap; margin-top:10px; }
+      #fsa-box .tabs button { padding:4px 8px; font-size:11.5px; }
+      #fsa-box .tabs button.on { background:#4f46e5; border-color:#4f46e5; }
+      #fsa-box .items { margin-top:6px; max-height:min(360px,55vh); overflow:auto; display:flex; flex-direction:column; gap:4px; }
+      #fsa-box .it { display:flex; gap:6px; align-items:flex-start; background:rgba(255,255,255,.05); border-left:3px solid var(--c); border-radius:8px; padding:5px 8px; font-size:12px; }
+      #fsa-box .it .nm { flex:1; min-width:0; }
+      #fsa-box .it .nm small { display:block; color:#9aa0c3; font-size:11px; }
+      #fsa-box .it .chip { color:var(--c); font-weight:700; font-size:11px; white-space:nowrap; }
+      #fsa-box .it a, #fsa-box .it button { padding:2px 7px; font-size:11.5px; color:#eef0ff; text-decoration:none; }
     `;
     document.head.appendChild(st);
   }
 
   let sig = "";
+  let viewFilter = "all";
   function render() {
     if (!document.body) return;
     ensureStyles();
@@ -655,7 +855,8 @@
       sig = "";
       return;
     }
-    const s = JSON.stringify([run, conf]);
+    const items = Object.values(loadItems()).sort((a, b) => (b.at || 0) - (a.at || 0));
+    const s = JSON.stringify([run, conf, items.length, items[0] && items[0].at, viewFilter]);
     if (s === sig && box) return;
     sig = s;
     if (!box) {
@@ -684,6 +885,7 @@
             : `<button data-a="close" title="Tutup">✕</button>`
         }
       </div>
+      <div class="cols"><div class="col-l">
       <div class="m" style="margin-top:6px">✅ ${run.done || 0} di-approve · ⚠ ${failed.length} dilewati${(run.skip || []).length > failed.length ? ` (+${(run.skip || []).length - failed.length} dari sesi sebelumnya)` : ""}</div>
       ${run.cur ? `<div style="margin-top:6px;font-weight:650">▶ ${esc(run.cur.kode)} ${esc(run.cur.nama || "")}${(run.batch || []).length ? ` <span class="m">· ${run.batch.length} lagi di antrean</span>` : ""}</div>` : ""}
       ${
@@ -700,11 +902,67 @@
             <div class="hint">Membuka daftar data dengan filter <b>${esc(STATUS_FILTER)}</b>, ${PER_PAGE} baris/halaman, lalu mengerjakan dari <b>halaman & baris paling belakang</b>: buka Review → langsung <b>Approve</b> (tanpa Edit / Kirim). Dokumen yang gagal di-approve dilewati & dicatat di bawah. Pintasan: Alt+${APP.hotkey}.</div>`
       }
       <div class="log">${(run.logs || []).map((l) => `<div>${esc(l)}</div>`).join("") || "<div>…</div>"}</div>
-      ${failed.length ? `<div class="fail">${failed.map((f) => `⚠ ${esc(f.kode)} ${esc(f.nama || "")}: ${esc(f.reason)}`).join("<br>")}</div>` : ""}`;
+      </div>
+      <div class="col-r"><div class="t" style="margin-top:8px">📋 Dokumen ditarik</div>${itemsHtml(items) || '<div class="empty">Belum ada dokumen. Daftar terisi saat skrip mengambil link Review dari tabel.</div>'}</div>
+      </div>`;
+  }
+  function itemsHtml(items) {
+    if (!items.length) return "";
+    const n = (k) => items.filter((x) => x.status === k).length;
+    const shown = items.filter((x) => viewFilter === "all" || x.status === viewFilter).slice(0, 200);
+    const tab = (k, l) => `<button data-f="${k}" class="${viewFilter === k ? "on" : ""}">${l} ${k === "all" ? items.length : n(k)}</button>`;
+    return `<div class="tabs">${tab("all", "Semua")}${Object.entries(ITEM_STATUS).map(([k, v]) => tab(k, v.label)).join("")}
+        ${n("failed") ? `<button data-a="retryall" title="Approve ulang semua dokumen yang gagal">↻ Ulangi semua gagal</button>` : ""}
+        <button data-a="csv" title="Unduh daftar sebagai CSV">⬇ CSV</button>
+        <button data-a="clearitems" title="Kosongkan daftar ini (tidak mengubah FASIH)">🗑</button></div>
+      <div class="items">${
+        shown
+          .map((x) => {
+            const st = ITEM_STATUS[x.status] || ITEM_STATUS.antre;
+            return `<div class="it" style="--c:${st.color}"><span class="chip">${st.label}</span>
+              <div class="nm">${esc(x.kode)} ${esc(x.nama || "")}${x.reason ? `<small>${esc(x.reason)}</small>` : ""}</div>
+              ${x.href ? `<a href="${esc(x.href)}" target="_blank" title="Buka di tab baru">↗</a>` : ""}
+              ${x.status === "failed" ? `<button data-retry="${esc(x.kode)}" title="Approve ulang dokumen ini">↻</button>` : ""}</div>`;
+          })
+          .join("") || '<div class="m">Tidak ada dokumen di kategori ini.</div>'
+      }</div>`;
+  }
+  function exportCsv() {
+    const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const rows = Object.values(loadItems()).map((x) =>
+      [x.kode, x.nama, (ITEM_STATUS[x.status] || {}).label || x.status, x.reason, x.href, x.at ? new Date(x.at).toLocaleString("id-ID") : ""]
+        .map(cell)
+        .join(","),
+    );
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(
+      new Blob([String.fromCharCode(0xfeff) + ["kode,nama,status,keterangan,link,waktu", ...rows].join(String.fromCharCode(10))], {
+        type: "text/csv",
+      }),
+    );
+    a.download = `approve-edited-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}.csv`;
+    a.click();
   }
   function onClick(e) {
+    const f = e.target.closest("[data-f]");
+    if (f) {
+      viewFilter = f.dataset.f;
+      sig = "";
+      return render();
+    }
+    const rt = e.target.closest("[data-retry]");
+    if (rt) {
+      retryItems([rt.dataset.retry]);
+      sig = "";
+      return render();
+    }
     const a = e.target.closest("[data-a]")?.dataset.a;
     if (!a) return;
+    if (a === "retryall")
+      retryItems(Object.values(loadItems()).filter((x) => x.status === "failed").map((x) => x.kode));
+    if (a === "csv") exportCsv();
+    if (a === "clearitems" && confirm("Kosongkan daftar dokumen di kotak ini? (status di FASIH tidak berubah)"))
+      saveJson(ITEMS_KEY, {});
     if (a === "start") startRun(false);
     if (a === "test") startRun(true);
     if (a === "stop") stopRun("Dihentikan.");
