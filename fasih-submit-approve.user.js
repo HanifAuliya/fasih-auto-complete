@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         FASIH Submit & Approve (status EDITED BY Admin Kabupaten, dari belakang)
+// @name         FASIH Approve (status EDITED BY Admin Kabupaten, dari belakang)
 // @namespace    hanif-bps-hst
-// @version      1.0
-// @description  Tanpa Excel/link: buka halaman data survei dengan filter status "EDITED BY Admin Kabupaten" (100 baris per halaman), ambil dokumen dari halaman & baris PALING BELAKANG (yang depan mungkin masih dikerjakan manual), buka Review -> Edit -> Kirim -> Approve, lalu kembali ke daftar. Dokumen bergalat dilewati & dicatat. Mode uji berhenti sebelum Kirim.
+// @version      1.1
+// @description  Tanpa Excel/link: buka halaman data survei dengan filter status "EDITED BY Admin Kabupaten" (100 baris per halaman), ambil dokumen dari halaman & baris PALING BELAKANG (yang depan mungkin masih dikerjakan manual), buka Review lalu langsung Approve (tanpa Edit / Kirim), lalu kembali ke daftar. Dokumen yang gagal di-approve dilewati & dicatat. Mode uji berhenti sebelum Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
 // @grant        none
@@ -17,7 +17,7 @@
   const STATUS_FILTER = "EDITED BY Admin Kabupaten";
   const PER_PAGE = 100;
 
-  const APP = { name: "Submit & Approve", version: "1.0", hotkey: "0", launchBottom: 400 };
+  const APP = { name: "Submit & Approve", version: "1.1", hotkey: "0", launchBottom: 400 };
   const RUN_KEY = "fsa_run";
   const CONF_KEY = "fsa_conf";
   const POS_KEY = "fsa_pos";
@@ -454,37 +454,18 @@
         return goto(href);
       }
       const cur = run.cur || {};
-      if (run.phase === "review") {
-        if (onEdit()) return setPhase("submit");
+      // Langsung Approve di halaman Review (tanpa Edit, tanpa Kirim, tanpa toggle anomali)
+      if (run.phase === "review" || run.phase === "approve") {
         if (!onReview()) return goto(cur.href);
-        log("Buka Edit");
-        await reviewToEdit();
-        return setPhase("submit");
-      }
-      if (run.phase === "submit") {
-        if (!onEdit()) {
-          if (run.submitClicked && onReview()) return setPhase("approve");
-          return setPhase("review");
-        }
-        if (run.submitClicked) {
-          await backToReview(20000); // halaman dimuat ulang setelah Kirim: jangan kirim dua kali
-          return setPhase("approve");
-        }
         if (loadConf().testMode && !run.confirmed) {
           const r = loadRun();
           r.paused = true;
           saveRun(r);
-          return log('MODE UJI: siap Kirim. Periksa, lalu klik "Kirim sekarang" atau "Lewati"');
+          return log('MODE UJI: siap Approve. Periksa, lalu klik "Approve sekarang" atau "Lewati"');
         }
-        await submitCurrent();
-        if (!loadConf().approve) return finishDoc(true, "terkirim");
-        return setPhase("approve");
-      }
-      if (run.phase === "approve") {
-        if (!onReview()) return goto(cur.href);
         log("Approve");
         await approveDocument();
-        return finishDoc(true, "terkirim & approve");
+        return finishDoc(true, "approve");
       }
     } catch (e) {
       console.error(`[${APP.name}]`, e);
@@ -596,7 +577,7 @@
       if (pos) Object.assign(box.style, { left: `${pos.x}px`, top: `${pos.y}px`, right: "auto", bottom: "auto" });
     }
     const failed = run.failed || [];
-    const PH = { probe: "Cari halaman terakhir", list: "Pilih dokumen", review: "Buka / Edit", submit: "Kirim", approve: "Approve" };
+    const PH = { probe: "Cari halaman terakhir", list: "Pilih dokumen", review: "Approve", approve: "Approve" };
     box.innerHTML = `
       <div class="top">
         <div class="t">✔ ${esc(APP.name)}</div>
@@ -604,13 +585,13 @@
         <span style="flex:1"></span>
         ${
           run.running
-            ? `${run.paused ? `<button class="go" data-a="send">✓ Kirim sekarang</button><button data-a="pass">Lewati</button>` : ""}
+            ? `${run.paused ? `<button class="go" data-a="send">✓ Approve sekarang</button><button data-a="pass">Lewati</button>` : ""}
                ${run.hold ? `<button class="go" data-a="resume">▶ Lanjut</button>` : `<button data-a="hold">⏸ Jeda</button>`}
                <button class="stop" data-a="stop">■ Stop</button>`
             : `<button data-a="close" title="Tutup">✕</button>`
         }
       </div>
-      <div class="m" style="margin-top:6px">✅ ${run.done || 0} terkirim${conf.approve ? " & approve" : ""} · ⚠ ${failed.length} dilewati${(run.skip || []).length > failed.length ? ` (+${(run.skip || []).length - failed.length} dari sesi sebelumnya)` : ""}</div>
+      <div class="m" style="margin-top:6px">✅ ${run.done || 0} di-approve · ⚠ ${failed.length} dilewati${(run.skip || []).length > failed.length ? ` (+${(run.skip || []).length - failed.length} dari sesi sebelumnya)` : ""}</div>
       ${run.cur ? `<div style="margin-top:6px;font-weight:650">▶ ${esc(run.cur.kode)} ${esc(run.cur.nama || "")}</div>` : ""}
       ${
         run.running
@@ -621,10 +602,9 @@
               <label>Batas <input type="number" min="0" data-c="limit" value="${conf.limit || 0}"> dok (0 = semua)</label>
             </div>
             <div class="row">
-              <label><input type="checkbox" data-c="approve" ${conf.approve ? "checked" : ""}> Approve setelah kirim</label>
-              <button data-a="reset" title="Dokumen yang tadinya bergalat dicoba lagi">↻ Reset daftar dilewati</button>
+              <button data-a="reset" title="Dokumen yang tadinya gagal dicoba lagi">↻ Reset daftar dilewati</button>
             </div>
-            <div class="hint">Membuka daftar data dengan filter <b>${esc(STATUS_FILTER)}</b>, ${PER_PAGE} baris/halaman, lalu mengerjakan dari <b>halaman & baris paling belakang</b>: Review → Edit → Kirim → Approve. Dokumen bergalat tidak diperbaiki, cukup dilewati & dicatat di bawah. Pintasan: Alt+${APP.hotkey}.</div>`
+            <div class="hint">Membuka daftar data dengan filter <b>${esc(STATUS_FILTER)}</b>, ${PER_PAGE} baris/halaman, lalu mengerjakan dari <b>halaman & baris paling belakang</b>: buka Review → langsung <b>Approve</b> (tanpa Edit / Kirim). Dokumen yang gagal di-approve dilewati & dicatat di bawah. Pintasan: Alt+${APP.hotkey}.</div>`
       }
       <div class="log">${(run.logs || []).map((l) => `<div>${esc(l)}</div>`).join("") || "<div>…</div>"}</div>
       ${failed.length ? `<div class="fail">${failed.map((f) => `⚠ ${esc(f.kode)} ${esc(f.nama || "")}: ${esc(f.reason)}`).join("<br>")}</div>` : ""}`;
@@ -648,13 +628,13 @@
       r.confirmed = true;
       r.phaseAt = Date.now();
       saveRun(r);
-      log("Kirim sekarang");
+      log("Approve sekarang");
     }
     if (a === "pass") {
       const r = loadRun();
       r.paused = false;
       saveRun(r);
-      finishDoc(false, "MODE UJI: tidak dikirim (dokumen masih terbuka edit)");
+      finishDoc(false, "MODE UJI: tidak di-approve");
     }
     if (a === "reset") {
       const r = loadRun();
