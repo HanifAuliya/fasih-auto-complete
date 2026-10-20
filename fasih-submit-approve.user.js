@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Approve (status EDITED BY Admin Kabupaten, dari belakang)
 // @namespace    hanif-bps-hst
-// @version      1.3
+// @version      1.5
 // @description  Tanpa Excel/link: buka halaman data survei dengan filter status "EDITED BY Admin Kabupaten" (100 baris per halaman), ambil dokumen dari halaman & baris PALING BELAKANG (yang depan mungkin masih dikerjakan manual), buka Review lalu langsung Approve (tanpa Edit / Kirim), lalu kembali ke daftar. Dokumen yang gagal di-approve dilewati & dicatat. Mode uji berhenti sebelum Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -17,11 +17,17 @@
   const STATUS_FILTER = "EDITED BY Admin Kabupaten";
   const PER_PAGE = 100;
 
-  const APP = { name: "Submit & Approve", version: "1.3", hotkey: "0", launchBottom: 400 };
+  const APP = { name: "Submit & Approve", version: "1.5", hotkey: "0", launchBottom: 400 };
   const RUN_KEY = "fsa_run";
   const CONF_KEY = "fsa_conf";
   const POS_KEY = "fsa_pos";
   const PHASE_TIMEOUT_MS = 4 * 60 * 1000;
+  // Sekali buka daftar, ambil link Review sekian dokumen dari baris paling bawah, lalu approve
+  // satu per satu langsung dari link itu (tidak bolak-balik ke daftar tiap dokumen)
+  const BATCH = 20;
+  // Setelah daftar habis: cek ulang dari halaman 1 sebanyak ini (jeda RECHECK_MS) sebelum berhenti
+  const RECHECKS = 2;
+  const RECHECK_MS = 30000;
 
   // =========================================================================
   // UTILITAS
@@ -416,9 +422,11 @@
       return bs.find((b) => /bg-success/.test(b.className)) || bs[0] || null;
     }, 10000);
     if (!ok) throw new Error("konfirmasi approve tidak muncul");
-    await sleep(400);
+    await sleep(300);
     triggerClick(ok);
-    await sleep(2500);
+    // Selesai begitu dialog konfirmasi tertutup & tombol ✔ tidak aktif lagi (maks. 6 detik)
+    await waitFor(() => !buttonByText("Konfirmasi") && !findCheck(), 6000);
+    await sleep(500);
   }
 
   // =========================================================================
@@ -428,6 +436,7 @@
   function finishDoc(ok, reason) {
     const r = loadRun();
     const cur = r.cur || {};
+    r.idleChecks = 0; // ada dokumen yang diproses -> hitungan "sudah habis" diulang
     if (ok) r.done = (r.done || 0) + 1;
     else {
       r.failed = [...(r.failed || []), { kode: cur.kode, nama: cur.nama, reason }];
@@ -443,6 +452,12 @@
       stopRun("Selesai (batas jumlah tercapai)");
       return goto(listUrl(r.page || 1)); // tetap kembali ke daftar (halaman terakhir)
     }
+    // Masih ada dokumen di batch -> langsung buka link Review berikutnya
+    const next = (r.batch || []).shift();
+    if (next) {
+      setPhase("review", { cur: next, batch: r.batch, confirmed: false });
+      return goto(next.href);
+    }
     // Kembali ke daftar di halaman terakhir. Jumlah halaman bisa berubah setelah approve
     // (dokumen keluar dari filter EDITED) -> dicek lagi: penuh -> maju, kosong -> mundur.
     setPhase("probe", { page: r.page || 1 });
@@ -453,7 +468,8 @@
   async function tick() {
     const run = loadRun();
     if (!run.running || busy || run.hold || run.paused) return;
-    if (Date.now() - (run.navAt || 0) < 2500) return; // halaman baru saja dipindah
+    if (Date.now() - (run.navAt || 0) < 1200) return; // halaman baru saja dipindah
+    if (Date.now() < (run.nextAt || 0)) return; // menunggu sebelum cek ulang daftar
     busy = true;
     stopRequested = false;
     try {
@@ -495,17 +511,37 @@
             setPhase("list", { page: page - 1 });
             return goto(listUrl(page - 1));
           }
-          return stopRun("Selesai ✓ tidak ada dokumen EDITED tersisa");
+          // Halaman 1 juga sudah habis. Bisa jadi ada dokumen yang baru jadi EDITED (dari yang dikerjakan
+          // manual) -> cek ulang dari awal beberapa kali dulu, baru berhenti kalau memang sudah habis.
+          const idle = (run.idleChecks || 0) + 1;
+          if (idle <= RECHECKS) {
+            log(`Tidak ada dokumen EDITED tersisa — cek ulang ${RECHECK_MS / 1000} detik lagi (${idle}/${RECHECKS})`);
+            return setPhase("probe", { page: 1, idleChecks: idle, nextAt: Date.now() + RECHECK_MS });
+          }
+          return stopRun("Selesai ✓ semua dokumen EDITED BY Admin Kabupaten sudah habis");
         }
-        const row = rows[rows.length - 1];
-        log(`▶ ${row.kode} ${row.nama} (hal. ${page}, baris terakhir)`);
-        const href = await rowLink(row);
-        if (!href) {
-          setPhase("list", { cur: { kode: row.kode, nama: row.nama } });
-          return finishDoc(false, "tombol Review tidak muncul di daftar");
+        // Ambil link Review sampai BATCH dokumen dari baris paling bawah ke atas
+        const picks = rows.slice(-BATCH).reverse();
+        log(`Ambil ${picks.length} dokumen terbawah di hal. ${page}`);
+        const batch = [];
+        for (const row of picks) {
+          if (stopRequested || !loadRun().running) break;
+          const href = await rowLink(row);
+          pressKey("Escape");
+          if (href) batch.push({ kode: row.kode, nama: row.nama, href });
+          else {
+            const r = loadRun();
+            r.failed = [...(r.failed || []), { kode: row.kode, nama: row.nama, reason: "tombol Review tidak muncul di daftar" }];
+            r.skip = [...new Set([...(r.skip || []), row.kode])];
+            saveRun(r);
+          }
+          await sleep(150);
         }
-        setPhase("review", { cur: { kode: row.kode, nama: row.nama, href }, submitClicked: false, confirmed: false });
-        return goto(href);
+        if (!batch.length) return log("⚠ tidak ada link Review yang bisa diambil di halaman ini");
+        const first = batch.shift();
+        log(`▶ ${first.kode} ${first.nama} (+${batch.length} lagi di antrean)`);
+        setPhase("review", { cur: first, batch, confirmed: false });
+        return goto(first.href);
       }
       const cur = run.cur || {};
       // Langsung Approve di halaman Review (tanpa Edit, tanpa Kirim, tanpa toggle anomali)
@@ -541,6 +577,9 @@
       phase: "probe",
       phaseAt: Date.now(),
       page: 1,
+      batch: [],
+      idleChecks: 0,
+      nextAt: 0,
       done: 0,
       failed: [],
       skip: loadRun().skip || [], // dokumen bergalat sebelumnya tetap dilewati (hapus lewat tombol Reset)
@@ -646,7 +685,7 @@
         }
       </div>
       <div class="m" style="margin-top:6px">✅ ${run.done || 0} di-approve · ⚠ ${failed.length} dilewati${(run.skip || []).length > failed.length ? ` (+${(run.skip || []).length - failed.length} dari sesi sebelumnya)` : ""}</div>
-      ${run.cur ? `<div style="margin-top:6px;font-weight:650">▶ ${esc(run.cur.kode)} ${esc(run.cur.nama || "")}</div>` : ""}
+      ${run.cur ? `<div style="margin-top:6px;font-weight:650">▶ ${esc(run.cur.kode)} ${esc(run.cur.nama || "")}${(run.batch || []).length ? ` <span class="m">· ${run.batch.length} lagi di antrean</span>` : ""}</div>` : ""}
       ${
         run.running
           ? ""
