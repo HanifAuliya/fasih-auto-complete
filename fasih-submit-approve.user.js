@@ -17,7 +17,12 @@
   const STATUS_FILTER = "EDITED BY Admin Kabupaten";
   const PER_PAGE = 100;
 
-  const APP = { name: "Submit & Approve", version: "1.13", hotkey: "0", launchBottom: 400 };
+  const APP = {
+    name: "Submit & Approve",
+    version: "1.13",
+    hotkey: "0",
+    launchBottom: 400,
+  };
   const RUN_KEY = "fsa_run";
   const CONF_KEY = "fsa_conf";
   const POS_KEY = "fsa_pos";
@@ -56,7 +61,12 @@
   };
   const loadRun = () => loadJson(RUN_KEY, { running: false });
   const saveRun = (r) => saveJson(RUN_KEY, r);
-  const loadConf = () => ({ approve: true, testMode: false, limit: 0, ...loadJson(CONF_KEY, {}) });
+  const loadConf = () => ({
+    approve: true,
+    testMode: false,
+    limit: 0,
+    ...loadJson(CONF_KEY, {}),
+  });
   const saveConf = (c) => saveJson(CONF_KEY, c);
   function loadDone() {
     const d = loadJson(DONE_KEY, {});
@@ -102,30 +112,57 @@
 
   const OWN = "#fsa-box, #fsa-launch";
   const visible = (el) =>
-    !!el && (el.offsetParent !== null || (el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden"));
+    !!el &&
+    (el.offsetParent !== null ||
+      (el.getClientRects().length > 0 &&
+        getComputedStyle(el).visibility !== "hidden"));
   const esc = (s) =>
-    String(s ?? "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]);
+    String(s ?? "").replace(
+      /[&<>"]/g,
+      (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch],
+    );
   function triggerClick(el) {
     if (!el) return;
     el.scrollIntoView({ block: "center" });
-    ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((type) => {
-      const Ctor = type.startsWith("pointer") ? PointerEvent : MouseEvent;
-      el.dispatchEvent(new Ctor(type, { bubbles: true, cancelable: true, pointerType: "mouse", button: 0 }));
-    });
+    ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach(
+      (type) => {
+        const Ctor = type.startsWith("pointer") ? PointerEvent : MouseEvent;
+        el.dispatchEvent(
+          new Ctor(type, {
+            bubbles: true,
+            cancelable: true,
+            pointerType: "mouse",
+            button: 0,
+          }),
+        );
+      },
+    );
   }
   function pressKey(key) {
     (document.activeElement || document.body).dispatchEvent(
-      new KeyboardEvent("keydown", { key, code: key, keyCode: key === "Enter" ? 13 : 27, bubbles: true }),
+      new KeyboardEvent("keydown", {
+        key,
+        code: key,
+        keyCode: key === "Enter" ? 13 : 27,
+        bubbles: true,
+      }),
     );
   }
   function buttonByText(text) {
     return Array.from(document.querySelectorAll("button")).find(
-      (b) => visible(b) && !b.disabled && b.innerText.trim().toUpperCase() === text.toUpperCase() && !b.closest(OWN),
+      (b) =>
+        visible(b) &&
+        !b.disabled &&
+        b.innerText.trim().toUpperCase() === text.toUpperCase() &&
+        !b.closest(OWN),
     );
   }
   function buttonByIcon(icon) {
-    const svg = Array.from(document.querySelectorAll(`svg.tabler-icon-${icon}`)).find(
-      (s) => s.closest("button") && visible(s.closest("button")) && !s.closest(OWN),
+    const svg = Array.from(
+      document.querySelectorAll(`svg.tabler-icon-${icon}`),
+    ).find(
+      (s) =>
+        s.closest("button") && visible(s.closest("button")) && !s.closest(OWN),
     );
     return svg ? svg.closest("button") : null;
   }
@@ -133,7 +170,10 @@
   function log(msg) {
     console.log(`[${APP.name}] ${msg}`);
     const r = loadRun();
-    r.logs = [...(r.logs || []), `${new Date().toLocaleTimeString("id-ID")} ${msg}`].slice(-8);
+    r.logs = [
+      ...(r.logs || []),
+      `${new Date().toLocaleTimeString("id-ID")} ${msg}`,
+    ].slice(-8);
     saveRun(r);
     render();
   }
@@ -149,8 +189,10 @@
   // =========================================================================
   const REVIEW_HREF = /\/app\/assignment\/[0-9a-f-]{36}\/[0-9a-f-]{36}/i;
   const onList = () => location.pathname.replace(/\/$/, "") === LIST_PATH;
-  const onReview = () => /\/app\/assignment\/[^/]+\/[^/]+\/?$/.test(location.pathname);
-  const onEdit = () => /\/app\/assignment\/[^/]+\/[^/]+\/edit/.test(location.pathname);
+  const onReview = () =>
+    /\/app\/assignment\/[^/]+\/[^/]+\/?$/.test(location.pathname);
+  const onEdit = () =>
+    /\/app\/assignment\/[^/]+\/[^/]+\/edit/.test(location.pathname);
   function listUrl(page) {
     const u = new URL(location.origin + LIST_PATH);
     u.searchParams.set("page", String(page || 1));
@@ -163,7 +205,9 @@
     if (!onList()) return false;
     const p = new URLSearchParams(location.search);
     return (
-      p.get("status") === STATUS_FILTER && Number(p.get("perPage")) === PER_PAGE && Number(p.get("page") || 1) === page
+      p.get("status") === STATUS_FILTER &&
+      Number(p.get("perPage")) === PER_PAGE &&
+      Number(p.get("page") || 1) === page
     );
   }
   function goto(url) {
@@ -173,14 +217,19 @@
     location.href = url;
   }
 
-  const tableText = () => (document.querySelector("table tbody") || {}).innerText || "";
+  const tableText = () =>
+    (document.querySelector("table tbody") || {}).innerText || "";
   const isLoading = () =>
-    Array.from(document.querySelectorAll('[class*="animate-spin"], [class*="skeleton"], [aria-busy="true"]')).some(
-      (el) => visible(el) && !el.closest(OWN),
-    ) || /loading|memuat/i.test(tableText());
+    Array.from(
+      document.querySelectorAll(
+        '[class*="animate-spin"], [class*="skeleton"], [aria-busy="true"]',
+      ),
+    ).some((el) => visible(el) && !el.closest(OWN)) ||
+    /loading|memuat/i.test(tableText());
   // Tunggu tabel termuat & diam sebentar (tanpa indikator loading)
   async function waitTable() {
-    if (!(await waitFor(() => document.querySelector("table thead"), 30000))) throw new Error("tabel data tidak muncul");
+    if (!(await waitFor(() => document.querySelector("table thead"), 30000)))
+      throw new Error("tabel data tidak muncul");
     let last = null;
     let since = Date.now();
     const start = Date.now();
@@ -196,7 +245,9 @@
   function readRows() {
     const table = document.querySelector("table");
     if (!table) return [];
-    const heads = Array.from(table.querySelectorAll("thead th")).map((th) => th.innerText.trim().toUpperCase());
+    const heads = Array.from(table.querySelectorAll("thead th")).map((th) =>
+      th.innerText.trim().toUpperCase(),
+    );
     const idx = (part) => heads.findIndex((h) => h.includes(part));
     const iKode = idx("KODE");
     const iNama = idx("NAMA");
@@ -205,8 +256,13 @@
       .filter((tr) => tr.querySelectorAll("td").length > 2)
       .map((tr) => {
         const cells = tr.querySelectorAll("td");
-        const text = (i) => (i >= 0 && cells[i] ? cells[i].innerText.trim() : "");
-        const kodeBtn = (iKode >= 0 && cells[iKode] && cells[iKode].querySelector("button:not([title])")) || null;
+        const text = (i) =>
+          i >= 0 && cells[i] ? cells[i].innerText.trim() : "";
+        const kodeBtn =
+          (iKode >= 0 &&
+            cells[iKode] &&
+            cells[iKode].querySelector("button:not([title])")) ||
+          null;
         return {
           tr,
           kode: kodeBtn ? kodeBtn.innerText.trim() : text(iKode),
@@ -222,22 +278,31 @@
   let filterTriedAt = "";
   async function ensureStatusFilter() {
     const rows = readRows();
-    if (!rows.length || rows.every((r) => !r.status || isEdited(r.status))) return true;
+    if (!rows.length || rows.every((r) => !r.status || isEdited(r.status)))
+      return true;
     if (filterTriedAt === location.href) return false;
     filterTriedAt = location.href;
-    log("Filter status belum terpasang → pilih EDITED BY Admin Kabupaten dari dropdown");
+    log(
+      "Filter status belum terpasang → pilih EDITED BY Admin Kabupaten dari dropdown",
+    );
     const optionEls = () =>
       Array.from(
-        document.querySelectorAll('[role="option"], [cmdk-item], [role="menuitem"], [role="menuitemcheckbox"], [role="listbox"] li, [data-radix-popper-content-wrapper] label, [role="dialog"] label'),
-      ).filter((el) => visible(el) && !el.closest(OWN) && isEdited(el.innerText));
-    const toggles = Array.from(document.querySelectorAll("button"))
-      .filter(
-        (b) =>
-          visible(b) &&
-          !b.closest("table") &&
-          !b.closest(OWN) &&
-          (b.querySelector("svg.tabler-icon-chevron-down, svg.tabler-icon-selector") || b.getAttribute("role") === "combobox"),
+        document.querySelectorAll(
+          '[role="option"], [cmdk-item], [role="menuitem"], [role="menuitemcheckbox"], [role="listbox"] li, [data-radix-popper-content-wrapper] label, [role="dialog"] label',
+        ),
+      ).filter(
+        (el) => visible(el) && !el.closest(OWN) && isEdited(el.innerText),
       );
+    const toggles = Array.from(document.querySelectorAll("button")).filter(
+      (b) =>
+        visible(b) &&
+        !b.closest("table") &&
+        !b.closest(OWN) &&
+        (b.querySelector(
+          "svg.tabler-icon-chevron-down, svg.tabler-icon-selector",
+        ) ||
+          b.getAttribute("role") === "combobox"),
+    );
     for (const t of toggles) {
       const before = tableText();
       triggerClick(t);
@@ -258,7 +323,9 @@
         return true;
       }
     }
-    log("⚠ dropdown status EDITED BY Admin Kabupaten tidak ketemu — baris status lain dilewati");
+    log(
+      "⚠ dropdown status EDITED BY Admin Kabupaten tidak ketemu — baris status lain dilewati",
+    );
     return false;
   }
 
@@ -266,21 +333,31 @@
   // /app/assignment/...). Hasil: alamat Review (string), { button } kalau tombolnya tanpa link, atau null.
   const reviewBtn = () =>
     Array.from(document.querySelectorAll("button, a")).find(
-      (b) => visible(b) && !b.closest(OWN) && /^\s*Review\s*$/i.test(b.innerText || ""),
+      (b) =>
+        visible(b) &&
+        !b.closest(OWN) &&
+        /^\s*Review\s*$/i.test(b.innerText || ""),
     ) || null;
   async function closeReviewCard() {
     if (!reviewBtn()) return;
     pressKey("Escape");
     if (await waitFor(() => !reviewBtn(), 1500)) return;
-    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); // klik di luar kartu
+    document.body.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true }),
+    ); // klik di luar kartu
     await waitFor(() => !reviewBtn(), 1500);
   }
   async function rowLink(row) {
-    const direct = Array.from(row.tr.querySelectorAll("a[href]")).find((a) => REVIEW_HREF.test(a.href));
+    const direct = Array.from(row.tr.querySelectorAll("a[href]")).find((a) =>
+      REVIEW_HREF.test(a.href),
+    );
     if (direct) return direct.href;
     await closeReviewCard(); // kartu dari baris sebelumnya ditutup dulu supaya tidak tertukar
     // Kartu Review bisa muncul di dalam baris tabel itu sendiri, atau melayang di halaman
-    const inRow = () => Array.from(row.tr.querySelectorAll("a[href]")).find((a) => REVIEW_HREF.test(a.href));
+    const inRow = () =>
+      Array.from(row.tr.querySelectorAll("a[href]")).find((a) =>
+        REVIEW_HREF.test(a.href),
+      );
     for (const target of [row.kodeBtn, row.tr]) {
       if (!target) continue;
       for (const click of [() => triggerClick(target), () => target.click()]) {
@@ -305,12 +382,16 @@
   // REVIEW -> EDIT -> KIRIM -> APPROVE (sama dengan skrip koreksi lain)
   // =========================================================================
   async function reviewToEdit() {
-    await waitFor(() => buttonByIcon("edit") || buttonByIcon("rotate-clockwise"), 20000);
+    await waitFor(
+      () => buttonByIcon("edit") || buttonByIcon("rotate-clockwise"),
+      20000,
+    );
     await sleep(600);
     let edit = buttonByIcon("edit");
     if (!edit || edit.disabled) {
       const revoke = buttonByIcon("rotate-clockwise");
-      if (!revoke || revoke.disabled) throw new Error("tombol Edit & Revoke tidak aktif");
+      if (!revoke || revoke.disabled)
+        throw new Error("tombol Edit & Revoke tidak aktif");
       log("Revoke dokumen");
       triggerClick(revoke);
       const ok = await waitFor(() => buttonByText("Konfirmasi"), 8000);
@@ -324,25 +405,42 @@
       await sleep(600);
     }
     triggerClick(edit);
-    if (!(await waitFor(() => onEdit() && document.querySelector(".fasih-form-sidebar"), 30000)))
+    if (
+      !(await waitFor(
+        () => onEdit() && document.querySelector(".fasih-form-sidebar"),
+        30000,
+      ))
+    )
       throw new Error("halaman edit tidak terbuka");
     await sleep(1500);
   }
 
   const sidebarItem = (title) => {
-    const sq = (s) => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-    const items = Array.from(document.querySelectorAll(".fasih-form-sidebar [title]"));
-    return items.find((el) => sq(el.getAttribute("title")) === sq(title)) || null;
+    const sq = (s) =>
+      String(s || "")
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, "");
+    const items = Array.from(
+      document.querySelectorAll(".fasih-form-sidebar [title]"),
+    );
+    return (
+      items.find((el) => sq(el.getAttribute("title")) === sq(title)) || null
+    );
   };
   function findAnomaliSwitch() {
-    const direct = document.querySelector('#cek_anomali_button input[role="switch"]');
+    const direct = document.querySelector(
+      '#cek_anomali_button input[role="switch"]',
+    );
     if (direct) return direct;
     return (
-      Array.from(document.querySelectorAll('input[role="switch"]')).find((sw) => {
-        let el = sw;
-        for (let i = 0; i < 7 && el; i++, el = el.parentElement) if (/anomali/i.test(el.innerText || "")) return true;
-        return false;
-      }) || null
+      Array.from(document.querySelectorAll('input[role="switch"]')).find(
+        (sw) => {
+          let el = sw;
+          for (let i = 0; i < 7 && el; i++, el = el.parentElement)
+            if (/anomali/i.test(el.innerText || "")) return true;
+          return false;
+        },
+      ) || null
     );
   }
   // Halaman CATATAN + nyalakan "Tampilkan Anomali" (FASIH memintanya sebelum Kirim)
@@ -359,9 +457,17 @@
     const isOn = () => {
       const s = findAnomaliSwitch();
       const c = control();
-      return !!s && (s.checked || s.getAttribute("aria-checked") === "true" || (c && c.hasAttribute("data-checked")));
+      return (
+        !!s &&
+        (s.checked ||
+          s.getAttribute("aria-checked") === "true" ||
+          (c && c.hasAttribute("data-checked")))
+      );
     };
-    for (const attempt of [() => triggerClick(control() || findAnomaliSwitch()), () => findAnomaliSwitch().click()]) {
+    for (const attempt of [
+      () => triggerClick(control() || findAnomaliSwitch()),
+      () => findAnomaliSwitch().click(),
+    ]) {
       if (isOn()) break;
       attempt();
       await waitFor(isOn, 2500);
@@ -371,18 +477,35 @@
 
   const isKirimText = (b) => b.innerText.trim().toUpperCase() === "KIRIM";
   const inDialog = (b) => !!b.closest('[role="dialog"], [role="alertdialog"]');
-  const hasSendIcon = (b) => !!b.querySelector('svg path[d^="M10 14l11 -11"], svg.tabler-icon-send');
+  const hasSendIcon = (b) =>
+    !!b.querySelector('svg path[d^="M10 14l11 -11"], svg.tabler-icon-send');
   function findNavKirim() {
     const bs = Array.from(document.querySelectorAll("button")).filter(
-      (b) => visible(b) && !b.disabled && isKirimText(b) && !inDialog(b) && !b.closest(OWN),
+      (b) =>
+        visible(b) &&
+        !b.disabled &&
+        isKirimText(b) &&
+        !inDialog(b) &&
+        !b.closest(OWN),
     );
-    return bs.find(hasSendIcon) || bs.find((b) => b.id === "fasih-form-nav-submit-button") || bs[0] || null;
+    return (
+      bs.find(hasSendIcon) ||
+      bs.find((b) => b.id === "fasih-form-nav-submit-button") ||
+      bs[0] ||
+      null
+    );
   }
   function findDialogKirim() {
     const bs = Array.from(document.querySelectorAll("button")).filter(
       (b) => visible(b) && !b.disabled && isKirimText(b) && !b.closest(OWN),
     );
-    return bs.find(inDialog) || bs.find((b) => !hasSendIcon(b) && b.id !== "fasih-form-nav-submit-button") || null;
+    return (
+      bs.find(inDialog) ||
+      bs.find(
+        (b) => !hasSendIcon(b) && b.id !== "fasih-form-nav-submit-button",
+      ) ||
+      null
+    );
   }
   function summaryCount(label) {
     const btn = Array.from(document.querySelectorAll("button")).find((b) => {
@@ -397,9 +520,13 @@
     return Array.from(document.querySelectorAll('button[title="Lihat"]'))
       .filter(visible)
       .map((lihat) => {
-        const card = lihat.closest('div[class*="rounded-lg"]') || lihat.parentElement.parentElement;
+        const card =
+          lihat.closest('div[class*="rounded-lg"]') ||
+          lihat.parentElement.parentElement;
         const t = card.querySelector("div[title]");
-        return `${t ? t.getAttribute("title").trim() : "?"} (${Array.from(card.querySelectorAll("li"))
+        return `${t ? t.getAttribute("title").trim() : "?"} (${Array.from(
+          card.querySelectorAll("li"),
+        )
           .map((li) => li.innerText.trim())
           .join(", ")})`;
       });
@@ -408,19 +535,31 @@
     Array.from(document.querySelectorAll('button[aria-label="Dismiss"]'))
       .filter(visible)
       .forEach((b) => triggerClick(b));
-    if (Array.from(document.querySelectorAll('[role="dialog"]')).some(visible)) pressKey("Escape");
+    if (Array.from(document.querySelectorAll('[role="dialog"]')).some(visible))
+      pressKey("Escape");
   }
   const dialogText = () => {
-    const d = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"]')).filter(visible).pop();
+    const d = Array.from(
+      document.querySelectorAll('[role="dialog"], [role="alertdialog"]'),
+    )
+      .filter(visible)
+      .pop();
     return d ? d.innerText.replace(/\s+/g, " ").trim().slice(0, 200) : "";
   };
   const backButton = () =>
     Array.from(document.querySelectorAll("button")).find(
-      (b) => /KEMBALI KE REVIEW/i.test(b.innerText) && b.getClientRects().length > 0,
+      (b) =>
+        /KEMBALI KE REVIEW/i.test(b.innerText) && b.getClientRects().length > 0,
     );
   async function backToReview(timeoutMs) {
-    const sign = await waitFor(() => backButton() || (!onEdit() ? "left" : null), timeoutMs);
-    if (!sign) throw new Error(`tidak ada tanda terkirim setelah Konfirmasi: ${dialogText() || "cek manual"}`);
+    const sign = await waitFor(
+      () => backButton() || (!onEdit() ? "left" : null),
+      timeoutMs,
+    );
+    if (!sign)
+      throw new Error(
+        `tidak ada tanda terkirim setelah Konfirmasi: ${dialogText() || "cek manual"}`,
+      );
     if (sign !== "left") {
       await sleep(400);
       triggerClick(sign);
@@ -438,7 +577,11 @@
     if (!nav) throw new Error("tombol Kirim tidak ditemukan / tidak aktif");
     log("Klik Kirim");
     triggerClick(nav);
-    await waitFor(() => summaryCount("GALAT") || findDialogKirim() || readGalatList().length, 15000);
+    await waitFor(
+      () =>
+        summaryCount("GALAT") || findDialogKirim() || readGalatList().length,
+      15000,
+    );
     await sleep(1200);
     const galat = summaryCount("GALAT");
     if ((galat && galat.n > 0) || (readGalatList().length && !galat)) {
@@ -448,16 +591,20 @@
       }
       const detail = readGalatList().join("; ");
       closeDialogs();
-      throw new Error(`galat ${galat ? galat.n : readGalatList().length}: ${detail || "lihat di FASIH"}`);
+      throw new Error(
+        `galat ${galat ? galat.n : readGalatList().length}: ${detail || "lihat di FASIH"}`,
+      );
     }
     const dk = findDialogKirim();
-    if (!dk) throw new Error(`tombol Kirim di dialog tidak muncul: ${dialogText()}`);
+    if (!dk)
+      throw new Error(`tombol Kirim di dialog tidak muncul: ${dialogText()}`);
     const r = loadRun();
     r.submitClicked = true;
     saveRun(r);
     triggerClick(dk);
     const konf = await waitFor(() => buttonByText("Konfirmasi"), 15000);
-    if (!konf) throw new Error(`tombol Konfirmasi tidak muncul: ${dialogText()}`);
+    if (!konf)
+      throw new Error(`tombol Konfirmasi tidak muncul: ${dialogText()}`);
     await sleep(400);
     triggerClick(konf);
     await backToReview(60000);
@@ -471,19 +618,32 @@
     };
     const revokeBtn = () => buttonByIcon("rotate-clockwise");
     // Jaringan lambat: tunggu sampai halaman Review benar-benar termuat (tombol ✔ atau Revoke tampil)
-    const check = await waitFor(() => findCheck() || (revokeBtn() ? "already" : null), APPROVE_WAIT_MS);
+    const check = await waitFor(
+      () => findCheck() || (revokeBtn() ? "already" : null),
+      APPROVE_WAIT_MS,
+    );
     if (check === "already") {
       await sleep(800); // beri waktu tombol ✔ muncul kalau halamannya masih memuat
       if (!findCheck()) return "already";
     }
-    if (!check) throw Object.assign(new Error("tombol Approve (✔) tidak aktif"), { retry: true });
+    if (!check)
+      throw Object.assign(new Error("tombol Approve (✔) tidak aktif"), {
+        retry: true,
+      });
     // Tombol Konfirmasi di dialog approve (utamakan yang di dalam dialog & berwarna hijau)
     const findKonf = () => {
       const bs = Array.from(document.querySelectorAll("button")).filter(
-        (b) => visible(b) && !b.closest(OWN) && /^(KONFIRMASI|YA|APPROVE|SETUJU)\b/i.test(b.innerText.trim()),
+        (b) =>
+          visible(b) &&
+          !b.closest(OWN) &&
+          /^(KONFIRMASI|YA|APPROVE|SETUJU)\b/i.test(b.innerText.trim()),
       );
-      const pick = (list) => list.find((b) => /bg-success/.test(b.className)) || list[0] || null;
-      return pick(bs.filter(inDialog)) || pick(bs.filter((b) => !findCheck() || b !== findCheck()));
+      const pick = (list) =>
+        list.find((b) => /bg-success/.test(b.className)) || list[0] || null;
+      return (
+        pick(bs.filter(inDialog)) ||
+        pick(bs.filter((b) => !findCheck() || b !== findCheck()))
+      );
     };
     // Berhasil = tombol Revoke tampil, atau dialog sudah tertutup & tombol ✔ hilang
     const approved = () => !!revokeBtn() || (!findKonf() && !findCheck());
@@ -495,7 +655,9 @@
         const chk = findCheck();
         if (!chk) {
           if (revokeBtn()) return; // sudah ter-approve
-          throw Object.assign(new Error("tombol Approve (✔) tidak aktif"), { retry: true });
+          throw Object.assign(new Error("tombol Approve (✔) tidak aktif"), {
+            retry: true,
+          });
         }
         if (attempt > 1) log(`Klik ✔ lagi (percobaan ${attempt})`);
         triggerClick(chk);
@@ -517,9 +679,13 @@
         await sleep(500);
         if (approved()) return;
       }
-      if (findKonf()) log(`⚠ Konfirmasi belum terkirim, coba lagi (${attempt}/3)`);
+      if (findKonf())
+        log(`⚠ Konfirmasi belum terkirim, coba lagi (${attempt}/3)`);
     }
-    throw Object.assign(new Error("konfirmasi approve tidak terpencet / belum tersimpan"), { retry: true });
+    throw Object.assign(
+      new Error("konfirmasi approve tidak terpencet / belum tersimpan"),
+      { retry: true },
+    );
   }
 
   // =========================================================================
@@ -539,9 +705,11 @@
     if (ok) {
       r.done = (r.done || 0) + 1;
       markDone(cur.kode);
-    }
-    else {
-      r.failed = [...(r.failed || []), { kode: cur.kode, nama: cur.nama, reason }];
+    } else {
+      r.failed = [
+        ...(r.failed || []),
+        { kode: cur.kode, nama: cur.nama, reason },
+      ];
       r.skip = [...new Set([...(r.skip || []), cur.kode])];
     }
     r.cur = null;
@@ -575,8 +743,16 @@
     busy = true;
     stopRequested = false;
     try {
-      if (run.phase !== "list" && run.phase !== "probe" && Date.now() - (run.phaseAt || 0) > PHASE_TIMEOUT_MS) {
-        if (run.cur) return finishDoc(false, `macet di tahap "${run.phase}" lebih dari 4 menit`);
+      if (
+        run.phase !== "list" &&
+        run.phase !== "probe" &&
+        Date.now() - (run.phaseAt || 0) > PHASE_TIMEOUT_MS
+      ) {
+        if (run.cur)
+          return finishDoc(
+            false,
+            `macet di tahap "${run.phase}" lebih dari 4 menit`,
+          );
       }
       // 1) Cari halaman terakhir: buka page=N; penuh 100 baris -> N+1; kosong -> N-1
       if (run.phase === "probe") {
@@ -607,10 +783,15 @@
         await ensureStatusFilter();
         const skip = new Set(run.skip || []);
         const done = loadDone();
-        const edited = readRows().filter((r) => !r.status || isEdited(r.status));
+        const edited = readRows().filter(
+          (r) => !r.status || isEdited(r.status),
+        );
         // Sudah di-approve tapi masih tampil EDITED (server belum memperbarui daftar) -> tidak dibuka lagi
         const stale = edited.filter((r) => done[r.kode]).length;
-        if (stale) log(`${stale} dokumen sudah di-approve tapi masih tampil di daftar (server belum update), dilewati`);
+        if (stale)
+          log(
+            `${stale} dokumen sudah di-approve tapi masih tampil di daftar (server belum update), dilewati`,
+          );
         const rows = edited.filter((r) => !skip.has(r.kode) && !done[r.kode]);
         if (!rows.length) {
           if (page > 1) {
@@ -622,10 +803,18 @@
           // manual) -> cek ulang dari awal beberapa kali dulu, baru berhenti kalau memang sudah habis.
           const idle = (run.idleChecks || 0) + 1;
           if (idle <= RECHECKS) {
-            log(`Tidak ada dokumen EDITED tersisa — cek ulang ${RECHECK_MS / 1000} detik lagi (${idle}/${RECHECKS})`);
-            return setPhase("probe", { page: 1, idleChecks: idle, nextAt: Date.now() + RECHECK_MS });
+            log(
+              `Tidak ada dokumen EDITED tersisa — cek ulang ${RECHECK_MS / 1000} detik lagi (${idle}/${RECHECKS})`,
+            );
+            return setPhase("probe", {
+              page: 1,
+              idleChecks: idle,
+              nextAt: Date.now() + RECHECK_MS,
+            });
           }
-          return stopRun("Selesai ✓ semua dokumen EDITED BY Admin Kabupaten sudah habis");
+          return stopRun(
+            "Selesai ✓ semua dokumen EDITED BY Admin Kabupaten sudah habis",
+          );
         }
         // Ambil link Review sampai BATCH dokumen dari baris paling bawah ke atas
         const picks = rows.slice(-BATCH).reverse();
@@ -640,34 +829,70 @@
             triggerClick(href.button);
             if (!(await waitFor(onReview, 20000))) {
               const r = loadRun();
-              r.failed = [...(r.failed || []), { kode: row.kode, nama: row.nama, reason: "klik Review tidak membuka dokumen" }];
-              setItem(row.kode, { nama: row.nama, status: "failed", reason: "klik Review tidak membuka dokumen" });
+              r.failed = [
+                ...(r.failed || []),
+                {
+                  kode: row.kode,
+                  nama: row.nama,
+                  reason: "klik Review tidak membuka dokumen",
+                },
+              ];
+              setItem(row.kode, {
+                nama: row.nama,
+                status: "failed",
+                reason: "klik Review tidak membuka dokumen",
+              });
               r.skip = [...new Set([...(r.skip || []), row.kode])];
               saveRun(r);
               return;
             }
             log(`▶ ${row.kode} ${row.nama}`);
-            return setPhase("review", { cur: { kode: row.kode, nama: row.nama, href: location.href }, batch: [], confirmed: false });
+            return setPhase("review", {
+              cur: { kode: row.kode, nama: row.nama, href: location.href },
+              batch: [],
+              confirmed: false,
+            });
           }
           await closeReviewCard();
           if (href && batch.some((x) => x.href === href)) {
-            log(`⚠ ${row.kode}: link Review sama dengan dokumen lain di antrean, dilewati dulu`);
+            log(
+              `⚠ ${row.kode}: link Review sama dengan dokumen lain di antrean, dilewati dulu`,
+            );
             continue;
           }
           if (href) {
             batch.push({ kode: row.kode, nama: row.nama, href });
-            setItem(row.kode, { nama: row.nama, href, status: "antre", reason: "", page });
-          }
-          else {
+            setItem(row.kode, {
+              nama: row.nama,
+              href,
+              status: "antre",
+              reason: "",
+              page,
+            });
+          } else {
             const r = loadRun();
-            r.failed = [...(r.failed || []), { kode: row.kode, nama: row.nama, reason: "tombol Review tidak muncul di daftar" }];
-            setItem(row.kode, { nama: row.nama, status: "failed", reason: "tombol Review tidak muncul di daftar" });
+            r.failed = [
+              ...(r.failed || []),
+              {
+                kode: row.kode,
+                nama: row.nama,
+                reason: "tombol Review tidak muncul di daftar",
+              },
+            ];
+            setItem(row.kode, {
+              nama: row.nama,
+              status: "failed",
+              reason: "tombol Review tidak muncul di daftar",
+            });
             r.skip = [...new Set([...(r.skip || []), row.kode])];
             saveRun(r);
           }
           await sleep(150);
         }
-        if (!batch.length) return log("⚠ tidak ada link Review yang bisa diambil di halaman ini");
+        if (!batch.length)
+          return log(
+            "⚠ tidak ada link Review yang bisa diambil di halaman ini",
+          );
         const first = batch.shift();
         log(`▶ ${first.kode} ${first.nama} (+${batch.length} lagi di antrean)`);
         setPhase("review", { cur: first, batch, confirmed: false });
@@ -681,11 +906,18 @@
           const r = loadRun();
           r.paused = true;
           saveRun(r);
-          return log('MODE UJI: siap Approve. Periksa, lalu klik "Approve sekarang" atau "Lewati"');
+          return log(
+            'MODE UJI: siap Approve. Periksa, lalu klik "Approve sekarang" atau "Lewati"',
+          );
         }
         log("Approve");
         const res = await approveDocument();
-        return finishDoc(true, res === "already" ? "sudah di-approve (tombol Revoke tampil), dilewati" : "approve");
+        return finishDoc(
+          true,
+          res === "already"
+            ? "sudah di-approve (tombol Revoke tampil), dilewati"
+            : "approve",
+        );
       }
     } catch (e) {
       console.error(`[${APP.name}]`, e);
@@ -697,7 +929,9 @@
         now.phaseAt = Date.now();
         now.navAt = Date.now();
         saveRun(now);
-        log(`⏳ ${e.message} — jaringan lambat? muat ulang halaman (percobaan ${now.cur.tries + 1}/${RETRIES})`);
+        log(
+          `⏳ ${e.message} — jaringan lambat? muat ulang halaman (percobaan ${now.cur.tries + 1}/${RETRIES})`,
+        );
         location.reload();
         return;
       }
@@ -718,8 +952,12 @@
     const set = new Set(kodes);
     const skip = (r0.skip || []).filter((k) => !set.has(k));
     const failed = (r0.failed || []).filter((f) => !set.has(f.kode));
-    list.forEach((it) => setItem(it.kode, { status: "antre", reason: "diulang" }));
-    const withLink = list.filter((it) => it.href).map((it) => ({ kode: it.kode, nama: it.nama, href: it.href }));
+    list.forEach((it) =>
+      setItem(it.kode, { status: "antre", reason: "diulang" }),
+    );
+    const withLink = list
+      .filter((it) => it.href)
+      .map((it) => ({ kode: it.kode, nama: it.nama, href: it.href }));
     if (r0.running) {
       // Sedang berjalan: masukkan ke depan antrean
       r0.batch = [...withLink, ...(r0.batch || [])];
@@ -770,7 +1008,9 @@
       skip: loadRun().skip || [], // dokumen bergalat sebelumnya tetap dilewati (hapus lewat tombol Reset)
       logs: [],
     });
-    log(`Mulai${testMode ? " · MODE UJI" : ""}: cari halaman terakhir (${STATUS_FILTER}, ${PER_PAGE}/halaman)`);
+    log(
+      `Mulai${testMode ? " · MODE UJI" : ""}: cari halaman terakhir (${STATUS_FILTER}, ${PER_PAGE}/halaman)`,
+    );
   }
   function stopRun(msg) {
     const r = loadRun();
@@ -836,7 +1076,7 @@
       launch = document.createElement("button");
       launch.id = "fsa-launch";
       launch.style.bottom = `${APP.launchBottom}px`;
-      launch.innerHTML = `<b>✔</b>Submit & Approve`;
+      launch.innerHTML = `<b>✔</b>Auto Approve`;
       launch.title = `Buka kotak kendali (Alt+${APP.hotkey})`;
       launch.onclick = () => {
         const r = loadRun();
@@ -855,8 +1095,16 @@
       sig = "";
       return;
     }
-    const items = Object.values(loadItems()).sort((a, b) => (b.at || 0) - (a.at || 0));
-    const s = JSON.stringify([run, conf, items.length, items[0] && items[0].at, viewFilter]);
+    const items = Object.values(loadItems()).sort(
+      (a, b) => (b.at || 0) - (a.at || 0),
+    );
+    const s = JSON.stringify([
+      run,
+      conf,
+      items.length,
+      items[0] && items[0].at,
+      viewFilter,
+    ]);
     if (s === sig && box) return;
     sig = s;
     if (!box) {
@@ -868,10 +1116,21 @@
       makeDraggable(box);
       document.body.appendChild(box);
       const pos = loadJson(POS_KEY, null);
-      if (pos) Object.assign(box.style, { left: `${pos.x}px`, top: `${pos.y}px`, right: "auto", bottom: "auto" });
+      if (pos)
+        Object.assign(box.style, {
+          left: `${pos.x}px`,
+          top: `${pos.y}px`,
+          right: "auto",
+          bottom: "auto",
+        });
     }
     const failed = run.failed || [];
-    const PH = { probe: "Cari halaman terakhir", list: "Pilih dokumen", review: "Approve", approve: "Approve" };
+    const PH = {
+      probe: "Cari halaman terakhir",
+      list: "Pilih dokumen",
+      review: "Approve",
+      approve: "Approve",
+    };
     box.innerHTML = `
       <div class="top">
         <div class="t">✔ ${esc(APP.name)}</div>
@@ -909,9 +1168,16 @@
   function itemsHtml(items) {
     if (!items.length) return "";
     const n = (k) => items.filter((x) => x.status === k).length;
-    const shown = items.filter((x) => viewFilter === "all" || x.status === viewFilter).slice(0, 200);
-    const tab = (k, l) => `<button data-f="${k}" class="${viewFilter === k ? "on" : ""}">${l} ${k === "all" ? items.length : n(k)}</button>`;
-    return `<div class="tabs">${tab("all", "Semua")}${Object.entries(ITEM_STATUS).map(([k, v]) => tab(k, v.label)).join("")}
+    const shown = items
+      .filter((x) => viewFilter === "all" || x.status === viewFilter)
+      .slice(0, 200);
+    const tab = (k, l) =>
+      `<button data-f="${k}" class="${viewFilter === k ? "on" : ""}">${l} ${k === "all" ? items.length : n(k)}</button>`;
+    return `<div class="tabs">${tab("all", "Semua")}${Object.entries(
+      ITEM_STATUS,
+    )
+      .map(([k, v]) => tab(k, v.label))
+      .join("")}
         ${n("failed") ? `<button data-a="retryall" title="Approve ulang semua dokumen yang gagal">↻ Ulangi semua gagal</button>` : ""}
         <button data-a="csv" title="Unduh daftar sebagai CSV">⬇ CSV</button>
         <button data-a="clearitems" title="Kosongkan daftar ini (tidak mengubah FASIH)">🗑</button></div>
@@ -930,15 +1196,30 @@
   function exportCsv() {
     const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const rows = Object.values(loadItems()).map((x) =>
-      [x.kode, x.nama, (ITEM_STATUS[x.status] || {}).label || x.status, x.reason, x.href, x.at ? new Date(x.at).toLocaleString("id-ID") : ""]
+      [
+        x.kode,
+        x.nama,
+        (ITEM_STATUS[x.status] || {}).label || x.status,
+        x.reason,
+        x.href,
+        x.at ? new Date(x.at).toLocaleString("id-ID") : "",
+      ]
         .map(cell)
         .join(","),
     );
     const a = document.createElement("a");
     a.href = URL.createObjectURL(
-      new Blob([String.fromCharCode(0xfeff) + ["kode,nama,status,keterangan,link,waktu", ...rows].join(String.fromCharCode(10))], {
-        type: "text/csv",
-      }),
+      new Blob(
+        [
+          String.fromCharCode(0xfeff) +
+            ["kode,nama,status,keterangan,link,waktu", ...rows].join(
+              String.fromCharCode(10),
+            ),
+        ],
+        {
+          type: "text/csv",
+        },
+      ),
     );
     a.download = `approve-edited-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}.csv`;
     a.click();
@@ -959,9 +1240,18 @@
     const a = e.target.closest("[data-a]")?.dataset.a;
     if (!a) return;
     if (a === "retryall")
-      retryItems(Object.values(loadItems()).filter((x) => x.status === "failed").map((x) => x.kode));
+      retryItems(
+        Object.values(loadItems())
+          .filter((x) => x.status === "failed")
+          .map((x) => x.kode),
+      );
     if (a === "csv") exportCsv();
-    if (a === "clearitems" && confirm("Kosongkan daftar dokumen di kotak ini? (status di FASIH tidak berubah)"))
+    if (
+      a === "clearitems" &&
+      confirm(
+        "Kosongkan daftar dokumen di kotak ini? (status di FASIH tidak berubah)",
+      )
+    )
       saveJson(ITEMS_KEY, {});
     if (a === "start") startRun(false);
     if (a === "test") startRun(true);
@@ -1006,12 +1296,20 @@
     const k = e.target.dataset.c;
     if (!k) return;
     const c = loadConf();
-    c[k] = e.target.type === "checkbox" ? e.target.checked : Math.max(0, Number(e.target.value) || 0);
+    c[k] =
+      e.target.type === "checkbox"
+        ? e.target.checked
+        : Math.max(0, Number(e.target.value) || 0);
     saveConf(c);
   }
   function makeDraggable(el) {
     el.addEventListener("pointerdown", (e) => {
-      if (!e.target.closest(".top") || e.target.closest("button") || e.button !== 0) return;
+      if (
+        !e.target.closest(".top") ||
+        e.target.closest("button") ||
+        e.button !== 0
+      )
+        return;
       e.preventDefault();
       const r = el.getBoundingClientRect();
       const dx = e.clientX - r.left;
@@ -1054,5 +1352,7 @@
     render();
     if (loadRun().running) tick();
   }, 1000);
-  console.log(`[${APP.name} v${APP.version}] Aktif. Tombol di kiri bawah (Alt+${APP.hotkey}).`);
+  console.log(
+    `[${APP.name} v${APP.version}] Aktif. Tombol di kiri bawah (Alt+${APP.hotkey}).`,
+  );
 })();
