@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Approve (status EDITED BY Admin Kabupaten, dari belakang)
 // @namespace    hanif-bps-hst
-// @version      1.1
+// @version      1.2
 // @description  Tanpa Excel/link: buka halaman data survei dengan filter status "EDITED BY Admin Kabupaten" (100 baris per halaman), ambil dokumen dari halaman & baris PALING BELAKANG (yang depan mungkin masih dikerjakan manual), buka Review lalu langsung Approve (tanpa Edit / Kirim), lalu kembali ke daftar. Dokumen yang gagal di-approve dilewati & dicatat. Mode uji berhenti sebelum Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -17,7 +17,7 @@
   const STATUS_FILTER = "EDITED BY Admin Kabupaten";
   const PER_PAGE = 100;
 
-  const APP = { name: "Submit & Approve", version: "1.1", hotkey: "0", launchBottom: 400 };
+  const APP = { name: "Submit & Approve", version: "1.2", hotkey: "0", launchBottom: 400 };
   const RUN_KEY = "fsa_run";
   const CONF_KEY = "fsa_conf";
   const POS_KEY = "fsa_pos";
@@ -175,6 +175,52 @@
         };
       });
   }
+  // Filter status lewat URL kadang tidak terpasang: kalau tabel masih memuat status lain, pilih
+  // "EDITED BY Admin Kabupaten" sendiri dari dropdown status (tombol ˅ di atas tabel), sekali per halaman.
+  const isEdited = (st) => /EDITED\s+BY\s+ADMIN\s+KABUPATEN/i.test(st || "");
+  let filterTriedAt = "";
+  async function ensureStatusFilter() {
+    const rows = readRows();
+    if (!rows.length || rows.every((r) => !r.status || isEdited(r.status))) return true;
+    if (filterTriedAt === location.href) return false;
+    filterTriedAt = location.href;
+    log("Filter status belum terpasang → pilih EDITED BY Admin Kabupaten dari dropdown");
+    const optionEls = () =>
+      Array.from(
+        document.querySelectorAll('[role="option"], [cmdk-item], [role="menuitem"], [role="menuitemcheckbox"], [role="listbox"] li, [data-radix-popper-content-wrapper] label, [role="dialog"] label'),
+      ).filter((el) => visible(el) && !el.closest(OWN) && isEdited(el.innerText));
+    const toggles = Array.from(document.querySelectorAll("button"))
+      .filter(
+        (b) =>
+          visible(b) &&
+          !b.closest("table") &&
+          !b.closest(OWN) &&
+          (b.querySelector("svg.tabler-icon-chevron-down, svg.tabler-icon-selector") || b.getAttribute("role") === "combobox"),
+      );
+    for (const t of toggles) {
+      const before = tableText();
+      triggerClick(t);
+      const opt = await waitFor(() => optionEls()[0], 2500);
+      if (!opt) {
+        pressKey("Escape");
+        await sleep(300);
+        continue;
+      }
+      const cb = opt.querySelector('input[type="checkbox"], [role="checkbox"]');
+      triggerClick(cb || opt);
+      await sleep(500);
+      pressKey("Escape");
+      await waitFor(() => tableText() !== before, 6000);
+      await waitTable();
+      if (readRows().every((r) => !r.status || isEdited(r.status))) {
+        log("Filter status EDITED BY Admin Kabupaten terpasang");
+        return true;
+      }
+    }
+    log("⚠ dropdown status EDITED BY Admin Kabupaten tidak ketemu — baris status lain dilewati");
+    return false;
+  }
+
   // Link Review dokumen pada satu baris (langsung di baris, atau muncul setelah kodenya diklik)
   async function rowLink(row) {
     const direct = Array.from(row.tr.querySelectorAll("a[href]")).find((a) => REVIEW_HREF.test(a.href));
@@ -414,7 +460,9 @@
         const page = run.page || 1;
         if (!listUrlOk(page)) return goto(listUrl(page));
         await waitTable();
-        const n = readRows().length;
+        await ensureStatusFilter();
+        const all = readRows();
+        const n = all.length;
         if (n >= PER_PAGE) {
           log(`Halaman ${page} penuh, cek halaman ${page + 1}`);
           setPhase("probe", { page: page + 1 });
@@ -433,8 +481,9 @@
         const page = run.page || 1;
         if (!listUrlOk(page)) return goto(listUrl(page));
         await waitTable();
+        await ensureStatusFilter();
         const skip = new Set(run.skip || []);
-        const rows = readRows().filter((r) => /EDITED/i.test(r.status || "EDITED") && !skip.has(r.kode));
+        const rows = readRows().filter((r) => (!r.status || isEdited(r.status)) && !skip.has(r.kode));
         if (!rows.length) {
           if (page > 1) {
             log(`Halaman ${page} sudah habis → halaman ${page - 1}`);
