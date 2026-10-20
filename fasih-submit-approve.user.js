@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Approve (status EDITED BY Admin Kabupaten, dari belakang)
 // @namespace    hanif-bps-hst
-// @version      1.2
+// @version      1.3
 // @description  Tanpa Excel/link: buka halaman data survei dengan filter status "EDITED BY Admin Kabupaten" (100 baris per halaman), ambil dokumen dari halaman & baris PALING BELAKANG (yang depan mungkin masih dikerjakan manual), buka Review lalu langsung Approve (tanpa Edit / Kirim), lalu kembali ke daftar. Dokumen yang gagal di-approve dilewati & dicatat. Mode uji berhenti sebelum Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -17,7 +17,7 @@
   const STATUS_FILTER = "EDITED BY Admin Kabupaten";
   const PER_PAGE = 100;
 
-  const APP = { name: "Submit & Approve", version: "1.2", hotkey: "0", launchBottom: 400 };
+  const APP = { name: "Submit & Approve", version: "1.3", hotkey: "0", launchBottom: 400 };
   const RUN_KEY = "fsa_run";
   const CONF_KEY = "fsa_conf";
   const POS_KEY = "fsa_pos";
@@ -439,8 +439,13 @@
     r.paused = false;
     saveRun(r);
     log(`${ok ? "✅" : "⚠️"} ${cur.kode || ""} ${cur.nama || ""}: ${reason}`);
-    if (r.limit && (r.done || 0) + (r.failed || []).length >= r.limit) return stopRun("Selesai (batas jumlah tercapai)");
-    setPhase("list");
+    if (r.limit && (r.done || 0) + (r.failed || []).length >= r.limit) {
+      stopRun("Selesai (batas jumlah tercapai)");
+      return goto(listUrl(r.page || 1)); // tetap kembali ke daftar (halaman terakhir)
+    }
+    // Kembali ke daftar di halaman terakhir. Jumlah halaman bisa berubah setelah approve
+    // (dokumen keluar dari filter EDITED) -> dicek lagi: penuh -> maju, kosong -> mundur.
+    setPhase("probe", { page: r.page || 1 });
     goto(listUrl(r.page || 1));
   }
 
