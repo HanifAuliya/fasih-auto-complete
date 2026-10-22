@@ -11,6 +11,7 @@ Ada beberapa skrip di folder ini, untuk dua tahap pekerjaan yang berbeda:
 | [`fasih-koreksi-gaji.user.js`](fasih-koreksi-gaji.user.js) | FASIH Koreksi Gaji + R.27 (gaji / 27.a / 27.b) | Sama persis dengan Koreksi R.27 (semua fitur di bagian 3), ditambah isian `gaji` = kolom Gaji dari Excel upah/gaji. Pintasan Alt+6. |
 | [`fasih-koreksi-ntb.user.js`](fasih-koreksi-ntb.user.js) | FASIH Koreksi Anomali NTB (26.a - 28.b) | Sama persis dengan Koreksi R.27 (bagian 3), untuk Excel Pengecekan Anomali NTB: ganti 26.a–26.d, 27.a dan 28.b (dari kolom r28c) = kolom `rXX input`, plus catatan `#DC_04` di tiap rincian yang diubah. Muat puluhan ribu dokumen. Pintasan Alt+5. |
 | [`fasih-koreksi-ntb-wxy.user.js`](fasih-koreksi-ntb-wxy.user.js) | FASIH Edit NTB (kolom W X Y: 26.b, 26.d, 27.a) | Salinan Koreksi NTB (fitur sama persis) untuk Excel "Edit NTB": ganti 26.b = kolom W `26b. Biaya Produksi`, 26.d = kolom X `26d. Op`, 27.a = kolom Y `27a` (nilai lama dari `26b_biaya_produksi`, `26d_operasional`, `27a_nilai_pendapatan`), hanya baris `Edit NTB (1=Ya)` = 1, plus catatan `#DC_04`. Pintasan Alt+7. |
+| [`fasih-koreksi-ntb-perdagangan.user.js`](fasih-koreksi-ntb-perdagangan.user.js) | FASIH NTB Perdagangan (kolom T U V W: 26.b, 26.c, 26.d, 27.a) | Salinan Koreksi NTB (fitur sama persis) untuk Excel "NTB Perdagangan": ganti 26.b = kolom T `26b. Produksi`, 26.c = kolom U `26c. Biaya Pembelian`, 26.d = kolom V `26d. Op`, 27.a = kolom W `27a` (nilai lama dari `26b_biaya_produksi`, `26c_biaya_pembelian`, `26d_operasional`, `27a_nilai_pendapatan`), hanya baris `Edit NTB (1=Ya)` = 1, plus catatan `#DC_04`. Pintasan Alt+P. |
 | [`fasih-ganti-wilayah-oss.user.js`](fasih-ganti-wilayah-oss.user.js) | FASIH OSS -> Keluarga: Pindah + Tautkan | Pindahkan assignment OSS ke SLS keluarganya (Ganti Wilayah), lalu tautkan ke usaha keluarga lewat "Pilih UMKM dalam satu SLS" — atau tutup/gandakan kalau memang tidak ada yang cocok. |
 | [`fasih-koreksi-kbli.user.js`](fasih-koreksi-kbli.user.js) | FASIH Koreksi KBLI & Anomali | Untuk Excel "Pengecekan KBLI": ganti KBLI akhir ke `KBLI Baru` di kartu usaha yang tepat (hanya baris Edit KBLI = 1), sesuaikan produk & kegiatan utama, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" dengan catatan `#DC_01`, lalu kirim & approve. |
 
@@ -236,6 +237,70 @@ Ketiga skrip ini **isinya sama persis**; yang beda cuma blok `KONFIGURASI` di ba
 **🏷 Atur status** (baris dicentang): pilih status hasil cek manual (Selesai, Sudah sesuai, Selesai manual, Perlu cek, Gagal, Forbidden, Belum) + catatan; ikut ke Laporan CSV.
 
 **Ekspor**: ⬇ Laporan CSV (nilai lama/baru tiap isian, status, keterangan, hasil, link dokumen yang dipakai) dan 💾 Ekspor / 📂 Impor JSON; nama file memuat nama wilayah.
+
+### 📋 Kolom Excel wajib — 3 skrip NTB
+
+Skrip mencari kolom berdasarkan **nama judul kolom**, bukan huruf kolomnya. Kolom boleh di mana saja (W/X/Y, T/U/V, …) dan boleh ada kolom lain di antaranya, **asal judulnya sesuai daftar di bawah**.
+
+**Aturan pencocokan nama judul**
+- Spasi, titik, garis bawah, tanda kurung, dan huruf besar/kecil **diabaikan**: `26d. Op` = `26D OP` = `26d_op`.
+- Kata-katanya harus sama: `26b. Produksi` ✅, tapi `Biaya Prod 26b` ❌ (tidak dikenal).
+- Baris judul harus ada di **30 baris teratas** sheet, dan harus memuat kolom **penanda** skrip itu.
+- Kalau ada dua kolom yang namanya sama setelah diringkas (mis. `26b_biaya_produksi` lama & `26b. Biaya Produksi` baru), kolom yang **paling dekat dengan kolom penanda** dibaca sebagai **nilai baru**, yang lain **nilai lama**. Jadi kolom nilai baru harus diletakkan di dekat kolom penanda (seperti di Excel contoh).
+- Isi angka boleh `1700000`, `1.700.000`, atau `Rp 1.700.000`; sel kosong dibaca 0.
+- Judul yang tidak dikenal → muncul pesan *"kolom tidak ada di sheet …: 26.b lama (…)"* — tambahkan namanya ke skrip (blok `FIELDS` di `KONFIGURASI`).
+
+#### 1) Koreksi NTB — `fasih-koreksi-ntb.user.js` (Alt+5)
+
+Penanda baris judul: **`r27a input`**
+
+| Rincian di FASIH | Kolom nilai lama (wajib) | Kolom nilai baru (wajib) |
+|---|---|---|
+| 26.a gaji | `r26a awal` | `r26a input` |
+| 26.b biaya produksi | `r26b awal` | `r26b input` |
+| 26.c biaya pembelian | `r26c awal` | `r26c input` |
+| 26.d operasional | `r26d awal` | `r26d input` |
+| 27.a nilai penjualan | `r27a awal` | `r27a input` |
+| 28.b aset lain | `r28c awal` | `r28c input` |
+
+Tidak ada penyaring "Edit NTB" — semua baris yang punya link dikerjakan.
+
+#### 2) Edit NTB WXY — `fasih-koreksi-ntb-wxy.user.js` (Alt+7)
+
+Penanda baris judul: **`27a`**
+
+| Rincian di FASIH | Kolom nilai lama (wajib) | Kolom nilai baru (wajib, salah satu nama) |
+|---|---|---|
+| 26.b biaya produksi | `26b_biaya_produksi` | `26b. Produksi` **atau** `26b. Biaya Produksi` |
+| 26.d operasional | `26d_operasional` | `26d. Op` **atau** `26d operasional input` |
+| 27.a nilai penjualan | `27a_nilai_pendapatan` | `27a` |
+
+Contoh file: *Edit NTB Contoh* (kolom W X Y), *Cabai Rawit COBA* (kolom T U V).
+
+#### 3) NTB Perdagangan — `fasih-koreksi-ntb-perdagangan.user.js` (Alt+P)
+
+Penanda baris judul: **`27a`**
+
+| Rincian di FASIH | Kolom nilai lama (wajib) | Kolom nilai baru (wajib, salah satu nama) |
+|---|---|---|
+| 26.b biaya produksi | `26b_biaya_produksi` | `26b. Produksi` **atau** `26b. Biaya Produksi` |
+| 26.c biaya pembelian | `26c_biaya_pembelian` | `26c. Biaya Pembelian` |
+| 26.d operasional | `26d_operasional` | `26d. Op` **atau** `26d operasional input` |
+| 27.a nilai penjualan | `27a_nilai_pendapatan` | `27a` |
+
+Contoh file: *NTB Perdagangan* (kolom T U V W).
+
+#### Kolom pendukung (ketiga skrip)
+
+| Kolom | Status | Nama judul yang dikenali | Gunanya |
+|---|---|---|---|
+| Link dokumen | **Wajib** | `link`, `url`, `link fasih` | Membuka dokumen. Baris tanpa link dilewati. |
+| Nama usaha | **Wajib** (praktis) | `nama_usaha` | Kartu usaha harus cocok namanya; tanpa kolom ini tidak ada kartu yang cocok. |
+| Edit NTB | Opsional — hanya skrip **WXY & Perdagangan** | `Edit NTB (1=Ya)` | Kalau kolomnya ada, **hanya baris berisi 1** yang dikerjakan; kosong/0 dilewati. |
+| Wilayah | Opsional | `kec` / `kecamatan` / `nmkec`, `desa` / `nmdesa`, `nmsls` / `sls`, `nama_kab` / `kab` / `kabupaten` / `nmkab` | Mencari dokumen lewat Filter kalau link salah / Forbidden; ditampilkan di panel. |
+| Lainnya | Opsional | `idsbr`, `assignment_status_alias` / `status`, `no`, `Isian yang harus diinput` | Ditampilkan di panel & ikut ke Laporan CSV. |
+
+Kolom lain (`TotalRows`, `NTB awal`, `Rasio NTB/Output`, `Pembagian`, `NTB Input`, `Delta NTB`, `catatan`, dst.) **diabaikan**, boleh ada boleh tidak.
 
 ## 4. `fasih-koreksi-kbli.user.js` — Koreksi KBLI & Anomali
 

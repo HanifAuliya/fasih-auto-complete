@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Edit NTB (kolom W X Y: 26.b, 26.d, 27.a)
 // @namespace    hanif-bps-hst
-// @version      1.0
+// @version      1.1
 // @description  Baca Excel "Edit NTB" (contoh: Edit NTB Contoh.xlsx), buka tiap dokumen, ganti 26.b biaya produksi, 26.d biaya operasional dan 27.a nilai penjualan = kolom W "26b. Biaya Produksi", X "26d. Op", Y "27a" (nilai lama dari kolom 26b_biaya_produksi, 26d_operasional, 27a_nilai_pendapatan) + catatan #DC_04 di tiap rincian yang diubah di kartu usaha yang tepat (nama usaha wajib cocok), lalu Kirim & Approve. Baris dengan kolom "Edit NTB (1=Ya)" selain 1 dilewati. Fitur lain sama persis dengan Koreksi NTB.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -28,7 +28,7 @@
   // Salinan Koreksi NTB: yang beda cuma bagian ini (kolom W X Y) + penyaring kolom "Edit NTB (1=Ya)".
   const APP = {
     name: "Edit NTB WXY",
-    version: "1.0",
+    version: "1.1",
     title: "Edit NTB (kolom W X Y)",
     badge: "WXY",
     launch: "Edit NTB WXY",
@@ -47,8 +47,9 @@
       "biaya_produksi",
       "26.b",
       ["26BBIAYAPRODUKSI"],
-      ["26BBIAYAPRODUKSI"],
-      "26b. Biaya Produksi",
+      // Nama kolom baru beda-beda antar file: "26b. Biaya Produksi" (Edit NTB Contoh) / "26b. Produksi" (Cabai Rawit)
+      ["26BPRODUKSI", "26BBIAYAPRODUKSI"],
+      "26b. Produksi",
       "r26b",
     ],
     [
