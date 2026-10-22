@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Approve (status EDITED BY Admin Kabupaten, dari belakang)
 // @namespace    hanif-bps-hst
-// @version      1.13
+// @version      1.15
 // @description  Tanpa Excel/link: buka halaman data survei dengan filter status "EDITED BY Admin Kabupaten" (100 baris per halaman), ambil dokumen dari halaman & baris PALING BELAKANG (yang depan mungkin masih dikerjakan manual), buka Review lalu langsung Approve (tanpa Edit / Kirim), lalu kembali ke daftar. Dokumen yang gagal di-approve dilewati & dicatat. Mode uji berhenti sebelum Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -19,7 +19,7 @@
 
   const APP = {
     name: "Submit & Approve",
-    version: "1.13",
+    version: "1.15",
     hotkey: "0",
     launchBottom: 400,
   };
@@ -65,9 +65,25 @@
     approve: true,
     testMode: false,
     limit: 0,
+    devices: 1, // jumlah device yang menjalankan skrip ini bersamaan
+    slot: 1, // device ini bagian ke berapa (1..devices)
     ...loadJson(CONF_KEY, {}),
   });
   const saveConf = (c) => saveJson(CONF_KEY, c);
+  // Bagi dokumen antar device lewat kode dokumen (bukan halaman/urutan, karena urutan daftar berubah
+  // terus setelah approve): tiap kode selalu jatuh ke bagian yang sama -> dua device tidak pernah
+  // membuka dokumen yang sama.
+  const devCount = (c) => Math.min(9, Math.max(1, Number(c.devices) || 1));
+  const devSlot = (c) => Math.min(devCount(c), Math.max(1, Number(c.slot) || 1));
+  function partOf(kode, n) {
+    let h = 5381;
+    for (const ch of String(kode || "")) h = ((h * 33) ^ ch.charCodeAt(0)) >>> 0;
+    return (h % n) + 1;
+  }
+  const mine = (kode) => {
+    const c = loadConf();
+    return devCount(c) === 1 || partOf(kode, devCount(c)) === devSlot(c);
+  };
   function loadDone() {
     const d = loadJson(DONE_KEY, {});
     const now = Date.now();
@@ -77,10 +93,10 @@
   // Daftar dokumen yang ditarik dari tabel (tampil di kotak kendali; yang gagal bisa diulang)
   const ITEMS_KEY = "fsa_items";
   const ITEM_STATUS = {
-    antre: { label: "Antre", color: "#6366f1" },
-    done: { label: "Approve", color: "#16a34a" },
-    already: { label: "Sudah approve", color: "#0d9488" },
-    failed: { label: "Gagal", color: "#dc2626" },
+    antre: { label: "Antre", color: "#818cf8" },
+    done: { label: "Approve", color: "#4ade80" },
+    already: { label: "Sudah approve", color: "#2dd4bf" },
+    failed: { label: "Gagal", color: "#f87171" },
   };
   const loadItems = () => loadJson(ITEMS_KEY, {});
   function setItem(kode, patch) {
@@ -792,7 +808,10 @@
           log(
             `${stale} dokumen sudah di-approve tapi masih tampil di daftar (server belum update), dilewati`,
           );
-        const rows = edited.filter((r) => !skip.has(r.kode) && !done[r.kode]);
+        // Beberapa device: dokumen bagian device lain tidak disentuh
+        const rows = edited.filter(
+          (r) => !skip.has(r.kode) && !done[r.kode] && mine(r.kode),
+        );
         if (!rows.length) {
           if (page > 1) {
             log(`Halaman ${page} sudah habis → halaman ${page - 1}`);
@@ -818,7 +837,10 @@
         }
         // Ambil link Review sampai BATCH dokumen dari baris paling bawah ke atas
         const picks = rows.slice(-BATCH).reverse();
-        log(`Ambil ${picks.length} dokumen terbawah di hal. ${page}`);
+        const cf = loadConf();
+        log(
+          `Ambil ${picks.length} dokumen terbawah di hal. ${page}${devCount(cf) > 1 ? ` (bagian device ${devSlot(cf)}/${devCount(cf)})` : ""}`,
+        );
         const batch = [];
         for (const row of picks) {
           if (stopRequested || !loadRun().running) break;
@@ -1031,37 +1053,78 @@
     st.id = "fsa-style";
     st.textContent = `
       #fsa-box, #fsa-box *, #fsa-launch { box-sizing:border-box; font-family:"Inter",ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif; }
-      #fsa-launch { position:fixed; left:16px; z-index:999999; border:none; border-radius:999px; padding:10px 16px 10px 12px; background:linear-gradient(120deg,#0f766e,#0891b2); color:#fff; font:650 13px "Inter",ui-sans-serif,system-ui,sans-serif; cursor:pointer; box-shadow:0 10px 28px rgba(8,145,178,.4); }
+      #fsa-launch { position:fixed; left:16px; z-index:999999; border:none; border-radius:999px; padding:10px 16px 10px 12px; background:linear-gradient(120deg,#0f766e,#0891b2); color:#fff; font:650 13px "Inter",ui-sans-serif,system-ui,sans-serif; cursor:pointer; box-shadow:0 10px 28px rgba(8,145,178,.4); transition:transform .15s; }
+      #fsa-launch:hover { transform:translateY(-2px); }
       #fsa-launch b { background:rgba(255,255,255,.22); border-radius:7px; padding:2px 6px; font-size:11.5px; margin-right:6px; }
-      #fsa-box { position:fixed; right:16px; bottom:16px; z-index:1000002; width:min(900px,96vw); background:rgba(17,19,36,.94); color:#eef0ff; border-radius:16px; padding:14px 16px; box-shadow:0 20px 50px rgba(10,10,30,.45); font-size:13px; }
-      #fsa-box .top { display:flex; align-items:center; gap:8px; flex-wrap:wrap; cursor:move; user-select:none; }
-      #fsa-box .t { font-weight:700; }
-      #fsa-box .m { color:#9aa0c3; font-size:12px; }
-      #fsa-box button { border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.08); color:#eef0ff; border-radius:9px; padding:6px 10px; font-size:12.5px; font-weight:600; cursor:pointer; }
-      #fsa-box button:hover { background:rgba(255,255,255,.16); }
-      #fsa-box button.go { background:#16a34a; border-color:#16a34a; }
-      #fsa-box button.stop { background:transparent; border-color:rgba(248,113,113,.45); color:#fca5a5; }
-      #fsa-box .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:10px; }
-      #fsa-box label { display:inline-flex; gap:6px; align-items:center; font-size:12.5px; cursor:pointer; }
-      #fsa-box input[type=number] { width:60px; background:rgba(0,0,0,.3); color:#fff; border:1px solid rgba(255,255,255,.2); border-radius:7px; padding:3px 6px; }
-      #fsa-box .log { margin-top:10px; font-family:ui-monospace,Consolas,monospace; font-size:11.5px; background:rgba(0,0,0,.28); border-radius:9px; padding:7px 10px; line-height:1.5; max-height:130px; overflow:auto; }
+      #fsa-box { --ok:#22c55e; --bad:#f87171; --acc:#818cf8; --warn:#fbbf24; --mut:#9aa0c3; --line:rgba(255,255,255,.08); --card:rgba(255,255,255,.04);
+        position:fixed; right:16px; bottom:16px; z-index:1000002; width:min(940px,96vw); max-height:92vh; display:flex; flex-direction:column;
+        background:linear-gradient(160deg,rgba(23,26,48,.97),rgba(13,15,30,.97)); color:#eef0ff; border:1px solid var(--line); border-radius:18px;
+        box-shadow:0 24px 60px rgba(5,6,20,.55); font-size:13px; overflow:hidden; backdrop-filter:blur(8px); }
+      #fsa-box .top { display:flex; align-items:center; gap:10px; padding:12px 16px; border-bottom:1px solid var(--line); cursor:move; user-select:none; background:rgba(255,255,255,.02); }
+      #fsa-box .logo { width:34px; height:34px; border-radius:10px; display:grid; place-items:center; font-weight:800; background:linear-gradient(135deg,#0f766e,#0891b2); box-shadow:0 6px 16px rgba(8,145,178,.35); flex:none; }
+      #fsa-box .ttl { display:flex; flex-direction:column; line-height:1.2; min-width:0; }
+      #fsa-box .ttl b { font-size:14px; }
+      #fsa-box .ttl span { color:var(--mut); font-size:11.5px; }
+      #fsa-box .pill { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-size:11.5px; font-weight:650; background:rgba(255,255,255,.06); border:1px solid var(--line); white-space:nowrap; }
+      #fsa-box .pill i { width:8px; height:8px; border-radius:50%; background:var(--c,#64748b); box-shadow:0 0 0 3px color-mix(in srgb,var(--c,#64748b) 25%,transparent); }
+      #fsa-box .pill.live i { animation:fsapulse 1.4s ease-in-out infinite; }
+      @keyframes fsapulse { 50% { opacity:.35; } }
+      #fsa-box .sp { flex:1; }
+      #fsa-box button { border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.06); color:#eef0ff; border-radius:10px; padding:7px 12px; font-size:12.5px; font-weight:600; cursor:pointer; transition:background .15s,border-color .15s,transform .1s; }
+      #fsa-box button:hover { background:rgba(255,255,255,.13); }
+      #fsa-box button:active { transform:scale(.97); }
+      #fsa-box button.go { background:linear-gradient(135deg,#16a34a,#15803d); border-color:transparent; box-shadow:0 6px 16px rgba(22,163,74,.3); }
+      #fsa-box button.go:hover { filter:brightness(1.1); }
+      #fsa-box button.big { padding:10px 18px; font-size:13.5px; }
+      #fsa-box button.stop { background:rgba(248,113,113,.1); border-color:rgba(248,113,113,.4); color:#fca5a5; }
+      #fsa-box button.ghost { background:transparent; }
+      #fsa-box .cols { display:flex; gap:0; min-height:0; flex:1; }
+      #fsa-box .col-l { flex:1.05 1 0; min-width:0; padding:14px 16px; overflow:auto; }
+      #fsa-box .col-r { flex:1 1 0; min-width:0; display:flex; flex-direction:column; border-left:1px solid var(--line); padding:14px 16px; min-height:0; }
+      @media (max-width:760px) { #fsa-box .cols { flex-direction:column; overflow:auto; } #fsa-box .col-r { border-left:none; border-top:1px solid var(--line); } }
+      #fsa-box .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+      #fsa-box .stat { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:9px 10px; }
+      #fsa-box .stat b { display:block; font-size:20px; font-weight:750; color:var(--c,#eef0ff); line-height:1.1; font-variant-numeric:tabular-nums; }
+      #fsa-box .stat span { color:var(--mut); font-size:11px; }
+      #fsa-box .cur { margin-top:10px; display:flex; gap:10px; align-items:center; background:rgba(129,140,248,.1); border:1px solid rgba(129,140,248,.3); border-radius:12px; padding:9px 12px; }
+      #fsa-box .cur .k { font-family:ui-monospace,Consolas,monospace; font-size:12px; color:#c7d2fe; }
+      #fsa-box .cur .n { font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      #fsa-box .sec { margin-top:12px; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; }
+      #fsa-box .sec h4 { margin:0 0 8px; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--mut); font-weight:700; }
+      #fsa-box .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+      #fsa-box .row + .row { margin-top:10px; }
+      #fsa-box label { display:inline-flex; gap:6px; align-items:center; font-size:12.5px; cursor:pointer; color:#d6d9f0; }
+      #fsa-box select, #fsa-box input[type=number] { background:rgba(0,0,0,.35); color:#fff; border:1px solid rgba(255,255,255,.18); border-radius:8px; padding:5px 8px; font-size:12.5px; outline:none; }
+      #fsa-box select:focus, #fsa-box input[type=number]:focus { border-color:var(--acc); }
+      #fsa-box input[type=number] { width:70px; }
+      #fsa-box select option { color:#000; }
+      #fsa-box .hint { color:var(--mut); font-size:11.5px; margin-top:10px; line-height:1.5; }
+      #fsa-box .lbl { display:flex; align-items:center; gap:8px; margin-top:12px; margin-bottom:6px; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--mut); font-weight:700; }
+      #fsa-box .log { font-family:ui-monospace,Consolas,monospace; font-size:11.5px; background:rgba(0,0,0,.35); border:1px solid var(--line); border-radius:10px; padding:8px 10px; line-height:1.6; max-height:150px; overflow:auto; }
+      #fsa-box .log div { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#b8bdd9; }
       #fsa-box .log div:last-child { color:#fde68a; }
-      #fsa-box .fail { margin-top:8px; max-height:120px; overflow:auto; font-size:12px; color:#fcd34d; }
-      #fsa-box .hint { color:#9aa0c3; font-size:11.5px; margin-top:8px; line-height:1.45; }
-      #fsa-box .cols { display:flex; gap:14px; align-items:stretch; }
-      #fsa-box .col-l { flex:1 1 0; min-width:0; }
-      #fsa-box .col-r { flex:1 1 0; min-width:0; display:flex; flex-direction:column; border-left:1px solid rgba(255,255,255,.1); padding-left:14px; }
-      #fsa-box .col-r .empty { margin-top:10px; color:#9aa0c3; font-size:12px; }
-      @media (max-width:760px) { #fsa-box .cols { flex-direction:column; } #fsa-box .col-r { border-left:none; padding-left:0; } }
-      #fsa-box .tabs { display:flex; gap:4px; flex-wrap:wrap; margin-top:10px; }
-      #fsa-box .tabs button { padding:4px 8px; font-size:11.5px; }
-      #fsa-box .tabs button.on { background:#4f46e5; border-color:#4f46e5; }
-      #fsa-box .items { margin-top:6px; max-height:min(360px,55vh); overflow:auto; display:flex; flex-direction:column; gap:4px; }
-      #fsa-box .it { display:flex; gap:6px; align-items:flex-start; background:rgba(255,255,255,.05); border-left:3px solid var(--c); border-radius:8px; padding:5px 8px; font-size:12px; }
+      #fsa-box .rh { display:flex; align-items:center; gap:8px; }
+      #fsa-box .rh b { font-size:13.5px; }
+      #fsa-box .count { background:rgba(255,255,255,.08); border-radius:999px; padding:1px 8px; font-size:11.5px; color:var(--mut); }
+      #fsa-box .tabs { display:flex; gap:2px; flex-wrap:wrap; margin-top:10px; background:rgba(0,0,0,.25); border:1px solid var(--line); border-radius:10px; padding:3px; }
+      #fsa-box .tabs button { border:none; background:transparent; padding:5px 9px; font-size:11.5px; color:var(--mut); border-radius:7px; }
+      #fsa-box .tabs button.on { background:rgba(129,140,248,.22); color:#fff; }
+      #fsa-box .tabs button em { font-style:normal; opacity:.7; margin-left:3px; }
+      #fsa-box .acts { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+      #fsa-box .acts button { padding:5px 10px; font-size:11.5px; }
+      #fsa-box .acts .retry { background:rgba(248,113,113,.12); border-color:rgba(248,113,113,.4); color:#fecaca; }
+      #fsa-box .items { margin-top:8px; flex:1; min-height:120px; max-height:min(420px,52vh); overflow:auto; display:flex; flex-direction:column; gap:5px; padding-right:2px; }
+      #fsa-box .it { display:flex; gap:8px; align-items:center; background:var(--card); border:1px solid var(--line); border-left:3px solid var(--c); border-radius:10px; padding:6px 8px 6px 10px; font-size:12px; transition:background .15s; }
+      #fsa-box .it:hover { background:rgba(255,255,255,.07); }
       #fsa-box .it .nm { flex:1; min-width:0; }
-      #fsa-box .it .nm small { display:block; color:#9aa0c3; font-size:11px; }
-      #fsa-box .it .chip { color:var(--c); font-weight:700; font-size:11px; white-space:nowrap; }
-      #fsa-box .it a, #fsa-box .it button { padding:2px 7px; font-size:11.5px; color:#eef0ff; text-decoration:none; }
+      #fsa-box .it .nm div { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+      #fsa-box .it .nm code { font-family:ui-monospace,Consolas,monospace; font-size:11px; color:var(--mut); }
+      #fsa-box .it .nm small { display:block; color:#fca5a5; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      #fsa-box .chip { color:var(--c); background:color-mix(in srgb,var(--c) 16%,transparent); border-radius:999px; padding:2px 8px; font-weight:700; font-size:10.5px; white-space:nowrap; }
+      #fsa-box .it a, #fsa-box .it button { padding:3px 8px; font-size:12px; color:#eef0ff; text-decoration:none; border:1px solid rgba(255,255,255,.12); border-radius:8px; background:rgba(255,255,255,.05); }
+      #fsa-box .empty { margin-top:16px; color:var(--mut); font-size:12px; text-align:center; padding:24px 10px; border:1px dashed var(--line); border-radius:12px; }
+      #fsa-box ::-webkit-scrollbar { width:8px; height:8px; }
+      #fsa-box ::-webkit-scrollbar-thumb { background:rgba(255,255,255,.12); border-radius:8px; }
     `;
     document.head.appendChild(st);
   }
@@ -1131,39 +1194,69 @@
       review: "Approve",
       approve: "Approve",
     };
+    const st = !run.running
+      ? { t: "Berhenti", c: "#64748b" }
+      : run.hold
+        ? { t: "Dijeda", c: "#fbbf24" }
+        : run.paused
+          ? { t: "Menunggu konfirmasi", c: "#fbbf24" }
+          : { t: PH[run.phase] || run.phase || "Berjalan", c: "#22c55e", live: true };
+    const skipOld = (run.skip || []).length - failed.length;
+    const statTile = (n, label, c) =>
+      `<div class="stat" style="--c:${c}"><b>${n}</b><span>${label}</span></div>`;
     box.innerHTML = `
       <div class="top">
-        <div class="t">✔ ${esc(APP.name)}</div>
-        <div class="m">${run.running ? `${run.hold ? "⏸ dijeda · " : ""}${esc(PH[run.phase] || run.phase || "")}${conf.testMode ? " · Mode uji" : ""} · hal. ${run.page || "-"}` : "berhenti"}</div>
-        <span style="flex:1"></span>
+        <div class="logo">✔</div>
+        <div class="ttl"><b>${esc(APP.name)}</b><span>v${esc(APP.version)} · ${esc(STATUS_FILTER)}</span></div>
+        <span class="pill${st.live ? " live" : ""}" style="--c:${st.c}"><i></i>${esc(st.t)}${conf.testMode && run.running ? " · uji" : ""}</span>
+        ${devCount(conf) > 1 ? `<span class="pill" style="--c:#818cf8"><i></i>Device ${devSlot(conf)}/${devCount(conf)}</span>` : ""}
+        <span class="sp"></span>
         ${
           run.running
             ? `${run.paused ? `<button class="go" data-a="send">✓ Approve sekarang</button><button data-a="pass">Lewati</button>` : ""}
                ${run.hold ? `<button class="go" data-a="resume">▶ Lanjut</button>` : `<button data-a="hold">⏸ Jeda</button>`}
                <button class="stop" data-a="stop">■ Stop</button>`
-            : `<button data-a="close" title="Tutup">✕</button>`
+            : `<button class="ghost" data-a="close" title="Tutup (Alt+${APP.hotkey})">✕</button>`
         }
       </div>
       <div class="cols"><div class="col-l">
-      <div class="m" style="margin-top:6px">✅ ${run.done || 0} di-approve · ⚠ ${failed.length} dilewati${(run.skip || []).length > failed.length ? ` (+${(run.skip || []).length - failed.length} dari sesi sebelumnya)` : ""}</div>
-      ${run.cur ? `<div style="margin-top:6px;font-weight:650">▶ ${esc(run.cur.kode)} ${esc(run.cur.nama || "")}${(run.batch || []).length ? ` <span class="m">· ${run.batch.length} lagi di antrean</span>` : ""}</div>` : ""}
-      ${
-        run.running
-          ? ""
-          : `<div class="row">
-              <button class="go" data-a="start">▶ Mulai</button>
-              <button data-a="test">🧪 Uji 1 dokumen</button>
-              <label>Batas <input type="number" min="0" data-c="limit" value="${conf.limit || 0}"> dok (0 = semua)</label>
-            </div>
-            <div class="row">
-              <button data-a="reset" title="Dokumen yang tadinya gagal dicoba lagi">↻ Reset daftar dilewati</button>
-            </div>
-            <div class="hint">Membuka daftar data dengan filter <b>${esc(STATUS_FILTER)}</b>, ${PER_PAGE} baris/halaman, lalu mengerjakan dari <b>halaman & baris paling belakang</b>: buka Review → langsung <b>Approve</b> (tanpa Edit / Kirim). Dokumen yang gagal di-approve dilewati & dicatat di bawah. Pintasan: Alt+${APP.hotkey}.</div>`
-      }
-      <div class="log">${(run.logs || []).map((l) => `<div>${esc(l)}</div>`).join("") || "<div>…</div>"}</div>
+        <div class="stats">
+          ${statTile(run.done || 0, "Di-approve", "#4ade80")}
+          ${statTile(failed.length, `Dilewati${skipOld > 0 ? ` (+${skipOld} lama)` : ""}`, failed.length ? "#f87171" : "#eef0ff")}
+          ${statTile((run.batch || []).length + (run.cur ? 1 : 0), "Antrean", "#a5b4fc")}
+          ${statTile(run.page || "–", "Halaman", "#eef0ff")}
+        </div>
+        ${run.cur ? `<div class="cur"><span class="pill live" style="--c:#818cf8"><i></i>Proses</span><div style="min-width:0"><div class="n">${esc(run.cur.nama || "")}</div><div class="k">${esc(run.cur.kode)}</div></div></div>` : ""}
+        ${
+          run.running
+            ? ""
+            : `<div class="sec">
+                <h4>Jalankan</h4>
+                <div class="row">
+                  <button class="go big" data-a="start">▶ Mulai approve</button>
+                  <button data-a="test">🧪 Uji 1 dokumen</button>
+                </div>
+                <div class="row">
+                  <label>Batas <input type="number" min="0" data-c="limit" value="${conf.limit || 0}"> dokumen <span class="m" style="color:var(--mut)">(0 = semua)</span></label>
+                </div>
+              </div>
+              <div class="sec" title="Jalankan di beberapa device sekaligus tanpa bentrok: isi jumlah device yang sama di semua device, lalu tiap device pilih nomor bagian yang berbeda">
+                <h4>Beberapa device</h4>
+                <div class="row">
+                  <label>Jumlah device <select data-c="devices">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<option value="${n}"${devCount(conf) === n ? " selected" : ""}>${n}</option>`).join("")}</select></label>
+                  ${devCount(conf) > 1 ? `<label>Device ini bagian <select data-c="slot">${Array.from({ length: devCount(conf) }, (_, i) => i + 1).map((n) => `<option value="${n}"${devSlot(conf) === n ? " selected" : ""}>${n}</option>`).join("")}</select> dari ${devCount(conf)}</label>` : ""}
+                </div>
+                <div class="hint" style="margin-top:8px">${devCount(conf) > 1 ? "Tiap device hanya mengerjakan bagiannya sendiri (dibagi dari kode dokumen) — tidak akan bentrok." : "Pakai lebih dari 1 device? Isi jumlah device yang sama di semua device, lalu pilih bagian yang berbeda."}</div>
+              </div>
+              <div class="hint">Buka daftar <b>${esc(STATUS_FILTER)}</b> (${PER_PAGE} baris/halaman), kerjakan dari <b>halaman & baris paling belakang</b>: Review → langsung <b>Approve</b>. Yang gagal dicatat di kanan & bisa diulang. <button class="ghost" data-a="reset" style="padding:3px 8px;font-size:11.5px;margin-left:4px" title="Dokumen yang tadinya gagal dicoba lagi saat Mulai">↻ Reset daftar dilewati</button></div>`
+        }
+        <div class="lbl">Log</div>
+        <div class="log">${(run.logs || []).map((l) => `<div title="${esc(l)}">${esc(l)}</div>`).join("") || "<div>…</div>"}</div>
       </div>
-      <div class="col-r"><div class="t" style="margin-top:8px">📋 Dokumen ditarik</div>${itemsHtml(items) || '<div class="empty">Belum ada dokumen. Daftar terisi saat skrip mengambil link Review dari tabel.</div>'}</div>
-      </div>`;
+      <div class="col-r">
+        <div class="rh"><b>📋 Dokumen ditarik</b><span class="count">${items.length}</span></div>
+        ${itemsHtml(items) || '<div class="empty">Belum ada dokumen.<br>Daftar terisi saat skrip mengambil link Review dari tabel.</div>'}
+      </div></div>`;
   }
   function itemsHtml(items) {
     if (!items.length) return "";
@@ -1172,25 +1265,27 @@
       .filter((x) => viewFilter === "all" || x.status === viewFilter)
       .slice(0, 200);
     const tab = (k, l) =>
-      `<button data-f="${k}" class="${viewFilter === k ? "on" : ""}">${l} ${k === "all" ? items.length : n(k)}</button>`;
-    return `<div class="tabs">${tab("all", "Semua")}${Object.entries(
-      ITEM_STATUS,
-    )
+      `<button data-f="${k}" class="${viewFilter === k ? "on" : ""}">${l}<em>${k === "all" ? items.length : n(k)}</em></button>`;
+    return `<div class="tabs">${tab("all", "Semua")}${Object.entries(ITEM_STATUS)
       .map(([k, v]) => tab(k, v.label))
-      .join("")}
-        ${n("failed") ? `<button data-a="retryall" title="Approve ulang semua dokumen yang gagal">↻ Ulangi semua gagal</button>` : ""}
+      .join("")}</div>
+      <div class="acts">
+        ${n("failed") ? `<button class="retry" data-a="retryall" title="Approve ulang semua dokumen yang gagal">↻ Ulangi semua gagal (${n("failed")})</button>` : ""}
+        <span class="sp"></span>
         <button data-a="csv" title="Unduh daftar sebagai CSV">⬇ CSV</button>
-        <button data-a="clearitems" title="Kosongkan daftar ini (tidak mengubah FASIH)">🗑</button></div>
+        <button class="ghost" data-a="clearitems" title="Kosongkan daftar ini (tidak mengubah FASIH)">🗑 Kosongkan</button>
+      </div>
       <div class="items">${
         shown
           .map((x) => {
             const st = ITEM_STATUS[x.status] || ITEM_STATUS.antre;
-            return `<div class="it" style="--c:${st.color}"><span class="chip">${st.label}</span>
-              <div class="nm">${esc(x.kode)} ${esc(x.nama || "")}${x.reason ? `<small>${esc(x.reason)}</small>` : ""}</div>
+            return `<div class="it" style="--c:${st.color}">
+              <div class="nm"><div title="${esc(x.nama || "")}">${esc(x.nama || "(tanpa nama)")}</div><code>${esc(x.kode)}</code>${x.reason && x.status === "failed" ? `<small title="${esc(x.reason)}">${esc(x.reason)}</small>` : ""}</div>
+              <span class="chip">${st.label}</span>
               ${x.href ? `<a href="${esc(x.href)}" target="_blank" title="Buka di tab baru">↗</a>` : ""}
               ${x.status === "failed" ? `<button data-retry="${esc(x.kode)}" title="Approve ulang dokumen ini">↻</button>` : ""}</div>`;
           })
-          .join("") || '<div class="m">Tidak ada dokumen di kategori ini.</div>'
+          .join("") || '<div class="empty">Tidak ada dokumen di kategori ini.</div>'
       }</div>`;
   }
   function exportCsv() {
@@ -1301,6 +1396,8 @@
         ? e.target.checked
         : Math.max(0, Number(e.target.value) || 0);
     saveConf(c);
+    sig = "";
+    render();
   }
   function makeDraggable(el) {
     el.addEventListener("pointerdown", (e) => {
