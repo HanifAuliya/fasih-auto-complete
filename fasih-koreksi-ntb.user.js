@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi Anomali NTB (26.a - 28.b)
 // @namespace    hanif-bps-hst
-// @version      1.12
+// @version      1.13
 // @description  Baca Excel Pengecekan Anomali NTB, buka tiap dokumen, ganti 26.a gaji, 26.b biaya produksi, 26.c biaya pembelian, 26.d biaya operasional, 27.a nilai penjualan dan 28.b aset (dari r28c) = kolom "rXX input" + catatan #DC_04 di tiap rincian yang diubah di kartu usaha yang tepat (nama usaha wajib cocok), lalu Kirim & Approve. Isian yang memang tidak ada di kartu (tergantung KBLI) dilewati bila nilai Excel-nya 0. Link salah/Forbidden: dicari lewat daftar assignment (BKU lalu keluarga). Yang gagal bisa dikerjakan manual lewat panel bantu.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -28,7 +28,7 @@
   // Satu-satunya bagian yang beda antara skrip Koreksi R.27, Koreksi Gaji dan Koreksi NTB; sisanya sama persis.
   const APP = {
     name: "Koreksi NTB",
-    version: "1.12",
+    version: "1.13",
     title: "Koreksi Anomali NTB",
     badge: "NTB",
     launch: "Koreksi NTB",
@@ -98,6 +98,29 @@
   // Catatan bawaan yang ditambahkan di tiap rincian yang nilainya diubah (tombol Catatan).
   // Bisa diganti / dikosongkan di panel (② Pengaturan); kosong = tidak menambah catatan.
   const NOTE_DEFAULT = "#DC_04";
+  // Template Excel (tombol 📄 Template Excel di panel): [judul kolom, isi baris contoh].
+  // Kolom nilai baru diletakkan berdekatan dengan kolom penanda supaya terbaca sebagai nilai baru.
+  const TEMPLATE = [
+    ["NO.", 1],
+    ["nama_usaha", "UTP TANAMAN PANGAN (CONTOH NAMA)"],
+    ["kec", "NAMA KECAMATAN"],
+    ["desa", "NAMA DESA"],
+    ["nmsls", "NAMA SLS"],
+    ["r26a awal", 0],
+    ["r26b awal", 1700000],
+    ["r26c awal", 0],
+    ["r26d awal", 1000000],
+    ["r27a awal", 8000000],
+    ["r28c awal", 0],
+    ["r26a input", 0],
+    ["r26b input", 3400000],
+    ["r26c input", 0],
+    ["r26d input", 1000000],
+    ["r27a input", 18000000],
+    ["r28c input", 0],
+    ["assignment_status_alias", "EDITED BY Admin Kabupaten"],
+    ["link", "https://fasih-sm.bps.go.id/app/assignment/<id-survei>/<id-dokumen>"],
+  ];
   // ===== akhir KONFIGURASI =====
 
   const DEFAULT_CONF = {
@@ -2739,6 +2762,7 @@
                 <input type="file" accept=".xlsx" data-file hidden>
               </label>
               <div class="knt-row" style="margin-top:12px">
+                <button class="knt-btn sm" data-act="template" title="Unduh file Excel kosong berisi kolom yang dibutuhkan skrip ini + 1 baris contoh">📄 Template Excel</button>
                 <button class="knt-btn sm" data-act="csv">⬇ Laporan CSV</button>
                 <button class="knt-btn sm" data-act="export">💾 Ekspor</button>
                 <button class="knt-btn sm" data-act="import">📂 Impor</button>
@@ -2947,6 +2971,7 @@
         renderDynamic(overlay);
       }
       if (act === "csv") exportCsv();
+      if (act === "template") downloadTemplate();
       if (act === "export") exportJson();
       if (act === "import") overlay.querySelector("[data-importfile]").click();
       if (
@@ -3074,6 +3099,124 @@
       .replace(/[\\/:*?"<>|\s]+/g, "_")
       .replace(/_+/g, "_")
       .slice(0, 80);
+  }
+
+  // ---------- Template Excel: kolom wajib skrip ini + 1 baris contoh (.xlsx dibuat di browser) ----------
+  const CRC_T = (() => {
+    const t = [];
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+  const crc32 = (bytes) => {
+    let c = 0xffffffff;
+    for (const x of bytes) c = CRC_T[(c ^ x) & 255] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  // Zip tanpa kompresi (cukup untuk file kecil)
+  function zipStore(files) {
+    const enc = new TextEncoder();
+    const parts = [];
+    const central = [];
+    let off = 0;
+    for (const f of files) {
+      const name = enc.encode(f.name);
+      const data = enc.encode(f.text);
+      const crc = crc32(data);
+      const h = new DataView(new ArrayBuffer(30));
+      h.setUint32(0, 0x04034b50, true);
+      h.setUint16(4, 20, true);
+      h.setUint16(12, 0x21, true); // tanggal 1 Jan 1980
+      h.setUint32(14, crc, true);
+      h.setUint32(18, data.length, true);
+      h.setUint32(22, data.length, true);
+      h.setUint16(26, name.length, true);
+      parts.push(new Uint8Array(h.buffer), name, data);
+      const c = new DataView(new ArrayBuffer(46));
+      c.setUint32(0, 0x02014b50, true);
+      c.setUint16(4, 20, true);
+      c.setUint16(6, 20, true);
+      c.setUint16(14, 0x21, true);
+      c.setUint32(16, crc, true);
+      c.setUint32(20, data.length, true);
+      c.setUint32(24, data.length, true);
+      c.setUint16(28, name.length, true);
+      c.setUint32(42, off, true);
+      central.push(new Uint8Array(c.buffer), name);
+      off += 30 + name.length + data.length;
+    }
+    const size = central.reduce((n, p) => n + p.length, 0);
+    const e = new DataView(new ArrayBuffer(22));
+    e.setUint32(0, 0x06054b50, true);
+    e.setUint16(8, files.length, true);
+    e.setUint16(10, files.length, true);
+    e.setUint32(12, size, true);
+    e.setUint32(16, off, true);
+    return new Blob([...parts, ...central, new Uint8Array(e.buffer)], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+  }
+  function makeXlsx(rows) {
+    const x = (s) =>
+      String(s).replace(/[<>&"]/g, (ch) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" })[ch]);
+    const colName = (i) => (i >= 26 ? colName(Math.floor(i / 26) - 1) : "") + String.fromCharCode(65 + (i % 26));
+    const sheetRows = rows
+      .map(
+        (row, r) =>
+          `<row r="${r + 1}">${row
+            .map((v, i) => {
+              const ref = `${colName(i)}${r + 1}`;
+              return typeof v === "number"
+                ? `<c r="${ref}"${r ? "" : ' s="1"'}><v>${v}</v></c>`
+                : `<c r="${ref}" t="inlineStr"${r ? "" : ' s="1"'}><is><t>${x(v)}</t></is></c>`;
+            })
+            .join("")}</row>`,
+      )
+      .join("");
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"';
+    const rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    return zipStore([
+      {
+        name: "[Content_Types].xml",
+        text: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
+      },
+      {
+        name: "_rels/.rels",
+        text: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${rel}/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+      },
+      {
+        name: "xl/workbook.xml",
+        text: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook ${ns} xmlns:r="${rel}"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+      },
+      {
+        name: "xl/_rels/workbook.xml.rels",
+        text: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${rel}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${rel}/styles" Target="styles.xml"/></Relationships>`,
+      },
+      {
+        name: "xl/styles.xml",
+        text: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet ${ns}><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFDDE3FF"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`,
+      },
+      {
+        name: "xl/worksheets/sheet1.xml",
+        text: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet ${ns}><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols><col min="1" max="${rows[0].length}" width="22" customWidth="1"/></cols><sheetData>${sheetRows}</sheetData></worksheet>`,
+      },
+    ]);
+  }
+  function downloadTemplate() {
+    const blob = makeXlsx([TEMPLATE.map(([h]) => h), TEMPLATE.map(([, v]) => v)]);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `template-${APP.file}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 1000);
+    toast("Template Excel diunduh — baris 2 cuma contoh, ganti dengan data asli (link-nya harus link dokumen FASIH).");
   }
 
   function exportCsv() {
