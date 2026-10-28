@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         FASIH Koreksi KBLI & Anomali
 // @namespace    hanif-bps-hst
-// @version      1.7
-// @description  Baca Excel "Pengecekan KBLI" (Edit KBLI = 1), buka tiap dokumen, ganti KBLI akhir ke KBLI Baru di kartu usaha yang tepat, sesuaikan produk & kegiatan utama kalau ada Produk Baru, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" lalu Kirim & Approve.
+// @version      1.10
+// @description  Baca Excel "Pengecekan KBLI" (Edit KBLI = 1 dikoreksi; Edit KBLI = 0 cuma diberi catatan #0 di rincian KBLI), buka tiap dokumen, ganti KBLI akhir ke KBLI Baru di kartu usaha yang tepat, sesuaikan produk & kegiatan utama kalau ada Produk Baru, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" lalu Kirim & Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
 // @grant        none
@@ -30,7 +30,7 @@
 
   const APP = {
     name: "Koreksi KBLI",
-    version: "1.7",
+    version: "1.10",
     title: "Koreksi KBLI & Anomali",
     badge: "KBLI",
     launch: "Koreksi KBLI",
@@ -44,6 +44,11 @@
     checkFirst: true, // cek dulu di halaman Review: kalau sudah benar, tidak perlu revoke
     approve: true,
     forceOnGalat: false, // galat -> Submit Paksa (default: berhenti, perlu cek)
+    // Catatan di rincian KBLI (bisa diganti / dikosongkan di panel; kosong = tidak menambah catatan)
+    noteEdit: "#1", // baris Edit KBLI = 1 (dikoreksi)
+    noteNoEdit: "#0", // baris Edit KBLI = 0 (tidak diubah)
+    // Penjelasan anomali KBLI yang ditandai "Ya, Sesuai Kondisi Lapangan" (kosong = pakai teks bawaan)
+    anomaliText: "KBLI sudah sesuai dengan usaha yang dijalankan",
   };
 
   const SPEEDS = [
@@ -364,7 +369,8 @@
   // Kolom dicocokkan tanpa spasi/titik/tanda baca/huruf besar: "Edit KBLI (1=Ya)" = "EDITKBLI1YA".
   const ANCHOR = "KBLIBARU";
   const COLS = {
-    link: ["LINK", "URL"],
+    link: ["LINK", "URL", "LINKFASIH", "LINKFASIHSM"],
+    assignmentId: ["ASSIGNMENTID"], // cadangan kalau kolom link kosong
     nama: ["NAMAUSAHA"],
     kec: ["KEC", "KECAMATAN"],
     desa: ["DESA"],
@@ -398,7 +404,7 @@
       const missing = [];
       if (col.link < 0) missing.push("link");
       if (col.nama < 0) missing.push("nama_usaha");
-      if (col.kbliAkhir < 0) missing.push("kbli_akhir");
+      // kbli_akhir (KBLI lama) cuma untuk tampilan & perbandingan -> boleh tidak ada
       if (col.kbliBaru < 0) missing.push("KBLI Baru");
       if (missing.length) throw new Error(`kolom tidak ada di sheet "${sheet.name}": ${missing.join(", ")}`);
       const byDoc = new Map();
@@ -408,15 +414,25 @@
       dataRows.forEach((r, i) => {
         const get = (k) => (col[k] >= 0 ? String(r[col[k]] ?? "").trim() : "");
         const flag = get("editKbli");
-        if (flag && flag !== "1") {
+        // Edit KBLI = 1 (atau kolomnya kosong) -> dikoreksi; = 0 -> KBLI dibiarkan, cuma diberi catatan #0
+        const noEdit = flag === "0";
+        if (flag && flag !== "1" && !noEdit) {
           notFlagged++;
           return;
         }
         const rawLink = get("link");
-        const url = (rawLink.match(/https?:\/\/[^"'\s<>]+/) || [""])[0];
-        const ids = (url || rawLink).match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) || [];
+        let url = (rawLink.match(/https?:\/\/[^"'\s<>]+/) || [""])[0];
+        let ids = (url || rawLink).match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) || [];
+        // Link kosong tapi ada assignment_id -> buka lewat halaman assignment-detail (skrip ikut link Review-nya)
+        if (!ids.length) {
+          const aid = (get("assignmentId").match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i) || [])[0];
+          if (aid) {
+            ids = [aid];
+            url = `${location.origin}/app/assignment-detail/${aid.toLowerCase()}`;
+          }
+        }
         // KBLI Baru kosong = KBLI tidak diubah (dibiarkan seperti sebelumnya); produk/kegiatan utama tetap diproses
-        const kbliBaru = padKbli(get("kbliBaru"));
+        const kbliBaru = noEdit ? "" : padKbli(get("kbliBaru"));
         if (!ids.length || (kbliBaru && !/^\d{5}$/.test(kbliBaru))) {
           skipped++;
           return;
@@ -428,11 +444,12 @@
           nama: get("nama"),
           codeIdentity: get("codeIdentity"),
           kegUtamaLama: get("kegUtama"),
-          kegUtamaBaru: get("kegUtamaBaru"),
+          kegUtamaBaru: noEdit ? "" : get("kegUtamaBaru"),
           produkLama: get("produk"),
-          produkBaru: get("produkBaru"),
+          produkBaru: noEdit ? "" : get("produkBaru"),
           kbliLama: padKbli(get("kbliAkhir")),
           kbliBaru,
+          noEdit, // Edit KBLI = 0: tidak ada yang diubah, cuma catatan KBLI_CATATAN_NOEDIT
           catatan: get("catatan"),
         };
         if (!byDoc.has(id))
@@ -779,6 +796,20 @@
   // mode edit), jadi KBLI dibaca dari mana pun dia sedang terlihat: kotak Master KBLI atau radio 13.g.
   async function readKbliCard(inst, t) {
     await waitFor(() => box("kbli", inst) || box("kbli_genai", inst), 3000);
+    if (t.noEdit) {
+      // Edit KBLI = 0: tidak ada isian yang diubah. Catatan #0 dicoba langsung di Review; kalau terkunci -> lewat Edit
+      if (!catatanTag(t))
+        return { changed: false, already: true, summary: "Edit KBLI = 0, KBLI tidak diubah · catatan dimatikan di pengaturan" };
+      const c = await addKbliCatatan(inst, catatanTag(t));
+      const ok = c.found && (c.added || c.alreadyTagged);
+      return {
+        changed: false,
+        already: ok,
+        summary: ok
+          ? `Edit KBLI = 0, KBLI tidak diubah · catatan ${c.added ? `${catatanTag(t)} ditambahkan` : `${c.existingTag} sudah ada`}`
+          : `Edit KBLI = 0 · catatan ${catatanTag(t)} belum bisa ditambah di Review → lewat Edit`,
+      };
+    }
     const code = effectiveKbliCode(inst);
     const produkBox = box("produk", inst);
     const produkInput = produkBox && produkBox.querySelector("input, textarea");
@@ -804,7 +835,11 @@
   // Tag catatan yang dipasang di bagian KBLI (13.g) tiap kartu yang diproses skrip ini, sebagai jejak
   // bahwa kartu itu sudah dicek/dikoreksi lewat prosedur Pengecekan KBLI. Teksnya tetap, selalu "#1"
   // persis untuk semua dokumen (bukan nomor urut apa pun).
-  const KBLI_CATATAN_TAG = "#1";
+  // Teksnya diatur di panel (② Pengaturan): noteEdit untuk Edit KBLI = 1, noteNoEdit untuk Edit KBLI = 0
+  // (KBLI sudah benar, tidak diubah). Kosong = tidak menambah catatan.
+  const catatanTag = (t) => String((t && t.noEdit ? loadConf().noteNoEdit : loadConf().noteEdit) ?? "").trim();
+  // Tag utuh (bukan potongan): "#1" tidak cocok dengan "#10", "#DC_04" tidak cocok dengan "#DC_045"
+  const hasTag = (msg, tag) => !!tag && new RegExp(tag.replace(/[^\w#]/g, (ch) => "\\" + ch) + "(?!\\w)", "i").test(msg);
   // Skrip koreksi lain (R.27, Gaji, NTB, dst) punya tag sendiri berpola #DC_xx. Kalau salah satu dari
   // itu sudah ada di thread 13.g, kartu ini dianggap sudah pernah "dicek" oleh proses koreksi (apa pun
   // skripnya) -> tidak usah tambah #1 lagi di atasnya.
@@ -836,13 +871,19 @@
       return { found: false };
     }
     await sleep(W(300)); // thread pesan lama (kalau ada) dimuat sesaat setelah popover terbuka
-    const existingTag = Array.from(document.querySelectorAll('[class*="wrap-break-word"]'))
-      .filter(visible)
-      .map((el) => el.textContent.trim())
-      .find((msg) => msg === text || DC_TAG_RE.test(msg));
+    const messages = () =>
+      Array.from(document.querySelectorAll('[class*="wrap-break-word"]'))
+        .filter(visible)
+        .map((el) => el.textContent.trim());
+    const existingTag = messages().find((msg) => hasTag(msg, text) || DC_TAG_RE.test(msg));
     const alreadyTagged = !!existingTag;
     let added = false;
+    let saveFailed = false;
     if (!alreadyTagged) {
+      if (ta.disabled || ta.readOnly) {
+        closeDialogs();
+        return { found: true, added: false, alreadyTagged: false, locked: true };
+      }
       setFieldValue(ta, text);
       const simpan = await waitFor(
         () => Array.from(document.querySelectorAll('button[title="Simpan"]')).find((b) => visible(b) && !b.disabled),
@@ -850,12 +891,13 @@
       );
       if (simpan) {
         triggerClick(simpan);
-        await sleep(W(400));
-        added = true;
+        // Dianggap masuk kalau pesannya benar-benar muncul di thread
+        added = !!(await waitFor(() => messages().some((msg) => hasTag(msg, text)), 8000));
       }
+      saveFailed = !added;
     }
     closeDialogs();
-    return { found: true, added, alreadyTagged, existingTag: existingTag || null };
+    return { found: true, added, alreadyTagged, saveFailed, existingTag: existingTag || null };
   }
 
   // "Pilih UMKM dalam satu SLS yang sama" yang dibiarkan kosong bikin galat saat Kirim. Kalau memang tidak ada
@@ -935,7 +977,8 @@
     const pembelianBox0 = box("biaya_pembelian", inst);
     const pembelianInput0 = pembelianBox0 && pembelianBox0.querySelector("input");
     const pembelianBefore = pembelianInput0 ? pembelianInput0.value.trim() : "";
-    if (t.kbliBaru && code !== t.kbliBaru) {
+    if (t.noEdit) notes.push("Edit KBLI = 0, KBLI/produk/kegiatan utama tidak diubah");
+    if (!t.noEdit && t.kbliBaru && code !== t.kbliBaru) {
       if (!(await setKbliCode(inst, t.kbliBaru)))
         throw new Error(`KBLI ${t.kbliBaru} tidak bisa dipilih (${kbliFail || "13.g / Master KBLI tidak muncul"})`);
       notes.push(`KBLI ${code || "-"} → ${t.kbliBaru}`);
@@ -989,7 +1032,7 @@
     const kegBox = box("keg_utama", inst);
     const kegInput = kegBox && kegBox.querySelector('input[type="text"]:not([disabled]), textarea:not([disabled])');
     const kegCur = kegInput ? kegInput.value.trim() : "";
-    const want = wantedKegUtama(t, kegCur);
+    const want = t.noEdit ? null : wantedKegUtama(t, kegCur);
     if (want && want.value !== kegCur) {
       await writeText("keg_utama", inst, want.value);
       notes.push(`kegiatan utama → "${want.value}"${want.guessed ? " (disesuaikan otomatis)" : ""}`);
@@ -997,10 +1040,13 @@
     } else if (!want && t.produkBaru) {
       notes.push(`kegiatan utama belum disesuaikan (cek manual): produk lama "${t.produkLama}" → baru "${t.produkBaru}"`);
     }
-    const catatan = await addKbliCatatan(inst, KBLI_CATATAN_TAG);
-    if (catatan.added) notes.push(`catatan KBLI: ${KBLI_CATATAN_TAG}`);
+    const tag = catatanTag(t);
+    const catatan = tag ? await addKbliCatatan(inst, tag) : { found: true, off: true };
+    if (catatan.off) notes.push("catatan KBLI dimatikan di pengaturan");
+    else if (catatan.added) notes.push(`catatan KBLI: ${tag}`);
     else if (catatan.found && catatan.alreadyTagged) notes.push(`catatan KBLI dibiarkan, tag ${catatan.existingTag} sudah ada di thread`);
-    else if (!catatan.found) notes.push("tombol Catatan di bagian KBLI tidak ketemu, tag tidak ditambahkan (cek manual)");
+    else if (catatan.found) notes.push(`⚠ catatan KBLI ${tag} belum tersimpan${catatan.locked ? " (kotak catatan terkunci)" : ""} — cek manual`);
+    else notes.push(`tombol Catatan di bagian KBLI tidak ketemu, tag ${tag} tidak ditambahkan (cek manual)`);
     return { changed, already: !changed, summary: notes.join("; ") || "sudah sesuai" };
   }
 
@@ -1203,8 +1249,9 @@
       }
       const pj = await waitBox(`anomali_${num}_penjelasan`, undefined, 3000);
       const ta = pj && pj.querySelector("textarea, input[type='text']");
-      if (ta && ta.value.trim() !== KBLI_ANOMALI_EXPLANATION) {
-        setFieldValue(ta, KBLI_ANOMALI_EXPLANATION);
+      const expl = String(loadConf().anomaliText ?? "").trim() || KBLI_ANOMALI_EXPLANATION;
+      if (ta && ta.value.trim() !== expl) {
+        setFieldValue(ta, expl);
         commitField(ta);
         await sleep(W(300));
       }
@@ -1881,7 +1928,8 @@
         const keg = t.kegUtamaBaru
           ? `<span class="kk-chg"><span class="k">Keg. utama</span><span class="o">${esc(t.kegUtamaLama)}</span>→<span class="a">${esc(t.kegUtamaBaru)}</span></span>`
           : "";
-        return `${q.targets.length > 1 ? `<span class="kk-chg"><span class="u">${esc((t.nama || "").split("(")[0].trim())}</span></span>` : ""}${kbli}${produk}${keg}`;
+        const note0 = t.noEdit ? `<span class="kk-chg"><span class="k">Edit KBLI = 0</span><span class="u">${catatanTag(t) ? `catatan ${esc(catatanTag(t))} saja` : "tidak dikerjakan (catatan mati)"}</span></span>` : "";
+        return `${q.targets.length > 1 ? `<span class="kk-chg"><span class="u">${esc((t.nama || "").split("(")[0].trim())}</span></span>` : ""}${kbli}${produk}${keg}${note0}`;
       })
       .join("");
     const meta = [q.kec, q.desa, q.sls, q.targets.length > 1 ? `${q.targets.length} usaha` : "", q.statusAwal].filter(Boolean).map(esc).join(" · ");
@@ -1953,6 +2001,14 @@
     if (body) body.scrollTop = top;
   }
 
+  // Keterangan di bawah kotak isian catatan / penjelasan anomali di panel
+  function textHint(k, v) {
+    const val = String(v ?? "").trim();
+    if (k === "anomaliText") return val ? `Dipakai: "${val}"` : `Kosong → pakai bawaan: "${KBLI_ANOMALI_EXPLANATION}"`;
+    if (!val) return k === "noteNoEdit" ? "Mati: baris Edit KBLI = 0 langsung dianggap selesai, dokumennya tidak dibuka-ubah" : "Mati: tidak menambah catatan";
+    return `Aktif: "${val}" ditambahkan di rincian KBLI (tidak ditambah lagi kalau sudah ada)`;
+  }
+
   function openPanel() {
     ensureStyles();
     closePanel();
@@ -1981,7 +2037,7 @@
                 <div class="ic">📊</div>
                 <div style="min-width:0">
                   <b>${esc(ui.file || (loadQueue().length ? "Antrean tersimpan di browser" : "Pilih / seret file .xlsx"))}</b>
-                  <div class="kk-hint">Kolom: <i>link, nama_usaha, kbli_akhir, Edit KBLI (1=Ya), KBLI Baru, Produk, Produk Baru, keg_utama</i>. Hanya baris Edit KBLI = 1 yang dikerjakan. Muat ulang file yang sama tidak menghapus progres.</div>
+                  <div class="kk-hint">Kolom wajib: <i>link / link_fasih_sm (atau assignment_id), nama_usaha, KBLI Baru</i>; opsional: <i>Edit KBLI (1=Ya), kbli_akhir, Produk, Produk Baru, keg_utama</i>. Edit KBLI = 1 dikoreksi; Edit KBLI = 0 tidak diubah, cuma diberi catatan (atur di ② Pengaturan). Muat ulang file yang sama tidak menghapus progres.</div>
                 </div>
                 <input type="file" accept=".xlsx" data-file hidden>
               </label>
@@ -2000,6 +2056,17 @@
                 <label class="kk-tog"><input type="checkbox" data-conf="checkFirst" ${conf.checkFirst ? "checked" : ""}><span class="sw"></span><span>Cek dulu di Review<small>Kalau KBLI/produk sudah benar, dokumen tidak di-revoke</small></span></label>
                 <label class="kk-tog"><input type="checkbox" data-conf="approve" ${conf.approve ? "checked" : ""}><span class="sw"></span><span>Approve setelah kirim</span></label>
                 <label class="kk-tog"><input type="checkbox" data-conf="forceOnGalat" ${conf.forceOnGalat ? "checked" : ""}><span class="sw"></span><span>Submit Paksa kalau ada galat<small>Mati: dokumen bergalat ditandai "Perlu cek"</small></span></label>
+                ${[
+                  ["noteEdit", "Catatan KBLI · Edit KBLI = 1 (dikoreksi)", "kosong = tanpa catatan"],
+                  ["noteNoEdit", "Catatan KBLI · Edit KBLI = 0 (tidak diubah)", "kosong = baris Edit KBLI = 0 tidak dikerjakan"],
+                  ["anomaliText", "Penjelasan anomali KBLI", "kosong = pakai teks bawaan"],
+                ]
+                  .map(
+                    ([k, label, ph]) => `<div style="padding:6px 0;font-size:13px">${label}
+                  <input data-text-conf="${k}" value="${esc(conf[k] ?? "")}" placeholder="${ph}" style="display:block;width:100%;margin-top:5px;border:1px solid var(--line);border-radius:10px;padding:7px 11px;font-size:13px;outline:none">
+                  <small class="kk-hint" data-text-hint="${k}">${textHint(k, conf[k])}</small></div>`,
+                  )
+                  .join("")}
               </div>
             </div>
           </div>
@@ -2072,6 +2139,16 @@
         const c = loadConf();
         c[cf.dataset.conf] = cf.checked;
         saveConf(c);
+      }
+      const tc = e.target.closest("[data-text-conf]");
+      if (tc) {
+        const k = tc.dataset.textConf;
+        const c = loadConf();
+        c[k] = tc.value.trim();
+        saveConf(c);
+        const h = overlay.querySelector(`[data-text-hint="${k}"]`);
+        if (h) h.textContent = textHint(k, c[k]);
+        renderDynamic(overlay); // label "Edit KBLI = 0" di daftar ikut berubah
       }
     });
     overlay.addEventListener("click", (e) => {
@@ -2229,7 +2306,7 @@
       ui.selected.clear();
       openPanel();
       toast(
-        `${rows} baris → ${merged.length} dokumen dari sheet "${sheet}"${kept ? ` · ${kept} progres lama dipertahankan` : ""}${notFlagged ? ` · ${notFlagged} baris Edit KBLI ≠ 1 dilewati` : ""}${skipped ? ` · ${skipped} baris tanpa link / KBLI Baru tidak valid dilewati` : ""}`,
+        `${rows} baris → ${merged.length} dokumen dari sheet "${sheet}"${kept ? ` · ${kept} progres lama dipertahankan` : ""}${notFlagged ? ` · ${notFlagged} baris Edit KBLI bukan 0/1 dilewati` : ""}${skipped ? ` · ${skipped} baris tanpa link / KBLI Baru tidak valid dilewati` : ""}`,
       );
     } catch (e) {
       alert(`Gagal membaca Excel: ${e.message}`);

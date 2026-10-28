@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         FASIH Approve (status EDITED BY Admin Kabupaten, dari belakang)
+// @name         FASIH Approve (status EDITED / REVOKED BY Admin Kabupaten, dari belakang)
 // @namespace    hanif-bps-hst
-// @version      1.15
-// @description  Tanpa Excel/link: buka halaman data survei dengan filter status "EDITED BY Admin Kabupaten" (100 baris per halaman), ambil dokumen dari halaman & baris PALING BELAKANG (yang depan mungkin masih dikerjakan manual), buka Review lalu langsung Approve (tanpa Edit / Kirim), lalu kembali ke daftar. Dokumen yang gagal di-approve dilewati & dicatat. Mode uji berhenti sebelum Approve.
+// @version      1.16
+// @description  Tanpa Excel/link: buka halaman data survei dengan filter status "EDITED BY Admin Kabupaten" dan/atau "REVOKED BY Admin Kabupaten" (pilih di panel; 100 baris per halaman), ambil dokumen dari halaman & baris PALING BELAKANG (yang depan mungkin masih dikerjakan manual), buka Review lalu langsung Approve (tanpa Edit / Kirim), lalu kembali ke daftar. Dokumen yang gagal di-approve dilewati & dicatat. Mode uji berhenti sebelum Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
 // @grant        none
@@ -14,12 +14,21 @@
   // Halaman daftar data survei + filter status (dari alamat yang dipakai di FASIH)
   const LIST_PATH =
     "/app/surveys/a0429e96-51a5-477b-a415-485f9c153004/fd68e454-ba45-4b85-8205-f3bf777ded24/data";
-  const STATUS_FILTER = "EDITED BY Admin Kabupaten";
+  // Status yang dikerjakan (dipilih di panel): satu status, atau keduanya bergantian
+  const STATUSES = {
+    edited: "EDITED BY Admin Kabupaten",
+    revoked: "REVOKED BY Admin Kabupaten",
+  };
+  const STATUS_MODES = {
+    edited: { label: "EDITED BY Admin Kabupaten", list: ["edited"] },
+    revoked: { label: "REVOKED BY Admin Kabupaten", list: ["revoked"] },
+    both: { label: "EDITED + REVOKED (bergantian)", list: ["edited", "revoked"] },
+  };
   const PER_PAGE = 100;
 
   const APP = {
     name: "Submit & Approve",
-    version: "1.15",
+    version: "1.16",
     hotkey: "0",
     launchBottom: 400,
   };
@@ -67,6 +76,7 @@
     limit: 0,
     devices: 1, // jumlah device yang menjalankan skrip ini bersamaan
     slot: 1, // device ini bagian ke berapa (1..devices)
+    statusMode: "edited", // edited | revoked | both
     ...loadJson(CONF_KEY, {}),
   });
   const saveConf = (c) => saveJson(CONF_KEY, c);
@@ -83,6 +93,12 @@
   const mine = (kode) => {
     const c = loadConf();
     return devCount(c) === 1 || partOf(kode, devCount(c)) === devSlot(c);
+  };
+  const modeOf = (c) => STATUS_MODES[c.statusMode] || STATUS_MODES.edited;
+  const statusList = () => modeOf(loadConf()).list.map((k) => STATUSES[k]);
+  const curStatus = () => {
+    const list = statusList();
+    return list[Math.min(list.length - 1, loadRun().statusIdx || 0)];
   };
   function loadDone() {
     const d = loadJson(DONE_KEY, {});
@@ -213,7 +229,7 @@
     const u = new URL(location.origin + LIST_PATH);
     u.searchParams.set("page", String(page || 1));
     u.searchParams.set("perPage", String(PER_PAGE));
-    u.searchParams.set("status", STATUS_FILTER);
+    u.searchParams.set("status", curStatus());
     return u.toString();
   }
   // Halaman daftar yang terbuka sudah memakai filter status, 100 baris, dan halaman yang diminta?
@@ -221,7 +237,7 @@
     if (!onList()) return false;
     const p = new URLSearchParams(location.search);
     return (
-      p.get("status") === STATUS_FILTER &&
+      p.get("status") === curStatus() &&
       Number(p.get("perPage")) === PER_PAGE &&
       Number(p.get("page") || 1) === page
     );
@@ -289,8 +305,9 @@
       });
   }
   // Filter status lewat URL kadang tidak terpasang: kalau tabel masih memuat status lain, pilih
-  // "EDITED BY Admin Kabupaten" sendiri dari dropdown status (tombol ˅ di atas tabel), sekali per halaman.
-  const isEdited = (st) => /EDITED\s+BY\s+ADMIN\s+KABUPATEN/i.test(st || "");
+  // status yang sedang dikerjakan sendiri dari dropdown status (tombol ˅ di atas tabel), sekali per halaman.
+  const sq = (t) => String(t || "").toUpperCase().replace(/[^A-Z]/g, "");
+  const isEdited = (st) => !!st && sq(st).includes(sq(curStatus()));
   let filterTriedAt = "";
   async function ensureStatusFilter() {
     const rows = readRows();
@@ -299,7 +316,7 @@
     if (filterTriedAt === location.href) return false;
     filterTriedAt = location.href;
     log(
-      "Filter status belum terpasang → pilih EDITED BY Admin Kabupaten dari dropdown",
+      `Filter status belum terpasang → pilih ${curStatus()} dari dropdown`,
     );
     const optionEls = () =>
       Array.from(
@@ -335,12 +352,12 @@
       await waitFor(() => tableText() !== before, 6000);
       await waitTable();
       if (readRows().every((r) => !r.status || isEdited(r.status))) {
-        log("Filter status EDITED BY Admin Kabupaten terpasang");
+        log(`Filter status ${curStatus()} terpasang`);
         return true;
       }
     }
     log(
-      "⚠ dropdown status EDITED BY Admin Kabupaten tidak ketemu — baris status lain dilewati",
+      `⚠ dropdown status ${curStatus()} tidak ketemu — baris status lain dilewati`,
     );
     return false;
   }
@@ -818,21 +835,30 @@
             setPhase("list", { page: page - 1 });
             return goto(listUrl(page - 1));
           }
-          // Halaman 1 juga sudah habis. Bisa jadi ada dokumen yang baru jadi EDITED (dari yang dikerjakan
-          // manual) -> cek ulang dari awal beberapa kali dulu, baru berhenti kalau memang sudah habis.
+          // Halaman 1 juga sudah habis. Mode keduanya: lanjut ke status berikutnya dulu.
+          const list = statusList();
+          const si = Math.min(list.length - 1, run.statusIdx || 0);
+          if (si + 1 < list.length) {
+            log(`${list[si]} habis → lanjut ${list[si + 1]}`);
+            setPhase("probe", { page: 1, statusIdx: si + 1 });
+            return goto(listUrl(1));
+          }
+          // Semua status habis. Bisa jadi ada dokumen yang baru masuk (dari yang dikerjakan manual)
+          // -> cek ulang dari awal beberapa kali dulu, baru berhenti kalau memang sudah habis.
           const idle = (run.idleChecks || 0) + 1;
           if (idle <= RECHECKS) {
             log(
-              `Tidak ada dokumen EDITED tersisa — cek ulang ${RECHECK_MS / 1000} detik lagi (${idle}/${RECHECKS})`,
+              `Tidak ada dokumen ${list.length > 1 ? "EDITED / REVOKED" : list[0]} tersisa — cek ulang ${RECHECK_MS / 1000} detik lagi (${idle}/${RECHECKS})`,
             );
             return setPhase("probe", {
               page: 1,
+              statusIdx: 0,
               idleChecks: idle,
               nextAt: Date.now() + RECHECK_MS,
             });
           }
           return stopRun(
-            "Selesai ✓ semua dokumen EDITED BY Admin Kabupaten sudah habis",
+            `Selesai ✓ semua dokumen ${list.join(" & ")} sudah habis`,
           );
         }
         // Ambil link Review sampai BATCH dokumen dari baris paling bawah ke atas
@@ -1022,6 +1048,7 @@
       phase: "probe",
       phaseAt: Date.now(),
       page: 1,
+      statusIdx: 0,
       batch: [],
       idleChecks: 0,
       nextAt: 0,
@@ -1031,7 +1058,7 @@
       logs: [],
     });
     log(
-      `Mulai${testMode ? " · MODE UJI" : ""}: cari halaman terakhir (${STATUS_FILTER}, ${PER_PAGE}/halaman)`,
+      `Mulai${testMode ? " · MODE UJI" : ""}: cari halaman terakhir (${modeOf(conf).label}, ${PER_PAGE}/halaman)`,
     );
   }
   function stopRun(msg) {
@@ -1207,7 +1234,7 @@
     box.innerHTML = `
       <div class="top">
         <div class="logo">✔</div>
-        <div class="ttl"><b>${esc(APP.name)}</b><span>v${esc(APP.version)} · ${esc(STATUS_FILTER)}</span></div>
+        <div class="ttl"><b>${esc(APP.name)}</b><span>v${esc(APP.version)} · ${esc(run.running ? curStatus() : modeOf(conf).label)}</span></div>
         <span class="pill${st.live ? " live" : ""}" style="--c:${st.c}"><i></i>${esc(st.t)}${conf.testMode && run.running ? " · uji" : ""}</span>
         ${devCount(conf) > 1 ? `<span class="pill" style="--c:#818cf8"><i></i>Device ${devSlot(conf)}/${devCount(conf)}</span>` : ""}
         <span class="sp"></span>
@@ -1237,6 +1264,9 @@
                   <button data-a="test">🧪 Uji 1 dokumen</button>
                 </div>
                 <div class="row">
+                  <label>Status <select data-c="statusMode">${Object.entries(STATUS_MODES).map(([k, v]) => `<option value="${k}"${modeOf(conf) === v ? " selected" : ""}>${esc(v.label)}</option>`).join("")}</select></label>
+                </div>
+                <div class="row">
                   <label>Batas <input type="number" min="0" data-c="limit" value="${conf.limit || 0}"> dokumen <span class="m" style="color:var(--mut)">(0 = semua)</span></label>
                 </div>
               </div>
@@ -1248,7 +1278,7 @@
                 </div>
                 <div class="hint" style="margin-top:8px">${devCount(conf) > 1 ? "Tiap device hanya mengerjakan bagiannya sendiri (dibagi dari kode dokumen) — tidak akan bentrok." : "Pakai lebih dari 1 device? Isi jumlah device yang sama di semua device, lalu pilih bagian yang berbeda."}</div>
               </div>
-              <div class="hint">Buka daftar <b>${esc(STATUS_FILTER)}</b> (${PER_PAGE} baris/halaman), kerjakan dari <b>halaman & baris paling belakang</b>: Review → langsung <b>Approve</b>. Yang gagal dicatat di kanan & bisa diulang. <button class="ghost" data-a="reset" style="padding:3px 8px;font-size:11.5px;margin-left:4px" title="Dokumen yang tadinya gagal dicoba lagi saat Mulai">↻ Reset daftar dilewati</button></div>`
+              <div class="hint">Buka daftar <b>${esc(modeOf(conf).label)}</b> (${PER_PAGE} baris/halaman), kerjakan dari <b>halaman & baris paling belakang</b>: Review → langsung <b>Approve</b>. Yang gagal dicatat di kanan & bisa diulang. <button class="ghost" data-a="reset" style="padding:3px 8px;font-size:11.5px;margin-left:4px" title="Dokumen yang tadinya gagal dicoba lagi saat Mulai">↻ Reset daftar dilewati</button></div>`
         }
         <div class="lbl">Log</div>
         <div class="log">${(run.logs || []).map((l) => `<div title="${esc(l)}">${esc(l)}</div>`).join("") || "<div>…</div>"}</div>
@@ -1394,7 +1424,9 @@
     c[k] =
       e.target.type === "checkbox"
         ? e.target.checked
-        : Math.max(0, Number(e.target.value) || 0);
+        : k === "statusMode"
+          ? e.target.value
+          : Math.max(0, Number(e.target.value) || 0);
     saveConf(c);
     sig = "";
     render();
