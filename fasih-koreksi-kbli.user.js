@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi KBLI & Anomali
 // @namespace    hanif-bps-hst
-// @version      1.10
+// @version      1.11
 // @description  Baca Excel "Pengecekan KBLI" (Edit KBLI = 1 dikoreksi; Edit KBLI = 0 cuma diberi catatan #0 di rincian KBLI), buka tiap dokumen, ganti KBLI akhir ke KBLI Baru di kartu usaha yang tepat, sesuaikan produk & kegiatan utama kalau ada Produk Baru, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" lalu Kirim & Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -30,7 +30,7 @@
 
   const APP = {
     name: "Koreksi KBLI",
-    version: "1.10",
+    version: "1.11",
     title: "Koreksi KBLI & Anomali",
     badge: "KBLI",
     launch: "Koreksi KBLI",
@@ -829,7 +829,20 @@
     if (!kbliOk) bits.push(`KBLI ${code || "-"} → ${t.kbliBaru}`);
     if (!produkOk) bits.push(`produk "${produkCur}" → "${t.produkBaru}"`);
     if (!kegOk) bits.push(`kegiatan utama "${kegCur}" → "${want.value}"`);
-    return { changed: false, already, summary: already ? "sudah sesuai" : bits.join(", ") };
+    if (!already) return { changed: false, already, summary: bits.join(", ") };
+    // Edit KBLI = 1 tapi KBLI di FASIH sudah benar: tidak ada yang diubah -> tetap diberi catatan #0 (sama
+    // seperti Edit KBLI = 0). Kalau #1 / #DC_xx sudah ada (pernah dikoreksi) dibiarkan. Gagal di Review -> lewat Edit.
+    const tag0 = noteTag(false);
+    if (!tag0) return { changed: false, already: true, summary: "sudah sesuai" };
+    const c = await addKbliCatatan(inst, tag0, [noteTag(true)]);
+    const ok = c.found && (c.added || c.alreadyTagged);
+    return {
+      changed: false,
+      already: ok,
+      summary: ok
+        ? `sudah sesuai · catatan ${c.added ? `${tag0} ditambahkan` : `${c.existingTag} sudah ada`}`
+        : `sudah sesuai · catatan ${tag0} belum bisa ditambah di Review → lewat Edit`,
+    };
   }
 
   // Tag catatan yang dipasang di bagian KBLI (13.g) tiap kartu yang diproses skrip ini, sebagai jejak
@@ -837,7 +850,9 @@
   // persis untuk semua dokumen (bukan nomor urut apa pun).
   // Teksnya diatur di panel (② Pengaturan): noteEdit untuk Edit KBLI = 1, noteNoEdit untuk Edit KBLI = 0
   // (KBLI sudah benar, tidak diubah). Kosong = tidak menambah catatan.
-  const catatanTag = (t) => String((t && t.noEdit ? loadConf().noteNoEdit : loadConf().noteEdit) ?? "").trim();
+  // edited=true -> noteEdit (#1, KBLI/produk/kegiatan utama memang diubah); false -> noteNoEdit (#0, sudah sesuai)
+  const noteTag = (edited) => String((edited ? loadConf().noteEdit : loadConf().noteNoEdit) ?? "").trim();
+  const catatanTag = (t) => noteTag(!(t && t.noEdit));
   // Tag utuh (bukan potongan): "#1" tidak cocok dengan "#10", "#DC_04" tidak cocok dengan "#DC_045"
   const hasTag = (msg, tag) => !!tag && new RegExp(tag.replace(/[^\w#]/g, (ch) => "\\" + ch) + "(?!\\w)", "i").test(msg);
   // Skrip koreksi lain (R.27, Gaji, NTB, dst) punya tag sendiri berpola #DC_xx. Kalau salah satu dari
@@ -853,7 +868,8 @@
   // pagar+angka lain yang bukan tag kita, mis. "#2" dari obrolan biasa) dibiarkan apa adanya -> yang
   // dicegah HANYA mengirim tag yang sama (persis "#1") atau tag #DC_xx dua kali.
   // Hasil: { found } = tombol Catatan tidak ketemu; { found: true, added, alreadyTagged, existingTag }.
-  async function addKbliCatatan(inst, text) {
+  // alsoAccept: tag lain yang juga dianggap "sudah ditandai" (mis. pasang #0 tapi #1 sudah ada -> dibiarkan)
+  async function addKbliCatatan(inst, text, alsoAccept = []) {
     const containers = [box("kbli_genai", inst), box("kbli", inst)].filter(Boolean);
     let btn = null;
     for (const c of containers) {
@@ -875,7 +891,7 @@
       Array.from(document.querySelectorAll('[class*="wrap-break-word"]'))
         .filter(visible)
         .map((el) => el.textContent.trim());
-    const existingTag = messages().find((msg) => hasTag(msg, text) || DC_TAG_RE.test(msg));
+    const existingTag = messages().find((msg) => hasTag(msg, text) || alsoAccept.some((a) => hasTag(msg, a)) || DC_TAG_RE.test(msg));
     const alreadyTagged = !!existingTag;
     let added = false;
     let saveFailed = false;
@@ -968,6 +984,7 @@
   async function ensureKbliCard(inst, t) {
     const notes = [];
     let changed = false;
+    let edited = false; // KBLI / produk / kegiatan utama benar-benar diubah -> catatan #1; tidak -> #0
     await waitFor(() => box("kbli", inst) || box("kbli_genai", inst), 5000);
     const code = effectiveKbliCode(inst);
     // 26.c "Biaya pembelian barang yang terjual" cuma ada untuk usaha dagang. Kalau KBLI dipindah ke
@@ -982,7 +999,7 @@
       if (!(await setKbliCode(inst, t.kbliBaru)))
         throw new Error(`KBLI ${t.kbliBaru} tidak bisa dipilih (${kbliFail || "13.g / Master KBLI tidak muncul"})`);
       notes.push(`KBLI ${code || "-"} → ${t.kbliBaru}`);
-      changed = true;
+      changed = edited = true;
       if (parseRupiah(pembelianBefore) > 0 || !pembelianBox0) {
         await sleep(W(500)); // rincian 26 dirender ulang sesuai KBLI baru
         const pembelianBoxNow = box("biaya_pembelian", inst);
@@ -1026,7 +1043,7 @@
       if (produkCur !== t.produkBaru) {
         await writeText("produk", inst, t.produkBaru);
         notes.push(`produk "${produkCur}" → "${t.produkBaru}"`);
-        changed = true;
+        changed = edited = true;
       }
     }
     const kegBox = box("keg_utama", inst);
@@ -1036,12 +1053,13 @@
     if (want && want.value !== kegCur) {
       await writeText("keg_utama", inst, want.value);
       notes.push(`kegiatan utama → "${want.value}"${want.guessed ? " (disesuaikan otomatis)" : ""}`);
-      changed = true;
+      changed = edited = true;
     } else if (!want && t.produkBaru) {
       notes.push(`kegiatan utama belum disesuaikan (cek manual): produk lama "${t.produkLama}" → baru "${t.produkBaru}"`);
     }
-    const tag = catatanTag(t);
-    const catatan = tag ? await addKbliCatatan(inst, tag) : { found: true, off: true };
+    // Kartu yang KBLI-nya ternyata sudah benar (tidak ada yang diubah) dapat #0, bukan #1; #1 yang sudah ada dibiarkan
+    const tag = noteTag(!t.noEdit && edited);
+    const catatan = tag ? await addKbliCatatan(inst, tag, edited ? [] : [noteTag(true)]) : { found: true, off: true };
     if (catatan.off) notes.push("catatan KBLI dimatikan di pengaturan");
     else if (catatan.added) notes.push(`catatan KBLI: ${tag}`);
     else if (catatan.found && catatan.alreadyTagged) notes.push(`catatan KBLI dibiarkan, tag ${catatan.existingTag} sudah ada di thread`);
