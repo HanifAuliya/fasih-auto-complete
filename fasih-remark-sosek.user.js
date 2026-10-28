@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Remark Anomali Sosek
 // @namespace    hanif-bps-hst
-// @version      1.0
+// @version      1.1
 // @description  Baca Excel "anomali_sosek" (sheet sosek = daftar kategori & remark; R149/R143/R154/R161 = Blok IV keluarga; R63/R31-R34 = Blok I per anggota), buka tiap dokumen, pasang remark (#0) di catatan rincian yang tepat — Blok I di kartu anggota yang NIK-nya cocok — lalu Kirim & Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -32,7 +32,7 @@
 
   const APP = {
     name: "Remark Sosek",
-    version: "1.0",
+    version: "1.1",
     title: "Remark Anomali Sosek",
     badge: "SOS",
     launch: "Remark Sosek",
@@ -72,6 +72,7 @@
 
   const DEFAULT_CONF = {
     speed: 1,
+    patience: 1, // indeks PATIENCE: batas tunggu dikali (FASIH lelet)
     checkFirst: true, // cek dulu di Review: kalau semua remark sudah ada, tidak perlu revoke
     approve: true,
     forceOnGalat: false,
@@ -89,6 +90,14 @@
   ];
   const T = () => SPEEDS[Math.min(SPEEDS.length - 1, Math.max(0, Number(loadConf().speed) || 0))];
   const W = (ms) => Math.max(100, Math.round(ms * (T().scale || 1)));
+  // FASIH kadang lelet: semua batas tunggu (waitFor & batas macet per tahap) dikali faktor ini.
+  // Kalau FASIH cepat tidak ada ruginya (waitFor berhenti begitu elemennya muncul).
+  const PATIENCE = [
+    { name: "Biasa", x: 1 },
+    { name: "Sabar ×2", x: 2 },
+    { name: "Sabar ×3", x: 3 },
+  ];
+  const P = () => PATIENCE[Math.min(PATIENCE.length - 1, Math.max(0, Number(loadConf().patience) || 0))];
 
   const STATUS = {
     pending: { label: "Belum", color: "#6366f1" },
@@ -250,6 +259,7 @@
   const forbiddenError = () => Object.assign(new Error("halaman Forbidden (tidak ada akses)"), { forbidden: true });
 
   async function waitFor(check, timeoutMs) {
+    timeoutMs *= P().x;
     let start = Date.now();
     while (Date.now() - start < timeoutMs) {
       if (stopRequested) return null;
@@ -932,7 +942,7 @@
         return forceSubmit(n);
       }
       closeDialogs();
-      throw Object.assign(new Error(`galat ${n}: ${detail || "lihat di FASIH"}`), { soft: true });
+      throw Object.assign(new Error(`galat ${n}: ${detail || "lihat di FASIH"}`), { soft: true, noRetry: true });
     }
     const dialogKirim = findDialogKirim();
     if (!dialogKirim) throw new Error(`tombol Kirim di dialog tidak muncul: ${dialogText()}`);
@@ -1010,6 +1020,32 @@
   const HEARTBEAT_MS = 5 * 60 * 1000;
   let busy = false;
 
+  // FASIH lelet / halaman setengah termuat -> dokumen tidak langsung Gagal: halaman dimuat ulang lalu
+  // tahap yang sama diulang (paling banyak MAX_RETRY kali per dokumen, jeda makin lama) dan kesabaran
+  // naik satu tingkat. Tidak diulang: galat isian, link salah, Forbidden, dan tahap Kirim yang tombol
+  // Kirim-nya sudah sempat diklik (bisa terkirim dobel -> tetap cek manual).
+  const MAX_RETRY = 3;
+  async function retryStage(cur, why) {
+    if (cur.stage === "submit" && cur.submitClicked) return false;
+    const n = (cur.retries || 0) + 1;
+    if (n > MAX_RETRY) return false;
+    const wait = 5000 * n;
+    const r = loadRun();
+    r.cur = Object.assign(r.cur || {}, { retries: n });
+    r.phaseAt = r.navAt = Date.now() + wait;
+    saveRun(r);
+    const c = loadConf();
+    const up = (Number(c.patience) || 0) < PATIENCE.length - 1;
+    if (up) {
+      c.patience = (Number(c.patience) || 0) + 1;
+      saveConf(c);
+    }
+    log(`⟳ ${why} — FASIH lelet? muat ulang & ulangi "${STEP_LABEL[cur.stage] || cur.stage}" (${n}/${MAX_RETRY})${up ? `, kesabaran → ${PATIENCE[c.patience].name}` : ""}`);
+    await sleep(wait);
+    if (loadRun().running) location.reload();
+    return true;
+  }
+
   let loginAt = 0;
   let loginLast = false;
   function loginPage() {
@@ -1084,7 +1120,7 @@
     const r = loadRun();
     if (Date.now() - (r.navAt || 0) < 4000) return false;
     const tries = (r.cur && r.cur.navTries) || 0;
-    if (tries >= 4) throw Object.assign(new Error("link tidak benar / dokumen tidak bisa dibuka (cek link di Excel / akses akun)"), { soft: true });
+    if (tries >= 4) throw Object.assign(new Error("link tidak benar / dokumen tidak bisa dibuka (cek link di Excel / akses akun)"), { soft: true, noRetry: true });
     r.cur.navTries = tries + 1;
     r.navAt = Date.now();
     saveRun(r);
@@ -1161,8 +1197,10 @@
       const cur = run.cur;
       const item = loadQueue().find((q) => q.id === cur.id);
       if (!item) return finishItem(cur.id, "red", "dokumen hilang dari antrean");
-      if (Date.now() - (run.phaseAt || 0) > STAGE_TIMEOUT_MS)
+      if (Date.now() - (run.phaseAt || 0) > STAGE_TIMEOUT_MS * P().x) {
+        if (await retryStage(cur, "tahap terlalu lama")) return;
         return finishItem(item.id, "red", `macet di tahap "${STEP_LABEL[cur.stage] || cur.stage}"`);
+      }
       try {
         if (forbiddenPage()) throw forbiddenError();
         await runStage(run, cur, item);
@@ -1173,6 +1211,7 @@
           return finishItem(item.id, "forbidden", `halaman Forbidden (tidak ada akses), dilewati${edited}`);
         }
         pressKey("Escape");
+        if (!e.noRetry && (await retryStage(cur, e.message))) return;
         const where = STEP_LABEL[cur.stage] || cur.stage;
         const after = cur.revoked || ["fill", "submit"].includes(cur.stage) ? " — dokumen sudah dibuka edit, cek manual" : "";
         finishItem(item.id, e.soft ? "yellow" : "red", `[${where}] ${e.message}${after}`);
@@ -1201,7 +1240,7 @@
             throw Object.assign(new Error(`${accSummary(acc)} — tidak di-revoke, cek manual`), { soft: true });
           log(`Cek Review: ${acc.todo.length} rincian belum ada remark → Edit`);
         } catch (e) {
-          if (e.forbidden || e.soft) throw e;
+          if (e.forbidden || e.soft || !cur.retries) throw e;
           log(`⚠ cek Review gagal (${e.message}), lanjut ke Edit`);
         }
         closeDialogs();
@@ -1608,6 +1647,8 @@
             <div class="kk-card">
               <div class="kk-sec">② Pengaturan</div>
               <div class="kk-seg" data-speed>${SPEEDS.map((s, i) => `<button data-speed="${i}" class="${Number(conf.speed) === i ? "on" : ""}">${s.name}</button>`).join("")}</div>
+              <div style="font-size:11.5px;color:var(--mut);margin:8px 0 4px">Kesabaran menunggu FASIH <small>(lelet → pilih lebih besar; naik sendiri kalau ada yang diulang)</small></div>
+              <div class="kk-seg" data-patience>${PATIENCE.map((p, i) => `<button data-patience="${i}" class="${(Number(conf.patience) || 0) === i ? "on" : ""}">${p.name}</button>`).join("")}</div>
               <div style="margin-top:8px">
                 <label class="kk-tog"><input type="checkbox" data-conf="checkFirst" ${conf.checkFirst ? "checked" : ""}><span class="sw"></span><span>Cek dulu di Review<small>Kalau semua remark sudah ada di catatan, dokumen tidak di-revoke</small></span></label>
                 <label class="kk-tog"><input type="checkbox" data-conf="approve" ${conf.approve ? "checked" : ""}><span class="sw"></span><span>Approve setelah kirim</span></label>
@@ -1712,6 +1753,14 @@
       }
     });
     overlay.addEventListener("click", (e) => {
+      const pt = e.target.closest("button[data-patience]");
+      if (pt) {
+        const c = loadConf();
+        c.patience = Number(pt.dataset.patience);
+        saveConf(c);
+        overlay.querySelectorAll("button[data-patience]").forEach((b) => b.classList.toggle("on", b === pt));
+        return;
+      }
       const sp = e.target.closest("button[data-speed]");
       if (sp) {
         const c = loadConf();
