@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi KBLI & Anomali
 // @namespace    hanif-bps-hst
-// @version      1.12
+// @version      1.13
 // @description  Baca Excel "Pengecekan KBLI" (Edit KBLI = 1 dikoreksi; Edit KBLI = 0 cuma diberi catatan #0 di rincian KBLI), buka tiap dokumen, ganti KBLI akhir ke KBLI Baru di kartu usaha yang tepat, sesuaikan produk & kegiatan utama kalau ada Produk Baru, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" lalu Kirim & Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -30,7 +30,7 @@
 
   const APP = {
     name: "Koreksi KBLI",
-    version: "1.12",
+    version: "1.13",
     title: "Koreksi KBLI & Anomali",
     badge: "KBLI",
     launch: "Koreksi KBLI",
@@ -855,70 +855,95 @@
   const catatanTag = (t) => noteTag(!(t && t.noEdit));
   // Tag utuh (bukan potongan): "#1" tidak cocok dengan "#10", "#DC_04" tidak cocok dengan "#DC_045"
   const hasTag = (msg, tag) => !!tag && new RegExp(tag.replace(/[^\w#]/g, (ch) => "\\" + ch) + "(?!\\w)", "i").test(msg);
-  // Skrip koreksi lain (R.27, Gaji, NTB, dst) punya tag sendiri berpola #DC_xx. Kalau salah satu dari
-  // itu sudah ada di thread 13.g, kartu ini dianggap sudah pernah "dicek" oleh proses koreksi (apa pun
-  // skripnya) -> tidak usah tambah #1 lagi di atasnya.
-  const DC_TAG_RE = /^#DC_[A-Z0-9]+$/;
-  // Tombol "Catatan" ada di tiap rincian (desktop/mobile beda elemen, cuma satu yang kelihatan).
-  // Kotak catatannya sendiri muncul sebagai popover terpisah (bukan anak dari kbli_genai/kbli), jadi
-  // dicari dari seluruh halaman lewat placeholder-nya, bukan dibatasi ke dalam kontainer KBLI.
-  // Catatan di FASIH itu thread chat (bukan satu kotak nilai): kotak "Tambah catatan di sini..." SELALU
-  // kosong (itu kotak ketik pesan baru), catatan yang sudah ada muncul sebagai pesan-pesan di ATAS kotak
-  // itu. Begitu terkirim, pesan tidak bisa dihapus. Pesan lain (dari petugas lain, soal hal lain, atau
-  // pagar+angka lain yang bukan tag kita, mis. "#2" dari obrolan biasa) dibiarkan apa adanya -> yang
-  // dicegah HANYA mengirim tag yang sama (persis "#1") atau tag #DC_xx dua kali.
-  // Hasil: { found } = tombol Catatan tidak ketemu; { found: true, added, alreadyTagged, existingTag }.
-  // alsoAccept: tag lain yang juga dianggap "sudah ditandai" (mis. pasang #0 tapi #1 sudah ada -> dibiarkan)
-  // checkOnly: cuma baca thread, tidak menulis apa pun (dipakai di halaman Review)
-  async function addKbliCatatan(inst, text, alsoAccept = [], checkOnly = false) {
-    const containers = [box("kbli_genai", inst), box("kbli", inst)].filter(Boolean);
-    let btn = null;
-    for (const c of containers) {
-      btn = Array.from(c.querySelectorAll('button[title="Catatan"]')).find(visible);
-      if (btn) break;
-    }
-    if (!btn) return { found: false };
+  // Tag dari skrip koreksi lain (R.27, Gaji, NTB, anomali KBLI, dst) berpola #DC_xx. Kalau salah satunya sudah
+  // ada, kartu ini dianggap sudah pernah "dicek" oleh proses koreksi (apa pun skripnya) -> tidak usah ditambah.
+  const DC_TAG_RE = /#DC_[A-Z0-9]+(?![A-Z0-9])/i;
+  // Rincian KBLI punya DUA tombol Catatan: 13.g "Kode KBLI" (radio saran GenAI) dan kotak "Pilih dari Master
+  // KBLI" (baru muncul kalau radio 13.g = "Pilih dari Master KBLI"). Tag lama bisa ada di salah satunya
+  // (mis. #DC_01 dari tandai anomali ada di Master KBLI), jadi KEDUA thread dicek: kalau salah satu sudah
+  // berisi #0 / #1 / #DC_xx -> tidak ditambah apa-apa. Kalau dua-duanya belum, tag ditulis di bagian yang
+  // sedang DIPILIH: saran GenAI tercentang -> 13.g; "Pilih dari Master KBLI" -> kotak Master KBLI.
+  // Tombol Catatan ada dua per rincian (desktop/mobile), cuma satu yang kelihatan; angka di pojoknya = jumlah
+  // pesan di thread (tidak ada angka = thread kosong, tidak perlu dibuka).
+  // Catatan di FASIH itu thread chat: kotak "Tambah catatan di sini..." SELALU kosong (kotak ketik pesan baru),
+  // pesan lama muncul di atasnya, dan begitu terkirim tidak bisa dihapus. Pesan lain (obrolan petugas) dibiarkan.
+  // Hasil: { found } = tombol Catatan tidak ketemu; { found: true, added, alreadyTagged, existingTag, where }.
+  // alsoAccept: tag lain yang juga dianggap "sudah ditandai"; checkOnly: cuma baca (dipakai di halaman Review)
+  const catatanBtn = (c) => (c ? Array.from(c.querySelectorAll('button[title="Catatan"]')).find(visible) || null : null);
+  const catatanCount = (btn) => Number(Array.from(btn.querySelectorAll("div")).map((d) => d.innerText.trim()).find((x) => /^\d+$/.test(x)) || 0);
+  const noteMessages = () =>
+    Array.from(document.querySelectorAll('[class*="wrap-break-word"]'))
+      .filter(visible)
+      .map((el) => el.textContent.trim());
+  const noteInput = () =>
+    Array.from(document.querySelectorAll("textarea")).find((t2) => visible(t2) && /tambah catatan/i.test(t2.placeholder || "") && !t2.closest(OWN));
+  async function closeNote() {
+    closeDialogs();
+    await waitFor(() => !Array.from(document.querySelectorAll('[role="dialog"]')).some((d) => visible(d) && !d.closest(OWN)), 3000);
+    await sleep(W(200));
+  }
+  // Buka thread satu tombol Catatan; popup dibiarkan terbuka (null = popup tidak muncul)
+  async function openNote(btn, expectMsgs) {
     triggerClick(btn);
-    const ta = await waitFor(
-      () => Array.from(document.querySelectorAll("textarea")).find((t2) => visible(t2) && /tambah catatan/i.test(t2.placeholder || "")),
-      3000,
-    );
+    const ta = await waitFor(noteInput, 3000);
     if (!ta) {
       pressKey("Escape");
-      return { found: false };
+      return null;
     }
-    await sleep(W(300)); // thread pesan lama (kalau ada) dimuat sesaat setelah popover terbuka
-    const messages = () =>
-      Array.from(document.querySelectorAll('[class*="wrap-break-word"]'))
-        .filter(visible)
-        .map((el) => el.textContent.trim());
-    const existingTag = messages().find((msg) => hasTag(msg, text) || alsoAccept.some((a) => hasTag(msg, a)) || DC_TAG_RE.test(msg));
-    const alreadyTagged = !!existingTag;
-    if (checkOnly) {
-      closeDialogs();
-      return { found: true, added: false, alreadyTagged, existingTag: existingTag || null };
+    await sleep(W(300)); // thread pesan lama dimuat sesaat setelah popup terbuka
+    if (expectMsgs) await waitFor(() => noteMessages().length, 3000);
+    return ta;
+  }
+  async function addKbliCatatan(inst, text, alsoAccept = [], checkOnly = false) {
+    const accept = [...new Set([text, ...alsoAccept, noteTag(true), noteTag(false)].filter(Boolean))];
+    const tagIn = (msg) => accept.find((a) => hasTag(msg, a)) || (msg.match(DC_TAG_RE) || [])[0] || null;
+    const parts = [
+      ["kbli_genai", "13.g"],
+      ["kbli", "Master KBLI"],
+    ]
+      .map(([id, label]) => ({ id, label, c: box(id, inst) }))
+      .filter((p) => visible(p.c) && catatanBtn(p.c));
+    if (!parts.length) return { found: false };
+    for (const p of parts) {
+      const btn = catatanBtn(p.c);
+      if (!catatanCount(btn)) continue;
+      if (!(await openNote(btn, true))) continue;
+      const tag = noteMessages().map(tagIn).find(Boolean);
+      await closeNote();
+      if (tag) return { found: true, added: false, alreadyTagged: true, existingTag: `${tag} (${p.label})`, where: p.label };
     }
+    if (checkOnly) return { found: true, added: false, alreadyTagged: false, existingTag: null };
+    const genaiPicked = (() => {
+      const g = box("kbli_genai", inst);
+      const r = g && g.querySelector('input[type="radio"]:checked, input[type="radio"][data-checked]');
+      return !!r && r.value !== "999999";
+    })();
+    const target = parts.find((p) => p.id === (genaiPicked ? "kbli_genai" : "kbli")) || parts[0];
+    const ta = await openNote(catatanBtn(target.c), catatanCount(catatanBtn(target.c)) > 0);
+    if (!ta) return { found: false };
+    // Jaga-jaga: thread target dicek sekali lagi tepat sebelum menulis
+    const again = noteMessages().map(tagIn).find(Boolean);
+    if (again) {
+      await closeNote();
+      return { found: true, added: false, alreadyTagged: true, existingTag: `${again} (${target.label})`, where: target.label };
+    }
+    if (ta.disabled || ta.readOnly) {
+      await closeNote();
+      return { found: true, added: false, alreadyTagged: false, locked: true, where: target.label };
+    }
+    setFieldValue(ta, text);
     let added = false;
-    let saveFailed = false;
-    if (!alreadyTagged) {
-      if (ta.disabled || ta.readOnly) {
-        closeDialogs();
-        return { found: true, added: false, alreadyTagged: false, locked: true };
-      }
-      setFieldValue(ta, text);
-      const simpan = await waitFor(
-        () => Array.from(document.querySelectorAll('button[title="Simpan"]')).find((b) => visible(b) && !b.disabled),
-        2000,
-      );
-      if (simpan) {
-        triggerClick(simpan);
-        // Dianggap masuk kalau pesannya benar-benar muncul di thread
-        added = !!(await waitFor(() => messages().some((msg) => hasTag(msg, text)), 8000));
-      }
-      saveFailed = !added;
+    const simpan = await waitFor(
+      () => Array.from(document.querySelectorAll('button[title="Simpan"]')).find((b) => visible(b) && !b.disabled && !b.closest(OWN)),
+      2000,
+    );
+    if (simpan) {
+      triggerClick(simpan);
+      // Dianggap masuk kalau pesannya benar-benar muncul di thread
+      added = !!(await waitFor(() => noteMessages().some((msg) => hasTag(msg, text)), 8000));
     }
-    closeDialogs();
-    return { found: true, added, alreadyTagged, saveFailed, existingTag: existingTag || null };
+    await closeNote();
+    return { found: true, added, alreadyTagged: false, saveFailed: !added, existingTag: null, where: target.label };
   }
 
   // "Pilih UMKM dalam satu SLS yang sama" yang dibiarkan kosong bikin galat saat Kirim. Kalau memang tidak ada
@@ -1066,7 +1091,7 @@
     const tag = noteTag(!t.noEdit && edited);
     const catatan = tag ? await addKbliCatatan(inst, tag, edited ? [] : [noteTag(true)]) : { found: true, off: true };
     if (catatan.off) notes.push("catatan KBLI dimatikan di pengaturan");
-    else if (catatan.added) notes.push(`catatan KBLI: ${tag}`);
+    else if (catatan.added) notes.push(`catatan KBLI: ${tag} (${catatan.where})`);
     else if (catatan.found && catatan.alreadyTagged) notes.push(`catatan KBLI dibiarkan, tag ${catatan.existingTag} sudah ada di thread`);
     else if (catatan.found) notes.push(`⚠ catatan KBLI ${tag} belum tersimpan${catatan.locked ? " (kotak catatan terkunci)" : ""} — cek manual`);
     else notes.push(`tombol Catatan di bagian KBLI tidak ketemu, tag ${tag} tidak ditambahkan (cek manual)`);
