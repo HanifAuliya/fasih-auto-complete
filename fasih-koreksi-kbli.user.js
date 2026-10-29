@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi KBLI & Anomali
 // @namespace    hanif-bps-hst
-// @version      1.14
+// @version      1.15
 // @description  Baca Excel "Pengecekan KBLI" (Edit KBLI = 1 dikoreksi; Edit KBLI = 0 cuma diberi catatan #0 di rincian KBLI), buka tiap dokumen, ganti KBLI akhir ke KBLI Baru di kartu usaha yang tepat, sesuaikan produk & kegiatan utama kalau ada Produk Baru, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" lalu Kirim & Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -30,7 +30,7 @@
 
   const APP = {
     name: "Koreksi KBLI",
-    version: "1.14",
+    version: "1.15",
     title: "Koreksi KBLI & Anomali",
     badge: "KBLI",
     launch: "Koreksi KBLI",
@@ -67,7 +67,12 @@
     { name: "Sabar ×2", x: 2 },
     { name: "Sabar ×3", x: 3 },
   ];
-  const P = () => PATIENCE[Math.min(PATIENCE.length - 1, Math.max(0, Number(loadConf().patience) || 0))];
+  // Pilihan di panel, atau lebih tinggi kalau dokumen yang sedang dikerjakan sempat diulang karena lelet
+  // (naiknya cuma untuk dokumen itu; dokumen berikutnya kembali ke pilihan panel)
+  const P = () =>
+    PATIENCE[
+      Math.min(PATIENCE.length - 1, Math.max(0, Number(loadConf().patience) || 0, (loadRun().cur || {}).patienceUp || 0))
+    ];
 
   const STATUS = {
     pending: { label: "Belum", color: "#6366f1" },
@@ -108,8 +113,35 @@
       console.error(`[${APP.name}] Gagal menyimpan.`, e);
     }
   };
-  const loadQueue = () => loadJson(QUEUE_KEY, []);
-  const saveQueue = (q) => saveJson(QUEUE_KEY, q);
+  // Antrean (bisa beberapa MB) dibaca berkali-kali per detik (tiap tahap, HUD, panel): hasil parse disimpan &
+  // cuma di-parse ulang kalau isinya di localStorage berubah (mis. diubah tab lain)
+  let queueRaw = null;
+  let queueVal = [];
+  const loadQueue = () => {
+    let raw = null;
+    try {
+      raw = localStorage.getItem(QUEUE_KEY);
+    } catch (e) {}
+    if (raw !== queueRaw) {
+      queueRaw = raw;
+      try {
+        queueVal = JSON.parse(raw) || [];
+      } catch (e) {
+        queueVal = [];
+      }
+    }
+    return queueVal;
+  };
+  const saveQueue = (q) => {
+    const raw = JSON.stringify(q);
+    try {
+      localStorage.setItem(QUEUE_KEY, raw);
+      queueRaw = raw;
+      queueVal = q;
+    } catch (e) {
+      console.error(`[${APP.name}] Gagal menyimpan.`, e);
+    }
+  };
   const loadConf = () => ({ ...DEFAULT_CONF, ...loadJson(CONF_KEY, {}) });
   const saveConf = (c) => saveJson(CONF_KEY, c);
   const loadRun = () => loadJson(RUN_KEY, { running: false });
@@ -774,6 +806,8 @@
   async function fillIzinHalalIfShown(inst, kbliBaru) {
     const ms = /^(1\d|2\d|3[0-3])/.test(kbliBaru || "") ? 1200 : 300;
     const notes = [];
+    // Kebanyakan kartu tidak punya isian ini: cukup tunggu sekali sampai salah satunya muncul
+    if (!(await waitFor(() => KBLI_FIXED_IF_SHOWN.some(([id]) => visible(box(id, inst))), ms))) return notes;
     for (const [id, kind, value] of KBLI_FIXED_IF_SHOWN) {
       const el = await waitBox(id, inst, ms);
       if (!el) continue;
@@ -914,29 +948,29 @@
       .map(([id, label]) => ({ id, label, c: box(id, inst) }))
       .filter((p) => visible(p.c) && catatanBtn(p.c));
     if (!parts.length) return { found: false };
-    for (const p of parts) {
-      const btn = catatanBtn(p.c);
-      if (!catatanCount(btn)) continue;
-      if (!(await openNote(btn, true))) continue;
-      const tag = noteMessages().map(tagIn).find(Boolean);
-      await closeNote();
-      if (tag) return { found: true, added: false, alreadyTagged: true, existingTag: `${tag} (${p.label})`, where: p.label };
-    }
-    if (checkOnly) return { found: true, added: false, alreadyTagged: false, existingTag: null };
     const genaiPicked = (() => {
       const g = box("kbli_genai", inst);
       const r = g && g.querySelector('input[type="radio"]:checked, input[type="radio"][data-checked]');
       return !!r && r.value !== "999999";
     })();
     const target = parts.find((p) => p.id === (genaiPicked ? "kbli_genai" : "kbli")) || parts[0];
-    const ta = await openNote(catatanBtn(target.c), catatanCount(catatanBtn(target.c)) > 0);
-    if (!ta) return { found: false };
-    // Jaga-jaga: thread target dicek sekali lagi tepat sebelum menulis
-    const again = noteMessages().map(tagIn).find(Boolean);
-    if (again) {
-      await closeNote();
-      return { found: true, added: false, alreadyTagged: true, existingTag: `${again} (${target.label})`, where: target.label };
+    // Thread tujuan dicek paling akhir & popup-nya dibiarkan terbuka untuk langsung ditulisi
+    let ta = null;
+    for (const p of [...parts.filter((x) => x !== target), target]) {
+      const btn = catatanBtn(p.c);
+      const writeHere = !checkOnly && p === target;
+      if (!catatanCount(btn) && !writeHere) continue;
+      const opened = (await openNote(btn, catatanCount(btn) > 0)) || (writeHere && (await openNote(catatanBtn(p.c), catatanCount(btn) > 0)));
+      if (!opened) {
+        if (writeHere) return { found: false };
+        continue;
+      }
+      const tag = noteMessages().map(tagIn).find(Boolean);
+      if (tag || !writeHere) await closeNote();
+      if (tag) return { found: true, added: false, alreadyTagged: true, existingTag: `${tag} (${p.label})`, where: p.label };
+      if (writeHere) ta = opened;
     }
+    if (checkOnly || !ta) return { found: true, added: false, alreadyTagged: false, existingTag: null };
     if (ta.disabled || ta.readOnly) {
       await closeNote();
       return { found: true, added: false, alreadyTagged: false, locked: true, where: target.label };
@@ -991,7 +1025,9 @@
     throw Object.assign(new Error('isian "Pilih UMKM dalam satu SLS" kosong & pilihan "TIDAK ADA" tidak bisa dipilih — isi manual'), { soft: true });
   }
   // Semua kartu usaha di dokumen ini (bukan cuma yang KBLI-nya diganti): galat di kartu mana pun menahan Kirim
-  async function sweepUmkmTidakAda() {
+  // skip: nomor urut kartu yang sudah diisi di tahap Ganti KBLI (Pilih UMKM-nya sudah diurus di sana)
+  async function sweepUmkmTidakAda(skip = { direct: false, idx: new Set() }) {
+    if (skip.direct) return [];
     const area = await gotoArea();
     const notes = [];
     const one = async (inst, name) => {
@@ -1007,8 +1043,11 @@
       return notes;
     }
     const n = usahaCards().length;
+    let first = true;
     for (let idx = 0; idx < n; idx++) {
-      if (idx) await goSection(area.title, onCardList, true);
+      if (skip.idx.has(idx)) continue;
+      if (!first) await goSection(area.title, onCardList, true);
+      first = false;
       const card = usahaCards()[idx];
       if (!card) continue;
       await one(await openCard(card), card.name);
@@ -1115,6 +1154,7 @@
     const targets = item.targets;
     const results = targets.map(() => null);
     const notes = [];
+    const filled = { direct: false, idx: new Set() }; // kartu yang sudah lewat ensureKbliCard (termasuk Pilih UMKM)
 
     if (area.kind === "direct") {
       const el = visibleKbli();
@@ -1124,10 +1164,11 @@
         notes.push(`halaman ini cuma 1 isian KBLI, tapi Excel punya ${targets.length} baris untuk dokumen ini — hanya baris pertama diproses`);
       try {
         results[0] = write ? await ensureKbliCard(inst, t) : await readKbliCard(inst, t);
+        filled.direct = write;
       } catch (e) {
         notes.push(e.message);
       }
-      return { results, notes };
+      return { results, notes, filled };
     }
 
     const cards = usahaCards();
@@ -1167,6 +1208,7 @@
       const t = targets[best.i];
       try {
         const r = write ? await ensureKbliCard(inst, t) : await readKbliCard(inst, t);
+        if (write) filled.idx.add(o.idx);
         results[best.i] = { card: card.name, ...r };
         log(`"${card.name}": ${r.already ? "sudah sesuai" : r.summary}`);
       } catch (e) {
@@ -1175,7 +1217,7 @@
     }
     const unmatched = targets.filter((t, i) => !results[i] && !tried.has(i)).map((t) => t.nama);
     if (unmatched.length) notes.push(`nama usaha tidak cocok dengan kartu manapun: ${unmatched.join(", ")}`);
-    return { results, notes };
+    return { results, notes, filled };
   }
 
   // =========================================================================
@@ -1247,6 +1289,7 @@
       }) || null
     );
   }
+  let anomaliOnAt = ""; // halaman tempat toggle anomali sudah dipastikan menyala (tidak perlu dibuka lagi saat Kirim)
   async function openCatatan() {
     closeDialogs();
     try {
@@ -1263,15 +1306,20 @@
         (!!c && (c.hasAttribute("data-checked") || c.getAttribute("aria-checked") === "true"))
       );
     };
+    let clicked = false;
     for (const attempt of [
       () => triggerClick(findAnomaliControl() || findAnomaliSwitch()),
       () => (findAnomaliControl() || findAnomaliSwitch()).click(),
     ]) {
       if (isOn()) break;
       attempt();
+      clicked = true;
       await waitFor(isOn, 2500);
     }
-    if (isOn()) await sleep(W(1200));
+    if (isOn()) {
+      anomaliOnAt = location.href;
+      if (clicked) await sleep(W(1200)); // rincian anomali dimuat setelah toggle baru dinyalakan
+    }
   }
 
   // ---------- ANOMALI USAHA: tandai anomali yang membahas KBLI ----------
@@ -1384,7 +1432,7 @@
     saveRun(r);
   };
   async function submitCurrent() {
-    await openCatatan();
+    if (anomaliOnAt !== location.href || !findNavKirim()) await openCatatan();
     const nav = await waitFor(findNavKirim, 10000);
     if (!nav) throw new Error("tombol Kirim tidak ditemukan / tidak aktif");
     log("Klik Kirim");
@@ -1495,16 +1543,12 @@
     if (n > MAX_RETRY) return false;
     const wait = 5000 * n;
     const r = loadRun();
-    r.cur = Object.assign(r.cur || {}, { retries: n });
+    const level = Math.max(Number(loadConf().patience) || 0, (r.cur && r.cur.patienceUp) || 0);
+    const up = level < PATIENCE.length - 1;
+    r.cur = Object.assign(r.cur || {}, { retries: n }, up ? { patienceUp: level + 1 } : {});
     r.phaseAt = r.navAt = Date.now() + wait;
     saveRun(r);
-    const c = loadConf();
-    const up = (Number(c.patience) || 0) < PATIENCE.length - 1;
-    if (up) {
-      c.patience = (Number(c.patience) || 0) + 1;
-      saveConf(c);
-    }
-    log(`⟳ ${why} — FASIH lelet? muat ulang & ulangi "${STEP_LABEL[cur.stage] || cur.stage}" (${n}/${MAX_RETRY})${up ? `, kesabaran → ${PATIENCE[c.patience].name}` : ""}`);
+    log(`⟳ ${why} — FASIH lelet? muat ulang & ulangi "${STEP_LABEL[cur.stage] || cur.stage}" (${n}/${MAX_RETRY})${up ? `, kesabaran dokumen ini → ${PATIENCE[level + 1].name}` : ""}`);
     await sleep(wait);
     if (loadRun().running) location.reload();
     return true;
@@ -1655,6 +1699,8 @@
     loginSince = 0;
     busy = true;
     stopRequested = false;
+    const stageKey = (r) => (r.cur ? `${r.cur.id}|${r.cur.stage}` : "");
+    const before = stageKey(run);
     try {
       if (!run.cur) {
         if (Date.now() < (run.nextAt || 0)) return;
@@ -1696,6 +1742,10 @@
       }
     } finally {
       busy = false;
+      // Pindah tahap di halaman yang sama -> tahap berikutnya langsung dijalankan. Pindah halaman tidak
+      // mengubah tahap (ensureReview dkk.), jadi tidak ikut dipercepat.
+      const now = loadRun();
+      if (now.running && stageKey(now) && stageKey(now) !== before) setTimeout(tick, 50);
     }
   }
 
@@ -1737,11 +1787,11 @@
       }
       case "fill": {
         if (!onEditOf(did(item))) return setStage("edit");
-        const { results, notes } = await scanDoc(item, true);
+        const { results, notes, filled } = await scanDoc(item, true);
         updateItem(item.id, { result: summary(item, results), kbliNotes: notes });
         if (results.some((r) => !r))
           throw Object.assign(new Error(`${summary(item, results)}${notes.length ? ` (${notes.join("; ")})` : ""}`), { soft: true });
-        const umkmNotes = await sweepUmkmTidakAda();
+        const umkmNotes = await sweepUmkmTidakAda(filled);
         if (umkmNotes.length) updateItem(item.id, { kbliNotes: [...notes, ...umkmNotes] });
         return setStage("anomali", { submitClicked: false, changed: results.some((r) => r.changed) });
       }

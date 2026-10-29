@@ -331,7 +331,7 @@ Status baris sama dengan bagian 3: Selesai, Sudah sesuai, Selesai manual, Perlu 
 - Semua skrip menyimpan semua progres di `localStorage` browser (per-perangkat, per-browser). Pakai fitur Ekspor/Impor di masing-masing panel kalau mau pindah laptop.
 - Mode uji di kedua skrip ada supaya baris pertama bisa diperiksa manual dulu sebelum menjalankan sisanya tanpa berhenti.
 - Jangan refresh halaman berulang-ulang saat kena rate limit (429) — skrip sudah menangani jeda otomatis dan akan lanjut sendiri.
-- FASIH lelet (Koreksi KBLI ≥ v1.14, Remark Sosek ≥ v1.1): ada setelan **Kesabaran** (Biasa / Sabar ×2 / Sabar ×3) yang mengalikan semua batas tunggu. Kalau satu tahap gagal atau macet, dokumen tidak langsung Gagal: halaman dimuat ulang dan tahapnya diulang sampai 3 kali (jedanya 5/10/15 detik), dan kesabaran naik sendiri satu tingkat. Yang tidak diulang: galat isian, link salah, Forbidden, dan Kirim yang tombolnya sudah sempat diklik.
+- FASIH lelet (Koreksi KBLI ≥ v1.14, Remark Sosek ≥ v1.1): ada setelan **Kesabaran** (Biasa / Sabar ×2 / Sabar ×3) yang mengalikan semua batas tunggu. Kalau satu tahap gagal atau macet, dokumen tidak langsung Gagal: halaman dimuat ulang dan tahapnya diulang sampai 3 kali (jedanya 5/10/15 detik), dan kesabaran naik sendiri satu tingkat (mulai Koreksi KBLI v1.15 naiknya hanya untuk dokumen itu, dokumen berikutnya kembali ke pilihan di panel). Yang tidak diulang: galat isian, link salah, Forbidden, dan Kirim yang tombolnya sudah sempat diklik.
 
 ## Feedback
 
