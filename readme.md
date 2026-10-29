@@ -12,6 +12,7 @@ Ada beberapa skrip di folder ini, untuk dua tahap pekerjaan yang berbeda:
 | [`fasih-koreksi-ntb.user.js`](fasih-koreksi-ntb.user.js) | FASIH Koreksi Anomali NTB (26.a - 28.b) | Sama persis dengan Koreksi R.27 (bagian 3), untuk Excel Pengecekan Anomali NTB: ganti 26.a–26.d, 27.a dan 28.b (dari kolom r28c) = kolom `rXX input`, plus catatan `#DC_04` di tiap rincian yang diubah. Muat puluhan ribu dokumen. Pintasan Alt+5. |
 | [`fasih-koreksi-ntb-wxy.user.js`](fasih-koreksi-ntb-wxy.user.js) | FASIH Edit NTB (kolom W X Y: 26.b, 26.d, 27.a) | Salinan Koreksi NTB (fitur sama persis) untuk Excel "Edit NTB": ganti 26.b = kolom W `26b. Biaya Produksi`, 26.d = kolom X `26d. Op`, 27.a = kolom Y `27a` (nilai lama dari `26b_biaya_produksi`, `26d_operasional`, `27a_nilai_pendapatan`), hanya baris `Edit NTB (1=Ya)` = 1, plus catatan `#DC_04`. Pintasan Alt+7. |
 | [`fasih-koreksi-ntb-perdagangan.user.js`](fasih-koreksi-ntb-perdagangan.user.js) | FASIH NTB Perdagangan (kolom T U V W: 26.b, 26.c, 26.d, 27.a) | Salinan Koreksi NTB (fitur sama persis) untuk Excel "NTB Perdagangan": ganti 26.b = kolom T `26b. Produksi`, 26.c = kolom U `26c. Biaya Pembelian`, 26.d = kolom V `26d. Op`, 27.a = kolom W `27a` (nilai lama dari `26b_biaya_produksi`, `26c_biaya_pembelian`, `26d_operasional`, `27a_nilai_pendapatan`), hanya baris `Edit NTB (1=Ya)` = 1, plus catatan `#DC_04`. Pintasan Alt+P. |
+| [`fasih-koreksi-ntb-gabungan.user.js`](fasih-koreksi-ntb-gabungan.user.js) | FASIH Koreksi NTB Gabungan (NTB / WXY / Perdagangan: 26.a - 28.b) | **Satu skrip untuk semua format Excel NTB** (Koreksi NTB `rXX awal/input`, Edit NTB WXY, NTB Perdagangan, format "metrik pusat" `… awal (metrik pusat)` → `… saran/input`) — isi boleh campur. Rincian yang dikerjakan dikenali dari kolom yang ada; **sel nilai baru kosong = rincian itu tidak diubah** di baris tsb. **Remark/catatan per rincian** (26.a … 28.b) diatur sendiri-sendiri di panel (kosong = mati). Tanpa kolom link → dibuka lewat `assignment_id`. Pintasan Alt+G. |
 | [`fasih-ganti-wilayah-oss.user.js`](fasih-ganti-wilayah-oss.user.js) | FASIH OSS -> Keluarga: Pindah + Tautkan | Pindahkan assignment OSS ke SLS keluarganya (Ganti Wilayah), lalu tautkan ke usaha keluarga lewat "Pilih UMKM dalam satu SLS" — atau tutup/gandakan kalau memang tidak ada yang cocok. |
 | [`fasih-koreksi-kbli.user.js`](fasih-koreksi-kbli.user.js) | FASIH Koreksi KBLI & Anomali | Untuk Excel "Pengecekan KBLI": ganti KBLI akhir ke `KBLI Baru` di kartu usaha yang tepat (baris Edit KBLI = 1; baris Edit KBLI = 0 tidak diubah, cuma diberi catatan `#0` di rincian KBLI), sesuaikan produk & kegiatan utama, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" dengan catatan `#DC_01`, lalu kirim & approve. Kartu yang KBLI-nya ternyata sudah sesuai (tidak ada yang diubah) juga diberi `#0`; `#1` hanya untuk kartu yang benar-benar dikoreksi. |
 | [`fasih-remark-sosek.user.js`](fasih-remark-sosek.user.js) | FASIH Remark Anomali Sosek | Untuk Excel "anomali_sosek": pasang remark (bawaan `#0`, dari kolom Remark sheet `sosek`) di catatan rincian yang dianomalikan — Blok IV R17d/f/g.i/h.i (sheet R143/R149/R154/R161) dan Blok I R7 + R13.a/R13.b di kartu anggota yang NIK-nya cocok (sheet R31–R34, R63) — lalu kirim & approve. Disaring per kabupaten (bawaan HULU SUNGAI TENGAH); antrean disimpan di storage Tampermonkey karena bisa belasan ribu dokumen. Pintasan Alt+8. |
@@ -290,6 +291,14 @@ Penanda baris judul: **`27a`**
 | 27.a nilai penjualan | `27a_nilai_pendapatan` | `27a` |
 
 Contoh file: *NTB Perdagangan* (kolom T U V W).
+
+#### 4) NTB Gabungan — `fasih-koreksi-ntb-gabungan.user.js` (Alt+G)
+
+Mengenali **semua** nama kolom di tabel 1–3 di atas, plus format "metrik pusat" (`Upah/gaji awal (metrik pusat)` → `Upah/gaji saran/input`, `Biaya produksi …`, `Biaya pembelian …`, `Biaya operasional …`, `Pendapatan …`). Kolom penanda (`r27a input` / `27a`) **tidak wajib**.
+- Rincian yang kolom nilai **barunya** ada → dikerjakan; kolomnya tidak ada → dianggap tidak berubah. Kolom nilai lama boleh tidak ada (rincian itu tidak dipakai mengenali kartu; kartu dikenali dari nama usaha).
+- Remark bawaan tiap rincian `#4` (bisa diganti/dikosongkan per rincian); tidak ditambah kalau catatan rincian itu sudah berisi tag berawalan `#` (`#4`, `#DC_4`, `#DC_04`, …).
+- **Sel nilai baru kosong** = rincian itu tidak diubah untuk baris tsb (aman untuk Excel campuran).
+- Wajib: `nama_usaha` (atau `Nama usaha`) dan `link` / `Link FASIH` / `link_fasih_sm` — atau `assignment_id` / `Assignment ID`.
 
 #### Kolom pendukung (ketiga skrip)
 
