@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         FASIH Koreksi KBLI & Anomali
 // @namespace    hanif-bps-hst
-// @version      1.15
-// @description  Baca Excel "Pengecekan KBLI" (Edit KBLI = 1 dikoreksi; Edit KBLI = 0 cuma diberi catatan #0 di rincian KBLI), buka tiap dokumen, ganti KBLI akhir ke KBLI Baru di kartu usaha yang tepat, sesuaikan produk & kegiatan utama kalau ada Produk Baru, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" lalu Kirim & Approve.
+// @version      1.17
+// @description  Baca Excel "Pengecekan KBLI" (Edit KBLI = 1 dikoreksi; Edit KBLI = 0 cuma diberi catatan #0 di rincian KBLI: revoke saja, catatan ditulis di Review tanpa Edit, lalu Approve), buka tiap dokumen, ganti KBLI akhir ke KBLI Baru di kartu usaha yang tepat, sesuaikan produk & kegiatan utama kalau ada Produk Baru, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" lalu Kirim & Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
 // @grant        none
@@ -20,7 +20,8 @@
   // Halaman awal survei SE2026 (daftar assignment) — dipakai sebagai tujuan "pulang" kalau belum pernah
   // ketahuan LIST_KEY-nya, dan begitu run berhenti (selesai/di-Stop) supaya tidak dibiarkan di halaman
   // dokumen: dibiarkan lama di sana bisa dianggap sesi "tidak login" oleh FASIH.
-  const HOME_URL = "https://fasih-sm.bps.go.id/app/surveys/a0429e96-51a5-477b-a415-485f9c153004/fd68e454-ba45-4b85-8205-f3bf777ded24/data?page=1&perPage=10";
+  const HOME_URL =
+    "https://fasih-sm.bps.go.id/app/surveys/a0429e96-51a5-477b-a415-485f9c153004/fd68e454-ba45-4b85-8205-f3bf777ded24/data?page=1&perPage=10";
   const HELPER_KEY = "kk_helper_hidden";
   const HELPER_POS_KEY = "kk_helper_pos"; // posisi panel bantu yang digeser
   const HELPER_MIN_KEY = "kk_helper_min"; // panel bantu diperkecil
@@ -30,7 +31,7 @@
 
   const APP = {
     name: "Koreksi KBLI",
-    version: "1.15",
+    version: "1.17",
     title: "Koreksi KBLI & Anomali",
     badge: "KBLI",
     launch: "Koreksi KBLI",
@@ -58,7 +59,10 @@
     { name: "Cepat", scale: 0.75, gap: [1000, 2500], poll: 150 },
     { name: "Normal", scale: 1, gap: [3000, 7000], poll: 250 },
   ];
-  const T = () => SPEEDS[Math.min(SPEEDS.length - 1, Math.max(0, Number(loadConf().speed) || 0))];
+  const T = () =>
+    SPEEDS[
+      Math.min(SPEEDS.length - 1, Math.max(0, Number(loadConf().speed) || 0))
+    ];
   const W = (ms) => Math.max(100, Math.round(ms * (T().scale || 1)));
   // FASIH kadang lelet: semua batas tunggu (waitFor & batas macet per tahap) dikali faktor ini.
   // Kalau FASIH cepat tidak ada ruginya (waitFor berhenti begitu elemennya muncul).
@@ -71,7 +75,14 @@
   // (naiknya cuma untuk dokumen itu; dokumen berikutnya kembali ke pilihan panel)
   const P = () =>
     PATIENCE[
-      Math.min(PATIENCE.length - 1, Math.max(0, Number(loadConf().patience) || 0, (loadRun().cur || {}).patienceUp || 0))
+      Math.min(
+        PATIENCE.length - 1,
+        Math.max(
+          0,
+          Number(loadConf().patience) || 0,
+          (loadRun().cur || {}).patienceUp || 0,
+        ),
+      )
     ];
 
   const STATUS = {
@@ -160,20 +171,31 @@
   function noteRateLimit(url) {
     const prev = rateInfo();
     if (Date.now() < (prev.until || 0)) return;
-    const count = Date.now() - (prev.at || 0) < 2 * 3600000 ? (prev.count || 0) + 1 : 1;
+    const count =
+      Date.now() - (prev.at || 0) < 2 * 3600000 ? (prev.count || 0) + 1 : 1;
     const minutes = Math.min(60, 15 * Math.pow(2, count - 1));
-    saveJson(RATE_KEY, { at: Date.now(), until: Date.now() + minutes * 60000, count, url: String(url || "").slice(0, 200) });
+    saveJson(RATE_KEY, {
+      at: Date.now(),
+      until: Date.now() + minutes * 60000,
+      count,
+      url: String(url || "").slice(0, 200),
+    });
     const cf = loadConf();
     cf.speed = Math.min(SPEEDS.length - 1, (Number(cf.speed) || 0) + 1);
     saveConf(cf);
-    console.warn(`[${APP.name}] 429 dari server. Berhenti ${minutes} menit, kecepatan turun ke ${SPEEDS[cf.speed].name}.`);
+    console.warn(
+      `[${APP.name}] 429 dari server. Berhenti ${minutes} menit, kecepatan turun ke ${SPEEDS[cf.speed].name}.`,
+    );
   }
   (function watch429() {
     const origFetch = window.fetch;
     if (origFetch && !origFetch.__kk) {
       const wrapped = function (input) {
         return origFetch.apply(this, arguments).then((res) => {
-          if (res && res.status === 429) noteRateLimit(typeof input === "string" ? input : input && input.url);
+          if (res && res.status === 429)
+            noteRateLimit(
+              typeof input === "string" ? input : input && input.url,
+            );
           return res;
         });
       };
@@ -215,14 +237,24 @@
   function forbiddenPage() {
     if (Date.now() - forbiddenAt < 1000) return forbiddenLast;
     forbiddenAt = Date.now();
-    if (!document.body || document.querySelector(".fasih-form-sidebar")) return (forbiddenLast = false);
+    if (!document.body || document.querySelector(".fasih-form-sidebar"))
+      return (forbiddenLast = false);
     const text = Array.from(document.body.children)
-      .filter((el) => !/^kk-/.test(el.id || "") && !/^(SCRIPT|STYLE)$/.test(el.tagName))
+      .filter(
+        (el) =>
+          !/^kk-/.test(el.id || "") && !/^(SCRIPT|STYLE)$/.test(el.tagName),
+      )
       .map((el) => el.innerText || "")
       .join(" ");
-    return (forbiddenLast = /\b403\b.{0,20}(forbidden|akses)|forbidden|akses ditolak|access denied|tidak (memiliki|punya) (hak )?akses/i.test(text));
+    return (forbiddenLast =
+      /\b403\b.{0,20}(forbidden|akses)|forbidden|akses ditolak|access denied|tidak (memiliki|punya) (hak )?akses/i.test(
+        text,
+      ));
   }
-  const forbiddenError = () => Object.assign(new Error("halaman Forbidden (tidak ada akses)"), { forbidden: true });
+  const forbiddenError = () =>
+    Object.assign(new Error("halaman Forbidden (tidak ada akses)"), {
+      forbidden: true,
+    });
 
   async function waitFor(check, timeoutMs) {
     timeoutMs *= P().x;
@@ -243,23 +275,47 @@
       .toUpperCase()
       .replace(/[^A-Z0-9]+/g, " ")
       .trim();
-  const squash = (s) => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const squash = (s) =>
+    String(s || "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "");
   const visible = (el) =>
-    !!el && (el.offsetParent !== null || (el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden"));
-  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]);
+    !!el &&
+    (el.offsetParent !== null ||
+      (el.getClientRects().length > 0 &&
+        getComputedStyle(el).visibility !== "hidden"));
+  const esc = (s) =>
+    String(s ?? "").replace(
+      /[&<>"]/g,
+      (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch],
+    );
 
   function triggerClick(el) {
     if (!el) return;
     el.scrollIntoView({ block: "center" });
-    ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((type) => {
-      const Ctor = type.startsWith("pointer") ? PointerEvent : MouseEvent;
-      el.dispatchEvent(new Ctor(type, { bubbles: true, cancelable: true, pointerType: "mouse", button: 0 }));
-    });
+    ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach(
+      (type) => {
+        const Ctor = type.startsWith("pointer") ? PointerEvent : MouseEvent;
+        el.dispatchEvent(
+          new Ctor(type, {
+            bubbles: true,
+            cancelable: true,
+            pointerType: "mouse",
+            button: 0,
+          }),
+        );
+      },
+    );
   }
   function pressKey(key) {
     const code = key === "Enter" ? 13 : 27;
     (document.activeElement || document.body).dispatchEvent(
-      new KeyboardEvent("keydown", { key, code: key, keyCode: code, bubbles: true }),
+      new KeyboardEvent("keydown", {
+        key,
+        code: key,
+        keyCode: code,
+        bubbles: true,
+      }),
     );
   }
 
@@ -271,14 +327,26 @@
     let typed = false;
     try {
       if (typeof el.select === "function") el.select();
-      typed = value === "" ? document.execCommand("delete", false) : document.execCommand("insertText", false, value);
+      typed =
+        value === ""
+          ? document.execCommand("delete", false)
+          : document.execCommand("insertText", false, value);
     } catch (e) {
       typed = false;
     }
     if (!typed || el.value !== value) {
-      const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const proto =
+        el.tagName === "TEXTAREA"
+          ? HTMLTextAreaElement.prototype
+          : HTMLInputElement.prototype;
       Object.getOwnPropertyDescriptor(proto, "value").set.call(el, value);
-      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+      el.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          inputType: "insertText",
+          data: value,
+        }),
+      );
     }
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }
@@ -299,14 +367,19 @@
     for (let i = 1; i <= a.length; i++) {
       const cur = [i];
       for (let j = 1; j <= b.length; j++)
-        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+        cur[j] = Math.min(
+          prev[j] + 1,
+          cur[j - 1] + 1,
+          prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+        );
       prev = cur;
     }
     return 1 - prev[b.length] / Math.max(a.length, b.length);
   }
   const baseName = (t) => normalize(String(t || "").replace(/\([^)]*\)/g, " "));
   const digitsOf = (s) => (s.match(/\d+/g) || []).map(Number).join(",");
-  const ownerOf = (t) => normalize((String(t || "").match(/\(([^)]+)\)/) || [])[1]);
+  const ownerOf = (t) =>
+    normalize((String(t || "").match(/\(([^)]+)\)/) || [])[1]);
   function sameOwner(a, b) {
     if (levenshteinRatio(a, b) >= 0.8) return true;
     const [x, y] = a.length <= b.length ? [a, b] : [b, a];
@@ -338,7 +411,11 @@
     const bytes = new Uint8Array(arrayBuffer);
     const view = new DataView(arrayBuffer);
     let eocd = -1;
-    for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i--) {
+    for (
+      let i = bytes.length - 22;
+      i >= Math.max(0, bytes.length - 65557);
+      i--
+    ) {
       if (view.getUint32(i, true) === 0x06054b50) {
         eocd = i;
         break;
@@ -349,35 +426,57 @@
     let ptr = view.getUint32(eocd + 16, true);
     for (let n = view.getUint16(eocd + 10, true); n > 0; n--) {
       const nameLen = view.getUint16(ptr + 28, true);
-      const name = new TextDecoder().decode(bytes.subarray(ptr + 46, ptr + 46 + nameLen));
+      const name = new TextDecoder().decode(
+        bytes.subarray(ptr + 46, ptr + 46 + nameLen),
+      );
       files[name] = {
         method: view.getUint16(ptr + 10, true),
         size: view.getUint32(ptr + 20, true),
         offset: view.getUint32(ptr + 42, true),
       };
-      ptr += 46 + nameLen + view.getUint16(ptr + 30, true) + view.getUint16(ptr + 32, true);
+      ptr +=
+        46 +
+        nameLen +
+        view.getUint16(ptr + 30, true) +
+        view.getUint16(ptr + 32, true);
     }
     return async (name) => {
       const f = files[name];
       if (!f) return null;
-      const start = f.offset + 30 + view.getUint16(f.offset + 26, true) + view.getUint16(f.offset + 28, true);
+      const start =
+        f.offset +
+        30 +
+        view.getUint16(f.offset + 26, true) +
+        view.getUint16(f.offset + 28, true);
       const data = bytes.subarray(start, start + f.size);
       if (f.method === 0) return new TextDecoder().decode(data);
-      const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      const stream = new Blob([data])
+        .stream()
+        .pipeThrough(new DecompressionStream("deflate-raw"));
       return new Response(stream).text();
     };
   }
 
   async function readXlsx(arrayBuffer) {
     const read = await openZip(arrayBuffer);
-    const xml = (text) => new DOMParser().parseFromString(text, "application/xml");
-    const tags = (node, tag) => Array.from(node.getElementsByTagNameNS("*", tag));
+    const xml = (text) =>
+      new DOMParser().parseFromString(text, "application/xml");
+    const tags = (node, tag) =>
+      Array.from(node.getElementsByTagNameNS("*", tag));
     const sharedXml = await read("xl/sharedStrings.xml");
-    const shared = sharedXml ? tags(xml(sharedXml), "si").map((si) => tags(si, "t").map((t) => t.textContent).join("")) : [];
+    const shared = sharedXml
+      ? tags(xml(sharedXml), "si").map((si) =>
+          tags(si, "t")
+            .map((t) => t.textContent)
+            .join(""),
+        )
+      : [];
     const rels = {};
-    tags(xml(await read("xl/_rels/workbook.xml.rels")), "Relationship").forEach((r) => {
-      rels[r.getAttribute("Id")] = r.getAttribute("Target");
-    });
+    tags(xml(await read("xl/_rels/workbook.xml.rels")), "Relationship").forEach(
+      (r) => {
+        rels[r.getAttribute("Id")] = r.getAttribute("Target");
+      },
+    );
     const colIndex = (ref) =>
       ref
         .replace(/\d+/g, "")
@@ -386,7 +485,10 @@
     const sheets = [];
     for (const s of tags(xml(await read("xl/workbook.xml")), "sheet")) {
       const relId =
-        s.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id") || s.getAttribute("r:id");
+        s.getAttributeNS(
+          "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+          "id",
+        ) || s.getAttribute("r:id");
       let target = rels[relId].replace(/^\//, "");
       if (!target.startsWith("xl/")) target = "xl/" + target;
       const rows = tags(xml(await read(target)), "row").map((row) => {
@@ -395,7 +497,10 @@
           const type = c.getAttribute("t");
           const v = tags(c, "v")[0];
           let value = "";
-          if (type === "inlineStr") value = tags(c, "t").map((t) => t.textContent).join("");
+          if (type === "inlineStr")
+            value = tags(c, "t")
+              .map((t) => t.textContent)
+              .join("");
           else if (!v) value = "";
           else if (type === "s") value = shared[Number(v.textContent)];
           else value = v.textContent;
@@ -438,21 +543,29 @@
   async function parseWorkbook(arrayBuffer) {
     const sheets = await readXlsx(arrayBuffer);
     for (const sheet of sheets) {
-      const hi = sheet.rows.findIndex((r) => r.some((h) => squash(h) === ANCHOR));
+      const hi = sheet.rows.findIndex((r) =>
+        r.some((h) => squash(h) === ANCHOR),
+      );
       if (hi < 0) continue;
       const headers = sheet.rows[hi].map(squash);
       const col = {};
-      for (const [k, names] of Object.entries(COLS)) col[k] = headers.findIndex((h) => names.includes(h));
+      for (const [k, names] of Object.entries(COLS))
+        col[k] = headers.findIndex((h) => names.includes(h));
       const missing = [];
       if (col.link < 0) missing.push("link");
       if (col.nama < 0) missing.push("nama_usaha");
       // kbli_akhir (KBLI lama) cuma untuk tampilan & perbandingan -> boleh tidak ada
       if (col.kbliBaru < 0) missing.push("KBLI Baru");
-      if (missing.length) throw new Error(`kolom tidak ada di sheet "${sheet.name}": ${missing.join(", ")}`);
+      if (missing.length)
+        throw new Error(
+          `kolom tidak ada di sheet "${sheet.name}": ${missing.join(", ")}`,
+        );
       const byDoc = new Map();
       let skipped = 0;
       let notFlagged = 0;
-      const dataRows = sheet.rows.slice(hi + 1).filter((r) => r.some((x) => String(x ?? "").trim()));
+      const dataRows = sheet.rows
+        .slice(hi + 1)
+        .filter((r) => r.some((x) => String(x ?? "").trim()));
       dataRows.forEach((r, i) => {
         const get = (k) => (col[k] >= 0 ? String(r[col[k]] ?? "").trim() : "");
         const flag = get("editKbli");
@@ -464,10 +577,15 @@
         }
         const rawLink = get("link");
         let url = (rawLink.match(/https?:\/\/[^"'\s<>]+/) || [""])[0];
-        let ids = (url || rawLink).match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) || [];
+        let ids =
+          (url || rawLink).match(
+            /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+          ) || [];
         // Link kosong tapi ada assignment_id -> buka lewat halaman assignment-detail (skrip ikut link Review-nya)
         if (!ids.length) {
-          const aid = (get("assignmentId").match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i) || [])[0];
+          const aid = (get("assignmentId").match(
+            /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+          ) || [])[0];
           if (aid) {
             ids = [aid];
             url = `${location.origin}/app/assignment-detail/${aid.toLowerCase()}`;
@@ -509,7 +627,13 @@
           });
         byDoc.get(id).targets.push(target);
       });
-      return { items: Array.from(byDoc.values()), sheet: sheet.name, rows: dataRows.length, skipped, notFlagged };
+      return {
+        items: Array.from(byDoc.values()),
+        sheet: sheet.name,
+        rows: dataRows.length,
+        skipped,
+        notFlagged,
+      };
     }
     throw new Error('tidak ada sheet dengan kolom "KBLI Baru"');
   }
@@ -517,7 +641,8 @@
   // =========================================================================
   // FORM ASSIGNMENT
   // =========================================================================
-  const box = (id, inst) => document.getElementById(inst === undefined ? id : `${id}#${inst}`);
+  const box = (id, inst) =>
+    document.getElementById(inst === undefined ? id : `${id}#${inst}`);
   async function waitBox(id, inst, ms) {
     return waitFor(() => {
       const b = box(id, inst);
@@ -532,18 +657,30 @@
 
   function buttonByText(text) {
     return Array.from(document.querySelectorAll("button")).find(
-      (b) => visible(b) && !b.disabled && b.innerText.trim().toUpperCase() === text.toUpperCase() && !b.closest(OWN),
+      (b) =>
+        visible(b) &&
+        !b.disabled &&
+        b.innerText.trim().toUpperCase() === text.toUpperCase() &&
+        !b.closest(OWN),
     );
   }
   function buttonByIcon(icon) {
-    const svg = Array.from(document.querySelectorAll(`svg.tabler-icon-${icon}`)).find(
-      (s) => s.closest("button") && visible(s.closest("button")) && !s.closest(OWN),
+    const svg = Array.from(
+      document.querySelectorAll(`svg.tabler-icon-${icon}`),
+    ).find(
+      (s) =>
+        s.closest("button") && visible(s.closest("button")) && !s.closest(OWN),
     );
     return svg ? svg.closest("button") : null;
   }
 
   // ---------- Navigasi sidebar ----------
-  const sidebarItems = () => Array.from(document.querySelectorAll(".fasih-form-sidebar > div[title], .fasih-form-sidebar [title]"));
+  const sidebarItems = () =>
+    Array.from(
+      document.querySelectorAll(
+        ".fasih-form-sidebar > div[title], .fasih-form-sidebar [title]",
+      ),
+    );
   function sidebarItem(title) {
     const want = squash(title);
     const items = sidebarItems();
@@ -558,30 +695,51 @@
     const item = await waitFor(() => sidebarItem(title), 30000);
     if (!item) throw new Error(`menu "${title}" tidak ada di sidebar`);
     triggerClick(item);
-    if (!(await waitFor(readyCheck, 20000))) throw new Error(`halaman "${title}" tidak terbuka`);
+    if (!(await waitFor(readyCheck, 20000)))
+      throw new Error(`halaman "${title}" tidak terbuka`);
     await sleep(W(700));
     return true;
   }
 
-  const onCardList = () => visible(box("se2026_nested")) && !document.querySelector('[id^="keberadaan_usaha#"]');
+  const onCardList = () =>
+    visible(box("se2026_nested")) &&
+    !document.querySelector('[id^="keberadaan_usaha#"]');
   const visibleKbli = () =>
-    Array.from(document.querySelectorAll('[id^="kbli#"], #kbli, [id^="kbli_genai#"], #kbli_genai')).find(visible) || null;
-  const instOf = (el) => (el.id.includes("#") ? el.id.split("#")[1] : undefined);
+    Array.from(
+      document.querySelectorAll(
+        '[id^="kbli#"], #kbli, [id^="kbli_genai#"], #kbli_genai',
+      ),
+    ).find(visible) || null;
+  const instOf = (el) =>
+    el.id.includes("#") ? el.id.split("#")[1] : undefined;
 
   function usahaCards() {
     const list = box("se2026_nested");
     if (!list) return [];
-    return Array.from(list.querySelectorAll("[data-nested-view]")).map((card) => {
-      const span = card.querySelector("span");
-      return { card, name: (span ? span.innerText : card.innerText).trim().toUpperCase() };
-    });
+    return Array.from(list.querySelectorAll("[data-nested-view]")).map(
+      (card) => {
+        const span = card.querySelector("span");
+        return {
+          card,
+          name: (span ? span.innerText : card.innerText).trim().toUpperCase(),
+        };
+      },
+    );
   }
 
   // Cari halaman yang memuat kartu usaha (Blok II keluarga) atau langsung isian KBLI (form usaha tunggal).
   async function gotoArea() {
-    if (!(await waitFor(() => sidebarItems().length, 30000))) throw new Error("sidebar form belum termuat");
-    const state = () => (onCardList() ? "cards" : visibleKbli() ? "direct" : null);
-    const titles = Array.from(new Set(sidebarItems().map((el) => el.getAttribute("title")).filter(Boolean)));
+    if (!(await waitFor(() => sidebarItems().length, 30000)))
+      throw new Error("sidebar form belum termuat");
+    const state = () =>
+      onCardList() ? "cards" : visibleKbli() ? "direct" : null;
+    const titles = Array.from(
+      new Set(
+        sidebarItems()
+          .map((el) => el.getAttribute("title"))
+          .filter(Boolean),
+      ),
+    );
     const known = loadJson(AREA_KEY, []).filter((t) => titles.includes(t));
     const blok2 = titles.filter((t) => /BLOK\s*(II|2)(?![I\d])/i.test(t));
     const order = Array.from(new Set([...known, ...blok2, ...titles]));
@@ -594,11 +752,16 @@
         await sleep(W(600));
         const kind = state();
         if (!kind) continue;
-        saveJson(AREA_KEY, [title, ...known.filter((t) => t !== title)].slice(0, 6));
+        saveJson(
+          AREA_KEY,
+          [title, ...known.filter((t) => t !== title)].slice(0, 6),
+        );
         return { kind, title };
       }
     }
-    throw new Error("halaman kartu usaha / isian KBLI tidak ditemukan di sidebar");
+    throw new Error(
+      "halaman kartu usaha / isian KBLI tidak ditemukan di sidebar",
+    );
   }
 
   async function openCard(card) {
@@ -616,25 +779,38 @@
     for (let attempt = 0; attempt < 3; attempt++) {
       const c = box(id, inst);
       if (!c) throw new Error(`isian ${id} tidak ada`);
-      const input = c.querySelector('input[type="text"]:not([disabled]), textarea:not([disabled])');
+      const input = c.querySelector(
+        'input[type="text"]:not([disabled]), textarea:not([disabled])',
+      );
       if (!input) throw new Error(`isian ${id} terkunci`);
       if (input.value.trim() === value) return;
       setFieldValue(input, value);
       commitField(input);
       await sleep(W(300));
-      const again = fresh(c).querySelector('input[type="text"]:not([disabled]), textarea:not([disabled])') || input;
+      const again =
+        fresh(c).querySelector(
+          'input[type="text"]:not([disabled]), textarea:not([disabled])',
+        ) || input;
       if (again.value.trim() === value) return;
     }
     const now = box(id, inst);
-    const val = now ? (now.querySelector("input, textarea") || {}).value || "" : "";
-    if (val.trim() !== value) throw new Error(`isian ${id} tidak mau berubah (sekarang "${val}", seharusnya "${value}")`);
+    const val = now
+      ? (now.querySelector("input, textarea") || {}).value || ""
+      : "";
+    if (val.trim() !== value)
+      throw new Error(
+        `isian ${id} tidak mau berubah (sekarang "${val}", seharusnya "${value}")`,
+      );
   }
 
   // Dropdown pencarian Master KBLI. Modal ini berat (±1.559 kode) & pencariannya kadang belum siap saat
   // baru dibuka -> kalau gagal atau nilainya tidak lengket, ulangi sekali lagi sebelum menyerah.
-  const OPTION_SELECTOR = '[role="option"], [cmdk-item], [data-reka-collection-item], [role="listbox"] li, [role="dialog"] li';
+  const OPTION_SELECTOR =
+    '[role="option"], [cmdk-item], [data-reka-collection-item], [role="listbox"] li, [role="dialog"] li';
   function visibleOptions2() {
-    return Array.from(document.querySelectorAll(OPTION_SELECTOR)).filter((el) => visible(el) && !el.closest(OWN) && el.innerText.trim());
+    return Array.from(document.querySelectorAll(OPTION_SELECTOR)).filter(
+      (el) => visible(el) && !el.closest(OWN) && el.innerText.trim(),
+    );
   }
   async function chooseFromDropdown(container, searchText, pick) {
     const textarea = container.querySelector('textarea, input[type="text"]');
@@ -644,9 +820,11 @@
       // Modal Master KBLI berat: tunggu kotak cariannya benar-benar tampil, jangan jeda tetap (jeda ikut
       // dipercepat di mode Turbo/Kilat sehingga kode sempat diketik sebelum modalnya siap)
       const searchBox = () =>
-        Array.from(document.querySelectorAll('[role="dialog"] input:not([type="radio"]):not([type="checkbox"]), input[cmdk-input]')).find(
-          (el) => visible(el) && !el.closest(OWN),
-        );
+        Array.from(
+          document.querySelectorAll(
+            '[role="dialog"] input:not([type="radio"]):not([type="checkbox"]), input[cmdk-input]',
+          ),
+        ).find((el) => visible(el) && !el.closest(OWN));
       const search = (await waitFor(searchBox, 6000)) || textarea;
       await sleep(300);
       if (search) setFieldValue(search, searchText);
@@ -669,24 +847,39 @@
         await sleep(W(900 + attempt * 400));
       }
       const ok = await chooseFromDropdown(fresh(kbliBox), code, pick);
-      if (ok && (await waitFor(() => dropdownValue(fresh(kbliBox)).includes(code) || fresh(kbliBox).innerText.includes(code), 3000)))
+      if (
+        ok &&
+        (await waitFor(
+          () =>
+            dropdownValue(fresh(kbliBox)).includes(code) ||
+            fresh(kbliBox).innerText.includes(code),
+          3000,
+        ))
+      )
         return true;
     }
     return false;
   }
 
   function radioValue(container) {
-    const checked = container.querySelector('input[type="radio"]:checked, input[type="radio"][data-checked]');
+    const checked = container.querySelector(
+      'input[type="radio"]:checked, input[type="radio"][data-checked]',
+    );
     return checked ? checked.value : "";
   }
   async function setRadio(container, value) {
-    const input = container.querySelector(`input[type="radio"][value="${value}"]`);
+    const input = container.querySelector(
+      `input[type="radio"][value="${value}"]`,
+    );
     if (!input) return false;
     if (radioValue(container) === value) return true;
     if (input.disabled) return false;
     const group = input.closest('[role="group"]') || input.parentElement;
     triggerClick((group && group.querySelector('[role="radio"]')) || input);
-    return !!(await waitFor(() => radioValue(fresh(container)) === value, 3000));
+    return !!(await waitFor(
+      () => radioValue(fresh(container)) === value,
+      3000,
+    ));
   }
 
   // 13.g "Kode KBLI" bukan langsung kotak pencarian: isinya radio beberapa saran GenAI ("[G] 47782 ...")
@@ -695,9 +888,13 @@
   function genaiCode(inst) {
     const genai = box("kbli_genai", inst);
     if (!genai) return "";
-    const checked = genai.querySelector('input[type="radio"]:checked, input[type="radio"][data-checked]');
+    const checked = genai.querySelector(
+      'input[type="radio"]:checked, input[type="radio"][data-checked]',
+    );
     if (!checked || checked.value === "999999") return "";
-    const label = genai.querySelector(`label[for="${checked.id}"]`) || checked.closest('[role="group"]');
+    const label =
+      genai.querySelector(`label[for="${checked.id}"]`) ||
+      checked.closest('[role="group"]');
     return ((label && label.innerText) || "").match(/\b(\d{5})\b/)?.[1] || "";
   }
   // Kode KBLI yang sedang berlaku di kartu ini: dari kotak Master KBLI kalau sudah dipilih,
@@ -705,7 +902,9 @@
   function effectiveKbliCode(inst) {
     const kbliBox = box("kbli", inst);
     if (kbliBox) {
-      const code = ((dropdownValue(kbliBox) || kbliBox.innerText).match(/\b(\d{5})\b/) || [])[1];
+      const code = ((dropdownValue(kbliBox) || kbliBox.innerText).match(
+        /\b(\d{5})\b/,
+      ) || [])[1];
       if (code) return code;
     }
     return genaiCode(inst);
@@ -725,9 +924,13 @@
         return false;
       }
       // Salah satu saran GenAI kodenya sudah sama -> pilih itu saja
-      const sugg = Array.from(genai.querySelectorAll('input[type="radio"]')).find((r) => {
+      const sugg = Array.from(
+        genai.querySelectorAll('input[type="radio"]'),
+      ).find((r) => {
         if (r.value === "999999") return false;
-        const l = genai.querySelector(`label[for="${r.id}"]`) || r.closest('[role="group"]');
+        const l =
+          genai.querySelector(`label[for="${r.id}"]`) ||
+          r.closest('[role="group"]');
         return ((l && l.innerText) || "").match(/\b(\d{5})\b/)?.[1] === code;
       });
       if (sugg && (await setRadio(genai, sugg.value))) return true;
@@ -741,7 +944,8 @@
         return false;
       }
     }
-    if ((dropdownValue(kbliBox) || kbliBox.innerText).includes(code)) return true;
+    if ((dropdownValue(kbliBox) || kbliBox.innerText).includes(code))
+      return true;
     if (await selectKbli(kbliBox, code)) return true;
     kbliFail = `kode ${code} tidak ketemu / tidak bisa dipilih di daftar Master KBLI`;
     return false;
@@ -752,7 +956,8 @@
   const WORD_PAIRS = [["HIBRIDA", "INBRIDA"]];
   function matchCase(sample, word) {
     if (sample === sample.toUpperCase()) return word.toUpperCase();
-    if (sample[0] === sample[0].toUpperCase()) return word[0].toUpperCase() + word.slice(1).toLowerCase();
+    if (sample[0] === sample[0].toUpperCase())
+      return word[0].toUpperCase() + word.slice(1).toLowerCase();
     return word.toLowerCase();
   }
   // Hasil: teks kegiatan utama baru, atau null kalau tidak ada pasangan kata yang cocok (jangan disentuh)
@@ -795,7 +1000,10 @@
     for (const [id, kind, value] of KBLI_FIXED_IF_SHOWN) {
       const el = box(id, inst);
       if (!el) continue;
-      const cur = kind === "radio" ? radioValue(el) : ((el.querySelector("input, textarea") || {}).value || "").trim();
+      const cur =
+        kind === "radio"
+          ? radioValue(el)
+          : ((el.querySelector("input, textarea") || {}).value || "").trim();
       if (cur !== value) bits.push(`${id} "${cur || "-"}" → "${value}"`);
     }
     return bits;
@@ -807,7 +1015,13 @@
     const ms = /^(1\d|2\d|3[0-3])/.test(kbliBaru || "") ? 1200 : 300;
     const notes = [];
     // Kebanyakan kartu tidak punya isian ini: cukup tunggu sekali sampai salah satunya muncul
-    if (!(await waitFor(() => KBLI_FIXED_IF_SHOWN.some(([id]) => visible(box(id, inst))), ms))) return notes;
+    if (
+      !(await waitFor(
+        () => KBLI_FIXED_IF_SHOWN.some(([id]) => visible(box(id, inst))),
+        ms,
+      ))
+    )
+      return notes;
     for (const [id, kind, value] of KBLI_FIXED_IF_SHOWN) {
       const el = await waitBox(id, inst, ms);
       if (!el) continue;
@@ -815,7 +1029,9 @@
         if (radioValue(el) === value) continue;
         if (await setRadio(el, value)) notes.push(`${id} → ${value}`);
       } else {
-        const input = el.querySelector('input[type="text"]:not([disabled]), textarea:not([disabled])');
+        const input = el.querySelector(
+          'input[type="text"]:not([disabled]), textarea:not([disabled])',
+        );
         if (!input || input.value.trim() === value) continue;
         await writeText(id, inst, value);
         notes.push(`${id} → ${value}`);
@@ -830,7 +1046,11 @@
   function wantedKegUtama(t, kegCur) {
     if (t.kegUtamaBaru) return { value: t.kegUtamaBaru, guessed: false };
     if (t.produkBaru) {
-      const swapped = kegUtamaSwap(t.produkLama, t.produkBaru, kegCur || t.kegUtamaLama || "");
+      const swapped = kegUtamaSwap(
+        t.produkLama,
+        t.produkBaru,
+        kegCur || t.kegUtamaLama || "",
+      );
       if (swapped) return { value: swapped, guessed: true };
     }
     return null;
@@ -838,21 +1058,36 @@
 
   // Baca saja (aman dipakai di halaman Review, tanpa revoke). Halaman Review tidak bisa diklik (bukan
   // mode edit), jadi KBLI dibaca dari mana pun dia sedang terlihat: kotak Master KBLI atau radio 13.g.
-  async function readKbliCard(inst, t) {
+  async function readKbliCard(inst, t, writeNote = false) {
     await waitFor(() => box("kbli", inst) || box("kbli_genai", inst), 3000);
     if (t.noEdit) {
       // Edit KBLI = 0: tidak ada isian yang diubah. Di Review catatan cuma DICEK (tidak dipasang): catatan harus
       // ditulis di mode Edit (revoke dulu) lalu dikirim ulang. Sudah ada #0 -> selesai tanpa revoke.
       if (!catatanTag(t))
-        return { changed: false, already: true, summary: "Edit KBLI = 0, KBLI tidak diubah · catatan dimatikan di pengaturan" };
-      const c = await addKbliCatatan(inst, catatanTag(t), [noteTag(true)], true);
-      const ok = c.found && c.alreadyTagged;
+        return {
+          changed: false,
+          already: true,
+          summary:
+            "Edit KBLI = 0, KBLI tidak diubah · catatan dimatikan di pengaturan",
+        };
+      // writeNote=true (dokumen belum di-approve / sudah di-revoke): catatan #0 langsung DITULIS di Review, tanpa Edit
+      const c = await addKbliCatatan(
+        inst,
+        catatanTag(t),
+        [noteTag(true)],
+        !writeNote,
+      );
+      const ok = c.found && (c.alreadyTagged || c.added);
       return {
         changed: false,
         already: ok,
+        noteOnly: true, // satu-satunya yang kurang cuma catatan
+        noteWritten: !!c.added,
         summary: ok
-          ? `Edit KBLI = 0, KBLI tidak diubah · catatan ${c.existingTag} sudah ada`
-          : `Edit KBLI = 0 · catatan ${catatanTag(t)} belum ada → revoke & Edit`,
+          ? c.added
+            ? `Edit KBLI = 0, KBLI tidak diubah · catatan ${catatanTag(t)} ditulis di Review`
+            : `Edit KBLI = 0, KBLI tidak diubah · catatan ${c.existingTag} sudah ada`
+          : `Edit KBLI = 0 · catatan ${catatanTag(t)} ${writeNote ? "tidak bisa ditulis di Review → lewat Edit" : "belum ada → revoke"}`,
       };
     }
     const code = effectiveKbliCode(inst);
@@ -860,7 +1095,11 @@
     const produkInput = produkBox && produkBox.querySelector("input, textarea");
     const produkCur = produkInput ? produkInput.value.trim() : "";
     const kegBox = box("keg_utama", inst);
-    const kegInput = kegBox && kegBox.querySelector('input[type="text"]:not([disabled]), textarea:not([disabled])');
+    const kegInput =
+      kegBox &&
+      kegBox.querySelector(
+        'input[type="text"]:not([disabled]), textarea:not([disabled])',
+      );
     const kegCur = kegInput ? kegInput.value.trim() : "";
     const want = wantedKegUtama(t, kegCur);
     const kbliOk = !t.kbliBaru || code === t.kbliBaru;
@@ -868,7 +1107,8 @@
     const kegOk = !want || kegCur === want.value;
     const izinHalalBits = izinHalalGaps(inst);
     const umkmKosong = umkmBlank(inst);
-    const already = kbliOk && produkOk && kegOk && !izinHalalBits.length && !umkmKosong;
+    const already =
+      kbliOk && produkOk && kegOk && !izinHalalBits.length && !umkmKosong;
     const bits = [...izinHalalBits];
     if (umkmKosong) bits.push('Pilih UMKM dalam satu SLS kosong → "TIDAK ADA"');
     if (!kbliOk) bits.push(`KBLI ${code || "-"} → ${t.kbliBaru}`);
@@ -879,13 +1119,20 @@
     // seperti Edit KBLI = 0). Di Review cuma DICEK; belum ada -> revoke & Edit, #0 dipasang di sana lalu dikirim.
     // Kalau #1 / #DC_xx sudah ada (pernah dikoreksi) dianggap sudah ditandai.
     const tag0 = noteTag(false);
-    if (!tag0) return { changed: false, already: true, summary: "sudah sesuai" };
-    const c = await addKbliCatatan(inst, tag0, [noteTag(true)], true);
-    const ok = c.found && c.alreadyTagged;
+    if (!tag0)
+      return { changed: false, already: true, summary: "sudah sesuai" };
+    const c = await addKbliCatatan(inst, tag0, [noteTag(true)], !writeNote);
+    const ok = c.found && (c.alreadyTagged || c.added);
     return {
       changed: false,
       already: ok,
-      summary: ok ? `sudah sesuai · catatan ${c.existingTag} sudah ada` : `sudah sesuai, catatan ${tag0} belum ada → revoke & Edit`,
+      noteOnly: true,
+      noteWritten: !!c.added,
+      summary: ok
+        ? c.added
+          ? `sudah sesuai · catatan ${tag0} ditulis di Review`
+          : `sudah sesuai · catatan ${c.existingTag} sudah ada`
+        : `sudah sesuai, catatan ${tag0} ${writeNote ? "tidak bisa ditulis di Review → lewat Edit" : "belum ada → revoke"}`,
     };
   }
 
@@ -895,10 +1142,15 @@
   // Teksnya diatur di panel (② Pengaturan): noteEdit untuk Edit KBLI = 1, noteNoEdit untuk Edit KBLI = 0
   // (KBLI sudah benar, tidak diubah). Kosong = tidak menambah catatan.
   // edited=true -> noteEdit (#1, KBLI/produk/kegiatan utama memang diubah); false -> noteNoEdit (#0, sudah sesuai)
-  const noteTag = (edited) => String((edited ? loadConf().noteEdit : loadConf().noteNoEdit) ?? "").trim();
+  const noteTag = (edited) =>
+    String((edited ? loadConf().noteEdit : loadConf().noteNoEdit) ?? "").trim();
   const catatanTag = (t) => noteTag(!(t && t.noEdit));
   // Tag utuh (bukan potongan): "#1" tidak cocok dengan "#10", "#DC_04" tidak cocok dengan "#DC_045"
-  const hasTag = (msg, tag) => !!tag && new RegExp(tag.replace(/[^\w#]/g, (ch) => "\\" + ch) + "(?!\\w)", "i").test(msg);
+  const hasTag = (msg, tag) =>
+    !!tag &&
+    new RegExp(tag.replace(/[^\w#]/g, (ch) => "\\" + ch) + "(?!\\w)", "i").test(
+      msg,
+    );
   // Tag dari skrip koreksi lain (R.27, Gaji, NTB, anomali KBLI, dst) berpola #DC_xx. Kalau salah satunya sudah
   // ada, kartu ini dianggap sudah pernah "dicek" oleh proses koreksi (apa pun skripnya) -> tidak usah ditambah.
   const DC_TAG_RE = /#DC_[A-Z0-9]+(?![A-Z0-9])/i;
@@ -913,17 +1165,38 @@
   // pesan lama muncul di atasnya, dan begitu terkirim tidak bisa dihapus. Pesan lain (obrolan petugas) dibiarkan.
   // Hasil: { found } = tombol Catatan tidak ketemu; { found: true, added, alreadyTagged, existingTag, where }.
   // alsoAccept: tag lain yang juga dianggap "sudah ditandai"; checkOnly: cuma baca (dipakai di halaman Review)
-  const catatanBtn = (c) => (c ? Array.from(c.querySelectorAll('button[title="Catatan"]')).find(visible) || null : null);
-  const catatanCount = (btn) => Number(Array.from(btn.querySelectorAll("div")).map((d) => d.innerText.trim()).find((x) => /^\d+$/.test(x)) || 0);
+  const catatanBtn = (c) =>
+    c
+      ? Array.from(c.querySelectorAll('button[title="Catatan"]')).find(
+          visible,
+        ) || null
+      : null;
+  const catatanCount = (btn) =>
+    Number(
+      Array.from(btn.querySelectorAll("div"))
+        .map((d) => d.innerText.trim())
+        .find((x) => /^\d+$/.test(x)) || 0,
+    );
   const noteMessages = () =>
     Array.from(document.querySelectorAll('[class*="wrap-break-word"]'))
       .filter(visible)
       .map((el) => el.textContent.trim());
   const noteInput = () =>
-    Array.from(document.querySelectorAll("textarea")).find((t2) => visible(t2) && /tambah catatan/i.test(t2.placeholder || "") && !t2.closest(OWN));
+    Array.from(document.querySelectorAll("textarea")).find(
+      (t2) =>
+        visible(t2) &&
+        /tambah catatan/i.test(t2.placeholder || "") &&
+        !t2.closest(OWN),
+    );
   async function closeNote() {
     closeDialogs();
-    await waitFor(() => !Array.from(document.querySelectorAll('[role="dialog"]')).some((d) => visible(d) && !d.closest(OWN)), 3000);
+    await waitFor(
+      () =>
+        !Array.from(document.querySelectorAll('[role="dialog"]')).some(
+          (d) => visible(d) && !d.closest(OWN),
+        ),
+      3000,
+    );
     await sleep(W(200));
   }
   // Buka thread satu tombol Catatan; popup dibiarkan terbuka (null = popup tidak muncul)
@@ -938,9 +1211,21 @@
     if (expectMsgs) await waitFor(() => noteMessages().length, 3000);
     return ta;
   }
-  async function addKbliCatatan(inst, text, alsoAccept = [], checkOnly = false) {
-    const accept = [...new Set([text, ...alsoAccept, noteTag(true), noteTag(false)].filter(Boolean))];
-    const tagIn = (msg) => accept.find((a) => hasTag(msg, a)) || (msg.match(DC_TAG_RE) || [])[0] || null;
+  async function addKbliCatatan(
+    inst,
+    text,
+    alsoAccept = [],
+    checkOnly = false,
+  ) {
+    const accept = [
+      ...new Set(
+        [text, ...alsoAccept, noteTag(true), noteTag(false)].filter(Boolean),
+      ),
+    ];
+    const tagIn = (msg) =>
+      accept.find((a) => hasTag(msg, a)) ||
+      (msg.match(DC_TAG_RE) || [])[0] ||
+      null;
     const parts = [
       ["kbli_genai", "13.g"],
       ["kbli", "Master KBLI"],
@@ -950,62 +1235,116 @@
     if (!parts.length) return { found: false };
     const genaiPicked = (() => {
       const g = box("kbli_genai", inst);
-      const r = g && g.querySelector('input[type="radio"]:checked, input[type="radio"][data-checked]');
+      const r =
+        g &&
+        g.querySelector(
+          'input[type="radio"]:checked, input[type="radio"][data-checked]',
+        );
       return !!r && r.value !== "999999";
     })();
-    const target = parts.find((p) => p.id === (genaiPicked ? "kbli_genai" : "kbli")) || parts[0];
+    const target =
+      parts.find((p) => p.id === (genaiPicked ? "kbli_genai" : "kbli")) ||
+      parts[0];
     // Thread tujuan dicek paling akhir & popup-nya dibiarkan terbuka untuk langsung ditulisi
     let ta = null;
     for (const p of [...parts.filter((x) => x !== target), target]) {
       const btn = catatanBtn(p.c);
       const writeHere = !checkOnly && p === target;
       if (!catatanCount(btn) && !writeHere) continue;
-      const opened = (await openNote(btn, catatanCount(btn) > 0)) || (writeHere && (await openNote(catatanBtn(p.c), catatanCount(btn) > 0)));
+      const opened =
+        (await openNote(btn, catatanCount(btn) > 0)) ||
+        (writeHere && (await openNote(catatanBtn(p.c), catatanCount(btn) > 0)));
       if (!opened) {
         if (writeHere) return { found: false };
         continue;
       }
       const tag = noteMessages().map(tagIn).find(Boolean);
       if (tag || !writeHere) await closeNote();
-      if (tag) return { found: true, added: false, alreadyTagged: true, existingTag: `${tag} (${p.label})`, where: p.label };
+      if (tag)
+        return {
+          found: true,
+          added: false,
+          alreadyTagged: true,
+          existingTag: `${tag} (${p.label})`,
+          where: p.label,
+        };
       if (writeHere) ta = opened;
     }
-    if (checkOnly || !ta) return { found: true, added: false, alreadyTagged: false, existingTag: null };
+    if (checkOnly || !ta)
+      return {
+        found: true,
+        added: false,
+        alreadyTagged: false,
+        existingTag: null,
+      };
     if (ta.disabled || ta.readOnly) {
       await closeNote();
-      return { found: true, added: false, alreadyTagged: false, locked: true, where: target.label };
+      return {
+        found: true,
+        added: false,
+        alreadyTagged: false,
+        locked: true,
+        where: target.label,
+      };
     }
     setFieldValue(ta, text);
     let added = false;
     const simpan = await waitFor(
-      () => Array.from(document.querySelectorAll('button[title="Simpan"]')).find((b) => visible(b) && !b.disabled && !b.closest(OWN)),
+      () =>
+        Array.from(document.querySelectorAll('button[title="Simpan"]')).find(
+          (b) => visible(b) && !b.disabled && !b.closest(OWN),
+        ),
       2000,
     );
     if (simpan) {
       triggerClick(simpan);
       // Dianggap masuk kalau pesannya benar-benar muncul di thread
-      added = !!(await waitFor(() => noteMessages().some((msg) => hasTag(msg, text)), 8000));
+      added = !!(await waitFor(
+        () => noteMessages().some((msg) => hasTag(msg, text)),
+        8000,
+      ));
     }
     await closeNote();
-    return { found: true, added, alreadyTagged: false, saveFailed: !added, existingTag: null, where: target.label };
+    return {
+      found: true,
+      added,
+      alreadyTagged: false,
+      saveFailed: !added,
+      existingTag: null,
+      where: target.label,
+    };
   }
 
   // "Pilih UMKM dalam satu SLS yang sama" yang dibiarkan kosong bikin galat saat Kirim. Kalau memang tidak ada
   // UMKM yang ditautkan (kosong), pilih "TIDAK ADA". Yang sudah terisi (UMKM lain / TIDAK ADA) atau terkunci dibiarkan.
   // Kotak instance kartu ini; kalau id-nya beda (kartu dibuka dengan nomor lain), pakai yang sedang tampil
   const umkmBox = (inst) =>
-    box("pilih_umkm_sls", inst) || Array.from(document.querySelectorAll('[id^="pilih_umkm_sls"]')).find(visible) || null;
+    box("pilih_umkm_sls", inst) ||
+    Array.from(document.querySelectorAll('[id^="pilih_umkm_sls"]')).find(
+      visible,
+    ) ||
+    null;
   // Belum dipilih = kosong, ATAU masih "Wajib diisi" (teks ketikan/sisa pencarian bukan pilihan)
-  const umkmUnset = (c) => !dropdownValue(c) || /Wajib diisi/i.test(c.innerText || "");
+  const umkmUnset = (c) =>
+    !dropdownValue(c) || /Wajib diisi/i.test(c.innerText || "");
   const umkmEmpty = (inst) => {
     const c = umkmBox(inst);
     const ta = c && c.querySelector('textarea, input[type="text"]');
-    return !!(ta && !ta.disabled && !ta.hasAttribute("data-disabled") && umkmUnset(c));
+    return !!(
+      ta &&
+      !ta.disabled &&
+      !ta.hasAttribute("data-disabled") &&
+      umkmUnset(c)
+    );
   };
   // Sama, tapi tanpa syarat "tidak terkunci": di halaman Review semua isian memang terkunci
   const umkmBlank = (inst) => {
     const c = umkmBox(inst);
-    return !!(c && c.querySelector('textarea, input[type="text"]') && umkmUnset(c));
+    return !!(
+      c &&
+      c.querySelector('textarea, input[type="text"]') &&
+      umkmUnset(c)
+    );
   };
   async function fillUmkmTidakAda(inst) {
     await waitFor(() => umkmBox(inst), 2500);
@@ -1014,15 +1353,31 @@
     for (let attempt = 0; attempt < 2 && umkmEmpty(inst); attempt++) {
       const left = umkmBox(inst).querySelector('textarea, input[type="text"]');
       if (left && left.value.trim()) setFieldValue(left, ""); // teks sisa, bukan pilihan
-      await chooseFromDropdown(umkmBox(inst), attempt ? "TIDAK ADA" : "", (opts) => opts.find(isTidak));
-      if (await waitFor(() => !umkmEmpty(inst) && /TIDAK ADA/i.test(dropdownValue(umkmBox(inst))), 3000)) return 'Pilih UMKM dalam satu SLS → "TIDAK ADA"';
+      await chooseFromDropdown(
+        umkmBox(inst),
+        attempt ? "TIDAK ADA" : "",
+        (opts) => opts.find(isTidak),
+      );
+      if (
+        await waitFor(
+          () =>
+            !umkmEmpty(inst) && /TIDAK ADA/i.test(dropdownValue(umkmBox(inst))),
+          3000,
+        )
+      )
+        return 'Pilih UMKM dalam satu SLS → "TIDAK ADA"';
       // sisa teks pencarian jangan sampai tertinggal di kotaknya
       const ta = umkmBox(inst).querySelector('textarea, input[type="text"]');
       if (ta && /^TIDAK ADA$/i.test(ta.value.trim())) setFieldValue(ta, "");
       closeDialogs();
       await sleep(W(400));
     }
-    throw Object.assign(new Error('isian "Pilih UMKM dalam satu SLS" kosong & pilihan "TIDAK ADA" tidak bisa dipilih — isi manual'), { soft: true });
+    throw Object.assign(
+      new Error(
+        'isian "Pilih UMKM dalam satu SLS" kosong & pilihan "TIDAK ADA" tidak bisa dipilih — isi manual',
+      ),
+      { soft: true },
+    );
   }
   // Semua kartu usaha di dokumen ini (bukan cuma yang KBLI-nya diganti): galat di kartu mana pun menahan Kirim
   // skip: nomor urut kartu yang sudah diisi di tahap Ganti KBLI (Pilih UMKM-nya sudah diurus di sana)
@@ -1071,12 +1426,16 @@
     // hilang begitu saja dari form. Disimpan dulu sebelum KBLI diganti, supaya bisa dipindahkan ke 26.b
     // biaya produksi kalau 26.c memang sampai hilang setelah KBLI-nya diganti.
     const pembelianBox0 = box("biaya_pembelian", inst);
-    const pembelianInput0 = pembelianBox0 && pembelianBox0.querySelector("input");
+    const pembelianInput0 =
+      pembelianBox0 && pembelianBox0.querySelector("input");
     const pembelianBefore = pembelianInput0 ? pembelianInput0.value.trim() : "";
-    if (t.noEdit) notes.push("Edit KBLI = 0, KBLI/produk/kegiatan utama tidak diubah");
+    if (t.noEdit)
+      notes.push("Edit KBLI = 0, KBLI/produk/kegiatan utama tidak diubah");
     if (!t.noEdit && t.kbliBaru && code !== t.kbliBaru) {
       if (!(await setKbliCode(inst, t.kbliBaru)))
-        throw new Error(`KBLI ${t.kbliBaru} tidak bisa dipilih (${kbliFail || "13.g / Master KBLI tidak muncul"})`);
+        throw new Error(
+          `KBLI ${t.kbliBaru} tidak bisa dipilih (${kbliFail || "13.g / Master KBLI tidak muncul"})`,
+        );
       notes.push(`KBLI ${code || "-"} → ${t.kbliBaru}`);
       changed = edited = true;
       if (parseRupiah(pembelianBefore) > 0 || !pembelianBox0) {
@@ -1084,22 +1443,33 @@
         const pembelianBoxNow = box("biaya_pembelian", inst);
         if (parseRupiah(pembelianBefore) > 0 && !pembelianBoxNow) {
           const produksiBox = box("biaya_produksi", inst);
-          const produksiInput = produksiBox && produksiBox.querySelector("input");
+          const produksiInput =
+            produksiBox && produksiBox.querySelector("input");
           if (produksiInput) {
-            const gabung = String(parseRupiah(produksiInput.value) + parseRupiah(pembelianBefore));
+            const gabung = String(
+              parseRupiah(produksiInput.value) + parseRupiah(pembelianBefore),
+            );
             await writeText("biaya_produksi", inst, gabung);
-            notes.push(`26.c "Biaya pembelian barang" (Rp ${pembelianBefore}) hilang setelah KBLI diganti → digabung ke 26.b biaya produksi (jadi Rp ${gabung})`);
+            notes.push(
+              `26.c "Biaya pembelian barang" (Rp ${pembelianBefore}) hilang setelah KBLI diganti → digabung ke 26.b biaya produksi (jadi Rp ${gabung})`,
+            );
           } else {
-            notes.push(`26.c "Biaya pembelian barang" (Rp ${pembelianBefore}) hilang setelah KBLI diganti, tapi 26.b juga tidak muncul — cek manual`);
+            notes.push(
+              `26.c "Biaya pembelian barang" (Rp ${pembelianBefore}) hilang setelah KBLI diganti, tapi 26.b juga tidak muncul — cek manual`,
+            );
           }
         } else if (!pembelianBox0 && pembelianBoxNow) {
           // KBLI pindah ke usaha dagang: 26.c baru muncul. Tidak ada angkanya di Excel (usaha ini
           // sebelumnya bukan dagang) -> jangan ditebak, berhenti & minta diisi manual.
           const pembelianInputNow = pembelianBoxNow.querySelector("input");
-          const nowVal = pembelianInputNow ? pembelianInputNow.value.trim() : "";
+          const nowVal = pembelianInputNow
+            ? pembelianInputNow.value.trim()
+            : "";
           if (!nowVal)
             throw Object.assign(
-              new Error(`26.c "Biaya pembelian barang yang terjual" baru muncul (kosong) setelah KBLI diganti ke usaha dagang — tidak ada nilainya di Excel, isi manual dulu lalu Kirim & Approve`),
+              new Error(
+                `26.c "Biaya pembelian barang yang terjual" baru muncul (kosong) setelah KBLI diganti ke usaha dagang — tidak ada nilainya di Excel, isi manual dulu lalu Kirim & Approve`,
+              ),
               { soft: true },
             );
         }
@@ -1117,7 +1487,8 @@
     }
     if (t.produkBaru) {
       const produkBox = box("produk", inst);
-      const produkInput = produkBox && produkBox.querySelector("input, textarea");
+      const produkInput =
+        produkBox && produkBox.querySelector("input, textarea");
       const produkCur = produkInput ? produkInput.value.trim() : "";
       if (produkCur !== t.produkBaru) {
         await writeText("produk", inst, t.produkBaru);
@@ -1126,30 +1497,54 @@
       }
     }
     const kegBox = box("keg_utama", inst);
-    const kegInput = kegBox && kegBox.querySelector('input[type="text"]:not([disabled]), textarea:not([disabled])');
+    const kegInput =
+      kegBox &&
+      kegBox.querySelector(
+        'input[type="text"]:not([disabled]), textarea:not([disabled])',
+      );
     const kegCur = kegInput ? kegInput.value.trim() : "";
     const want = t.noEdit ? null : wantedKegUtama(t, kegCur);
     if (want && want.value !== kegCur) {
       await writeText("keg_utama", inst, want.value);
-      notes.push(`kegiatan utama → "${want.value}"${want.guessed ? " (disesuaikan otomatis)" : ""}`);
+      notes.push(
+        `kegiatan utama → "${want.value}"${want.guessed ? " (disesuaikan otomatis)" : ""}`,
+      );
       changed = edited = true;
     } else if (!want && t.produkBaru) {
-      notes.push(`kegiatan utama belum disesuaikan (cek manual): produk lama "${t.produkLama}" → baru "${t.produkBaru}"`);
+      notes.push(
+        `kegiatan utama belum disesuaikan (cek manual): produk lama "${t.produkLama}" → baru "${t.produkBaru}"`,
+      );
     }
     // Kartu yang KBLI-nya ternyata sudah benar (tidak ada yang diubah) dapat #0, bukan #1; #1 yang sudah ada dibiarkan
     const tag = noteTag(!t.noEdit && edited);
-    const catatan = tag ? await addKbliCatatan(inst, tag, edited ? [] : [noteTag(true)]) : { found: true, off: true };
+    const catatan = tag
+      ? await addKbliCatatan(inst, tag, edited ? [] : [noteTag(true)])
+      : { found: true, off: true };
     if (catatan.off) notes.push("catatan KBLI dimatikan di pengaturan");
-    else if (catatan.added) notes.push(`catatan KBLI: ${tag} (${catatan.where})`);
-    else if (catatan.found && catatan.alreadyTagged) notes.push(`catatan KBLI dibiarkan, tag ${catatan.existingTag} sudah ada di thread`);
-    else if (catatan.found) notes.push(`⚠ catatan KBLI ${tag} belum tersimpan${catatan.locked ? " (kotak catatan terkunci)" : ""} — cek manual`);
-    else notes.push(`tombol Catatan di bagian KBLI tidak ketemu, tag ${tag} tidak ditambahkan (cek manual)`);
-    return { changed, already: !changed, summary: notes.join("; ") || "sudah sesuai" };
+    else if (catatan.added)
+      notes.push(`catatan KBLI: ${tag} (${catatan.where})`);
+    else if (catatan.found && catatan.alreadyTagged)
+      notes.push(
+        `catatan KBLI dibiarkan, tag ${catatan.existingTag} sudah ada di thread`,
+      );
+    else if (catatan.found)
+      notes.push(
+        `⚠ catatan KBLI ${tag} belum tersimpan${catatan.locked ? " (kotak catatan terkunci)" : ""} — cek manual`,
+      );
+    else
+      notes.push(
+        `tombol Catatan di bagian KBLI tidak ketemu, tag ${tag} tidak ditambahkan (cek manual)`,
+      );
+    return {
+      changed,
+      already: !changed,
+      summary: notes.join("; ") || "sudah sesuai",
+    };
   }
 
   // Telusuri kartu usaha dokumen ini & cocokkan ke baris Excel lewat nama usaha.
   // write=false: cuma baca (aman di halaman Review). write=true: ganti KBLI/produk/kegiatan utama.
-  async function scanDoc(item, write) {
+  async function scanDoc(item, write, writeNote = false) {
     const area = await gotoArea();
     const targets = item.targets;
     const results = targets.map(() => null);
@@ -1161,9 +1556,13 @@
       const inst = instOf(el);
       const t = targets[0];
       if (targets.length > 1)
-        notes.push(`halaman ini cuma 1 isian KBLI, tapi Excel punya ${targets.length} baris untuk dokumen ini — hanya baris pertama diproses`);
+        notes.push(
+          `halaman ini cuma 1 isian KBLI, tapi Excel punya ${targets.length} baris untuk dokumen ini — hanya baris pertama diproses`,
+        );
       try {
-        results[0] = write ? await ensureKbliCard(inst, t) : await readKbliCard(inst, t);
+        results[0] = write
+          ? await ensureKbliCard(inst, t)
+          : await readKbliCard(inst, t, writeNote);
         filled.direct = write;
       } catch (e) {
         notes.push(e.message);
@@ -1176,11 +1575,24 @@
     // Tahap Check (write=false) baru saja mencocokkan nama & menyimpan hasilnya di item.cardHints
     // (selaras posisi dgn targets). Tahap Fill (write=true) pakai itu langsung kalau masih cocok,
     // jadi tidak perlu mencocokkan nama dari nol lagi — kartu tetap dibuka & diisi seperti biasa.
-    const hints = write && Array.isArray(item.cardHints) && item.cardHints.length === targets.length ? item.cardHints : null;
+    const hints =
+      write &&
+      Array.isArray(item.cardHints) &&
+      item.cardHints.length === targets.length
+        ? item.cardHints
+        : null;
     const order = cards
-      .map((c, idx) => ({ idx, score: Math.max(...targets.map((t) => nameMatch(c.name, t.nama))), hinted: !!(hints && hints.includes(c.name)) }))
-      .sort((a, b) => (b.hinted ? 1 : 0) - (a.hinted ? 1 : 0) || b.score - a.score);
-    log(`${cards.length} kartu usaha di "${area.title}", ${targets.length} target dari Excel`);
+      .map((c, idx) => ({
+        idx,
+        score: Math.max(...targets.map((t) => nameMatch(c.name, t.nama))),
+        hinted: !!(hints && hints.includes(c.name)),
+      }))
+      .sort(
+        (a, b) => (b.hinted ? 1 : 0) - (a.hinted ? 1 : 0) || b.score - a.score,
+      );
+    log(
+      `${cards.length} kartu usaha di "${area.title}", ${targets.length} target dari Excel`,
+    );
     const tried = new Set(); // target yang sudah ketemu kartunya (walau akhirnya gagal diisi -> bukan "tidak cocok")
     let first = true;
     for (const o of order) {
@@ -1193,7 +1605,9 @@
       const inst = await openCard(card);
       let best = null;
       if (hints) {
-        const hi = targets.findIndex((t, i) => hints[i] && hints[i] === card.name && !results[i]);
+        const hi = targets.findIndex(
+          (t, i) => hints[i] && hints[i] === card.name && !results[i],
+        );
         if (hi >= 0) best = { i: hi, s: 1 };
       }
       if (!best) {
@@ -1207,7 +1621,9 @@
       tried.add(best.i);
       const t = targets[best.i];
       try {
-        const r = write ? await ensureKbliCard(inst, t) : await readKbliCard(inst, t);
+        const r = write
+          ? await ensureKbliCard(inst, t)
+          : await readKbliCard(inst, t, writeNote);
         if (write) filled.idx.add(o.idx);
         results[best.i] = { card: card.name, ...r };
         log(`"${card.name}": ${r.already ? "sudah sesuai" : r.summary}`);
@@ -1215,8 +1631,13 @@
         notes.push(`kartu "${card.name}": ${e.message}`);
       }
     }
-    const unmatched = targets.filter((t, i) => !results[i] && !tried.has(i)).map((t) => t.nama);
-    if (unmatched.length) notes.push(`nama usaha tidak cocok dengan kartu manapun: ${unmatched.join(", ")}`);
+    const unmatched = targets
+      .filter((t, i) => !results[i] && !tried.has(i))
+      .map((t) => t.nama);
+    if (unmatched.length)
+      notes.push(
+        `nama usaha tidak cocok dengan kartu manapun: ${unmatched.join(", ")}`,
+      );
     return { results, notes, filled };
   }
 
@@ -1226,7 +1647,8 @@
   // tidak dicari manual lewat filter)
   // =========================================================================
   const REVIEW_HREF = /\/app\/assignment\/[0-9a-f-]{36}\/[0-9a-f-]{36}/i;
-  const searchInput = () => document.querySelector('input[placeholder^="Cari"]:not([cmdk-input])');
+  const searchInput = () =>
+    document.querySelector('input[placeholder^="Cari"]:not([cmdk-input])');
   const isListPage = () =>
     !REVIEW_HREF.test(location.pathname) &&
     !/\/app\/assignment-detail\//i.test(location.pathname) &&
@@ -1234,29 +1656,45 @@
     !!document.querySelector("table thead");
 
   // ---------- Review -> Edit (revoke bila perlu) ----------
+  // Revoke saja (tetap di halaman Review): klik Revoke, Konfirmasi, tunggu Edit/Approve aktif lagi
+  async function revokeDoc() {
+    const revoke = buttonByIcon("rotate-clockwise");
+    if (!revoke || revoke.disabled)
+      throw new Error("tombol Edit & Revoke tidak aktif");
+    log("Revoke dokumen");
+    triggerClick(revoke);
+    const ok = await waitFor(() => buttonByText("Konfirmasi"), 8000);
+    if (!ok) throw new Error("konfirmasi revoke tidak muncul");
+    triggerClick(ok);
+    const edit = await waitFor(() => {
+      const b = buttonByIcon("edit");
+      return b && !b.disabled ? b : null;
+    }, 20000);
+    if (!edit) throw new Error("tombol Edit belum aktif setelah revoke");
+    await sleep(W(600));
+    return edit;
+  }
   async function reviewToEdit() {
-    await waitFor(() => buttonByIcon("edit") || buttonByIcon("rotate-clockwise"), 20000);
+    await waitFor(
+      () => buttonByIcon("edit") || buttonByIcon("rotate-clockwise"),
+      20000,
+    );
     await sleep(W(600));
     let revoked = false;
     let edit = buttonByIcon("edit");
     if (!edit || edit.disabled) {
-      const revoke = buttonByIcon("rotate-clockwise");
-      if (!revoke || revoke.disabled) throw new Error("tombol Edit & Revoke tidak aktif");
-      log("Revoke dokumen");
-      triggerClick(revoke);
-      const ok = await waitFor(() => buttonByText("Konfirmasi"), 8000);
-      if (!ok) throw new Error("konfirmasi revoke tidak muncul");
-      triggerClick(ok);
+      edit = await revokeDoc();
       revoked = true;
-      edit = await waitFor(() => {
-        const b = buttonByIcon("edit");
-        return b && !b.disabled ? b : null;
-      }, 20000);
-      if (!edit) throw new Error("tombol Edit belum aktif setelah revoke");
-      await sleep(W(600));
     }
     triggerClick(edit);
-    if (!(await waitFor(() => /\/edit/.test(location.pathname) && document.querySelector(".fasih-form-sidebar"), 30000)))
+    if (
+      !(await waitFor(
+        () =>
+          /\/edit/.test(location.pathname) &&
+          document.querySelector(".fasih-form-sidebar"),
+        30000,
+      ))
+    )
       throw new Error("halaman edit tidak terbuka");
     await sleep(W(1500));
     return revoked;
@@ -1264,27 +1702,34 @@
 
   // ---------- CATATAN: toggle Anomali ----------
   function findAnomaliSwitch() {
-    const direct = document.querySelector('#cek_anomali_button input[role="switch"]');
+    const direct = document.querySelector(
+      '#cek_anomali_button input[role="switch"]',
+    );
     if (direct) return direct;
     return (
-      Array.from(document.querySelectorAll('input[role="switch"]')).find((sw) => {
-        let el = sw;
-        for (let i = 0; i < 7 && el; i++, el = el.parentElement) if (/anomali/i.test(el.innerText || "")) return true;
-        return false;
-      }) || null
+      Array.from(document.querySelectorAll('input[role="switch"]')).find(
+        (sw) => {
+          let el = sw;
+          for (let i = 0; i < 7 && el; i++, el = el.parentElement)
+            if (/anomali/i.test(el.innerText || "")) return true;
+          return false;
+        },
+      ) || null
     );
   }
   // Elemen geser (div "...-control" dengan data-checked); dicari langsung supaya tetap jalan walau
   // input[role=switch] tersembunyi tidak ada di dekatnya.
   function findAnomaliControl() {
     const direct = findAnomaliSwitch();
-    const near = direct && direct.parentElement.querySelector('[id$="-control"]');
+    const near =
+      direct && direct.parentElement.querySelector('[id$="-control"]');
     if (near) return near;
     return (
       Array.from(document.querySelectorAll('[id$="-control"]')).find((el) => {
         if (!visible(el)) return false;
         let p = el;
-        for (let i = 0; i < 7 && p; i++, p = p.parentElement) if (/anomali/i.test(p.innerText || "")) return true;
+        for (let i = 0; i < 7 && p; i++, p = p.parentElement)
+          if (/anomali/i.test(p.innerText || "")) return true;
         return false;
       }) || null
     );
@@ -1303,7 +1748,9 @@
       const c = findAnomaliControl();
       return (
         (!!s && (s.checked || s.getAttribute("aria-checked") === "true")) ||
-        (!!c && (c.hasAttribute("data-checked") || c.getAttribute("aria-checked") === "true"))
+        (!!c &&
+          (c.hasAttribute("data-checked") ||
+            c.getAttribute("aria-checked") === "true"))
       );
     };
     let clicked = false;
@@ -1323,17 +1770,22 @@
   }
 
   // ---------- ANOMALI USAHA: tandai anomali yang membahas KBLI ----------
-  const KBLI_ANOMALI_EXPLANATION = "KBLI sudah sesuai dengan usaha yang dijalankan";
+  const KBLI_ANOMALI_EXPLANATION =
+    "KBLI sudah sesuai dengan usaha yang dijalankan";
   async function handleKbliAnomali() {
     await openCatatan(); // nyalakan toggle anomali (idempotent, aman dipanggil berkali-kali)
     const target = sidebarItem("ANOMALI USAHA") || sidebarItem("ANOMALI");
     if (!target) {
-      log("Tidak ada bagian ANOMALI USAHA di sidebar (dokumen ini mungkin tidak ada anomali)");
+      log(
+        "Tidak ada bagian ANOMALI USAHA di sidebar (dokumen ini mungkin tidak ada anomali)",
+      );
       return [];
     }
     triggerClick(target);
     await sleep(W(900));
-    const blocks = Array.from(document.querySelectorAll('[id^="anomali_"][id$="_deskripsi"]')).filter(visible);
+    const blocks = Array.from(
+      document.querySelectorAll('[id^="anomali_"][id$="_deskripsi"]'),
+    ).filter(visible);
     const notes = [];
     for (const d of blocks) {
       const num = (d.id.match(/^anomali_(\d+)_deskripsi$/) || [])[1];
@@ -1341,11 +1793,16 @@
       const checkBox = box(`anomali_${num}_check`);
       const cb = checkBox && checkBox.querySelector('input[type="checkbox"]');
       if (!cb) {
-        notes.push(`anomali #${num} (KBLI): kotak centang "Ya, Sesuai Kondisi Lapangan" tidak ditemukan`);
+        notes.push(
+          `anomali #${num} (KBLI): kotak centang "Ya, Sesuai Kondisi Lapangan" tidak ditemukan`,
+        );
         continue;
       }
       if (!cb.checked) {
-        const ctl = checkBox.querySelector('[id$="-control"]') || cb.closest("label") || cb;
+        const ctl =
+          checkBox.querySelector('[id$="-control"]') ||
+          cb.closest("label") ||
+          cb;
         triggerClick(ctl);
         await waitFor(() => {
           const now = box(`anomali_${num}_check`);
@@ -1355,13 +1812,16 @@
       }
       const pj = await waitBox(`anomali_${num}_penjelasan`, undefined, 3000);
       const ta = pj && pj.querySelector("textarea, input[type='text']");
-      const expl = String(loadConf().anomaliText ?? "").trim() || KBLI_ANOMALI_EXPLANATION;
+      const expl =
+        String(loadConf().anomaliText ?? "").trim() || KBLI_ANOMALI_EXPLANATION;
       if (ta && ta.value.trim() !== expl) {
         setFieldValue(ta, expl);
         commitField(ta);
         await sleep(W(300));
       }
-      notes.push(`anomali #${num} (KBLI): ditandai "Ya, Sesuai Kondisi Lapangan"`);
+      notes.push(
+        `anomali #${num} (KBLI): ditandai "Ya, Sesuai Kondisi Lapangan"`,
+      );
     }
     return notes;
   }
@@ -1369,18 +1829,35 @@
   // ---------- Kirim + Approve ----------
   const isKirimText = (b) => b.innerText.trim().toUpperCase() === "KIRIM";
   const inDialog = (b) => !!b.closest('[role="dialog"], [role="alertdialog"]');
-  const hasSendIcon = (b) => !!b.querySelector('svg path[d^="M10 14l11 -11"], svg.tabler-icon-send');
+  const hasSendIcon = (b) =>
+    !!b.querySelector('svg path[d^="M10 14l11 -11"], svg.tabler-icon-send');
   function findNavKirim() {
     const buttons = Array.from(document.querySelectorAll("button")).filter(
-      (b) => visible(b) && !b.disabled && isKirimText(b) && !inDialog(b) && !b.closest(OWN),
+      (b) =>
+        visible(b) &&
+        !b.disabled &&
+        isKirimText(b) &&
+        !inDialog(b) &&
+        !b.closest(OWN),
     );
-    return buttons.find(hasSendIcon) || buttons.find((b) => b.id === "fasih-form-nav-submit-button") || buttons[0] || null;
+    return (
+      buttons.find(hasSendIcon) ||
+      buttons.find((b) => b.id === "fasih-form-nav-submit-button") ||
+      buttons[0] ||
+      null
+    );
   }
   function findDialogKirim() {
     const buttons = Array.from(document.querySelectorAll("button")).filter(
       (b) => visible(b) && !b.disabled && isKirimText(b) && !b.closest(OWN),
     );
-    return buttons.find(inDialog) || buttons.find((b) => !hasSendIcon(b) && b.id !== "fasih-form-nav-submit-button") || null;
+    return (
+      buttons.find(inDialog) ||
+      buttons.find(
+        (b) => !hasSendIcon(b) && b.id !== "fasih-form-nav-submit-button",
+      ) ||
+      null
+    );
   }
   function summaryCount(label) {
     const btn = Array.from(document.querySelectorAll("button")).find((b) => {
@@ -1395,27 +1872,47 @@
     return Array.from(document.querySelectorAll('button[title="Lihat"]'))
       .filter(visible)
       .map((lihat) => {
-        const card = lihat.closest('div[class*="rounded-lg"]') || lihat.parentElement.parentElement;
+        const card =
+          lihat.closest('div[class*="rounded-lg"]') ||
+          lihat.parentElement.parentElement;
         const titleEl = card.querySelector("div[title]");
-        return `${titleEl ? titleEl.getAttribute("title").trim() : "?"} (${Array.from(card.querySelectorAll("li"))
+        return `${titleEl ? titleEl.getAttribute("title").trim() : "?"} (${Array.from(
+          card.querySelectorAll("li"),
+        )
           .map((li) => li.innerText.trim())
           .join(", ")})`;
       });
   }
   function closeDialogs() {
-    Array.from(document.querySelectorAll('button[aria-label="Dismiss"]')).filter(visible).forEach((b) => triggerClick(b));
-    if (Array.from(document.querySelectorAll('[role="dialog"]')).some(visible)) pressKey("Escape");
+    Array.from(document.querySelectorAll('button[aria-label="Dismiss"]'))
+      .filter(visible)
+      .forEach((b) => triggerClick(b));
+    if (Array.from(document.querySelectorAll('[role="dialog"]')).some(visible))
+      pressKey("Escape");
   }
   function dialogText() {
-    const d = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"]')).filter(visible).pop();
+    const d = Array.from(
+      document.querySelectorAll('[role="dialog"], [role="alertdialog"]'),
+    )
+      .filter(visible)
+      .pop();
     return d ? d.innerText.replace(/\s+/g, " ").trim().slice(0, 200) : "";
   }
   const backButton = () =>
-    Array.from(document.querySelectorAll("button")).find((b) => /KEMBALI KE REVIEW/i.test(b.innerText) && b.getClientRects().length > 0);
+    Array.from(document.querySelectorAll("button")).find(
+      (b) =>
+        /KEMBALI KE REVIEW/i.test(b.innerText) && b.getClientRects().length > 0,
+    );
   const leftEdit = () => !/\/edit/.test(location.pathname);
   async function backToReview(timeoutMs) {
-    const sign = await waitFor(() => backButton() || (leftEdit() ? "left" : null), timeoutMs);
-    if (!sign) throw new Error(`tidak ada tanda terkirim setelah Konfirmasi: ${dialogText() || "cek manual"}`);
+    const sign = await waitFor(
+      () => backButton() || (leftEdit() ? "left" : null),
+      timeoutMs,
+    );
+    if (!sign)
+      throw new Error(
+        `tidak ada tanda terkirim setelah Konfirmasi: ${dialogText() || "cek manual"}`,
+      );
     if (sign !== "left") {
       await sleep(W(400));
       triggerClick(sign);
@@ -1437,7 +1934,11 @@
     if (!nav) throw new Error("tombol Kirim tidak ditemukan / tidak aktif");
     log("Klik Kirim");
     triggerClick(nav);
-    await waitFor(() => summaryCount("GALAT") || findDialogKirim() || readGalatList().length, 15000);
+    await waitFor(
+      () =>
+        summaryCount("GALAT") || findDialogKirim() || readGalatList().length,
+      15000,
+    );
     await sleep(W(1200));
     const galat = summaryCount("GALAT");
     const list = readGalatList();
@@ -1453,14 +1954,19 @@
         return forceSubmit(n);
       }
       closeDialogs();
-      throw Object.assign(new Error(`galat ${n}: ${detail || "lihat di FASIH"}`), { soft: true, noRetry: true });
+      throw Object.assign(
+        new Error(`galat ${n}: ${detail || "lihat di FASIH"}`),
+        { soft: true, noRetry: true },
+      );
     }
     const dialogKirim = findDialogKirim();
-    if (!dialogKirim) throw new Error(`tombol Kirim di dialog tidak muncul: ${dialogText()}`);
+    if (!dialogKirim)
+      throw new Error(`tombol Kirim di dialog tidak muncul: ${dialogText()}`);
     markSubmitClicked();
     triggerClick(dialogKirim);
     const konfirmasi = await waitFor(() => buttonByText("Konfirmasi"), 15000);
-    if (!konfirmasi) throw new Error(`tombol Konfirmasi tidak muncul: ${dialogText()}`);
+    if (!konfirmasi)
+      throw new Error(`tombol Konfirmasi tidak muncul: ${dialogText()}`);
     await sleep(W(400));
     triggerClick(konfirmasi);
     await backToReview(60000);
@@ -1468,16 +1974,22 @@
   const isDotsButton = (b) => !!b.querySelector('svg path[d^="M12 12m-1 0"]');
   function findForceTrigger() {
     const cands = Array.from(
-      document.querySelectorAll('button[id^="dropdownmenu-"][id$="-trigger"], button[aria-haspopup="true"], button[aria-haspopup="menu"]'),
+      document.querySelectorAll(
+        'button[id^="dropdownmenu-"][id$="-trigger"], button[aria-haspopup="true"], button[aria-haspopup="menu"]',
+      ),
     ).filter((b) => visible(b) && isDotsButton(b) && !b.closest(OWN));
     return cands.find(inDialog) || cands[0] || null;
   }
   async function forceSubmit(galatN) {
     const trigger = await waitFor(findForceTrigger, 8000);
-    if (!trigger) throw new Error(`galat ${galatN}, tombol ⋮ (Submit Paksa) tidak muncul`);
+    if (!trigger)
+      throw new Error(`galat ${galatN}, tombol ⋮ (Submit Paksa) tidak muncul`);
     triggerClick(trigger);
     const menu = await waitFor(
-      () => Array.from(document.querySelectorAll('[role="menuitem"]')).find((el) => visible(el) && /SUBMIT\s+PAKSA/i.test(el.innerText)),
+      () =>
+        Array.from(document.querySelectorAll('[role="menuitem"]')).find(
+          (el) => visible(el) && /SUBMIT\s+PAKSA/i.test(el.innerText),
+        ),
       6000,
     );
     if (!menu) {
@@ -1486,33 +1998,71 @@
     }
     triggerClick(menu);
     const konfirmasi = await waitFor(() => buttonByText("Konfirmasi"), 15000);
-    if (!konfirmasi) throw new Error(`tombol Konfirmasi Submit Paksa tidak muncul: ${dialogText()}`);
+    if (!konfirmasi)
+      throw new Error(
+        `tombol Konfirmasi Submit Paksa tidak muncul: ${dialogText()}`,
+      );
     markSubmitClicked();
     await sleep(W(400));
     triggerClick(konfirmasi);
     await backToReview(60000);
   }
+  // Tombol Approve (✔) yang masih aktif
+  const findApproveBtn = () => {
+    const buttons = Array.from(
+      document.querySelectorAll("svg.tabler-icon-check"),
+    )
+      .map((s) => s.closest("button"))
+      .filter((b) => b && visible(b) && !b.disabled && !b.closest(OWN));
+    return (
+      buttons.find((b) => /bg-success/.test(b.className)) || buttons[0] || null
+    );
+  };
+  // Sudah ter-approve: tombol ✔ hilang, diganti Revoke (dan Info)
+  const isApproved = () => {
+    const rev = buttonByIcon("rotate-clockwise");
+    return !!rev && !rev.disabled && !findApproveBtn();
+  };
+  const markApproveClicked = () => {
+    const r = loadRun();
+    if (r.cur) r.cur.approveClicked = true;
+    saveRun(r);
+  };
   async function approveDocument() {
-    const findCheck = () => {
-      const buttons = Array.from(document.querySelectorAll("svg.tabler-icon-check"))
-        .map((s) => s.closest("button"))
-        .filter((b) => b && visible(b) && !b.disabled && !b.closest(OWN));
-      return buttons.find((b) => /bg-success/.test(b.className)) || buttons[0] || null;
-    };
-    const check = await waitFor(findCheck, 25000);
+    // Konfirmasi approve sudah pernah diklik (halaman sempat refresh / tahap diulang): cukup pastikan
+    // hasilnya, jangan menunggu tombol ✔ yang memang sudah tidak ada.
+    const clickedBefore = !!(loadRun().cur || {}).approveClicked;
+    const check = await waitFor(
+      () => findApproveBtn() || (clickedBefore && isApproved() ? "done" : null),
+      25000,
+    );
     if (!check) throw new Error("tombol Approve (✔) tidak aktif");
+    if (check === "done") return;
     await sleep(W(600));
     triggerClick(check);
     const ok = await waitFor(() => {
       const buttons = Array.from(document.querySelectorAll("button")).filter(
-        (b) => visible(b) && !b.disabled && b.innerText.trim().toUpperCase() === "KONFIRMASI" && !b.closest(OWN),
+        (b) =>
+          visible(b) &&
+          !b.disabled &&
+          b.innerText.trim().toUpperCase() === "KONFIRMASI" &&
+          !b.closest(OWN),
       );
-      return buttons.find((b) => /bg-success/.test(b.className)) || buttons[0] || null;
+      return (
+        buttons.find((b) => /bg-success/.test(b.className)) ||
+        buttons[0] ||
+        null
+      );
     }, 10000);
     if (!ok) throw new Error("konfirmasi approve tidak muncul");
     await sleep(W(400));
+    markApproveClicked(); // kalau halaman refresh setelah ini, tahap Approve tahu tinggal memastikan hasilnya
     triggerClick(ok);
-    await sleep(W(2500));
+    // Halaman refresh sendiri; begitu tombol ✔ sudah berganti jadi Revoke/Info langsung lanjut (tanpa jeda tetap)
+    if (!(await waitFor(isApproved, 20000)))
+      throw new Error(
+        "setelah Konfirmasi, tombol Revoke belum muncul (status approve belum terbaca)",
+      );
   }
 
   // =========================================================================
@@ -1543,12 +2093,21 @@
     if (n > MAX_RETRY) return false;
     const wait = 5000 * n;
     const r = loadRun();
-    const level = Math.max(Number(loadConf().patience) || 0, (r.cur && r.cur.patienceUp) || 0);
+    const level = Math.max(
+      Number(loadConf().patience) || 0,
+      (r.cur && r.cur.patienceUp) || 0,
+    );
     const up = level < PATIENCE.length - 1;
-    r.cur = Object.assign(r.cur || {}, { retries: n }, up ? { patienceUp: level + 1 } : {});
+    r.cur = Object.assign(
+      r.cur || {},
+      { retries: n },
+      up ? { patienceUp: level + 1 } : {},
+    );
     r.phaseAt = r.navAt = Date.now() + wait;
     saveRun(r);
-    log(`⟳ ${why} — FASIH lelet? muat ulang & ulangi "${STEP_LABEL[cur.stage] || cur.stage}" (${n}/${MAX_RETRY})${up ? `, kesabaran dokumen ini → ${PATIENCE[level + 1].name}` : ""}`);
+    log(
+      `⟳ ${why} — FASIH lelet? muat ulang & ulangi "${STEP_LABEL[cur.stage] || cur.stage}" (${n}/${MAX_RETRY})${up ? `, kesabaran dokumen ini → ${PATIENCE[level + 1].name}` : ""}`,
+    );
     await sleep(wait);
     if (loadRun().running) location.reload();
     return true;
@@ -1567,14 +2126,26 @@
     // deteksi: ada <input type="password"> tersembunyi (bukan form login sungguhan, mis. honeypot
     // anti-autofill browser) yang ketangkep walau akun masih login -> script dijeda otomatis padahal
     // tidak logout. Password/teks "masuk" baru dianggap bukti logout kalau memang sudah KELUAR dari /app/.
-    if (!document.body || /^\/app\//.test(location.pathname) || document.querySelector(".fasih-form-sidebar") || isListPage())
+    if (
+      !document.body ||
+      /^\/app\//.test(location.pathname) ||
+      document.querySelector(".fasih-form-sidebar") ||
+      isListPage()
+    )
       return (loginLast = false);
-    const pwVisible = Array.from(document.querySelectorAll('input[type="password"]')).some(visible);
+    const pwVisible = Array.from(
+      document.querySelectorAll('input[type="password"]'),
+    ).some(visible);
     const text = Array.from(document.body.children)
-      .filter((el) => !/^kk-/.test(el.id || "") && !/^(SCRIPT|STYLE)$/.test(el.tagName))
+      .filter(
+        (el) =>
+          !/^kk-/.test(el.id || "") && !/^(SCRIPT|STYLE)$/.test(el.tagName),
+      )
       .map((el) => el.innerText || "")
       .join(" ");
-    const textHints = /\b(masuk|login|sign in)\b/i.test(text) && /\b(sso|nip|kata sandi|password|single sign)\b/i.test(text);
+    const textHints =
+      /\b(masuk|login|sign in)\b/i.test(text) &&
+      /\b(sso|nip|kata sandi|password|single sign)\b/i.test(text);
     return (loginLast = pwVisible || textHints);
   }
   function beepAlert() {
@@ -1600,7 +2171,9 @@
   const appAlive = () =>
     !!document.body &&
     /^\/app\//.test(location.pathname) &&
-    (!!document.querySelector(".fasih-form-sidebar") || isListPage() || document.body.innerText.trim().length > 200);
+    (!!document.querySelector(".fasih-form-sidebar") ||
+      isListPage() ||
+      document.body.innerText.trim().length > 200);
   function haltForLogout() {
     const r = loadRun();
     if (!r.running || r.hold) return;
@@ -1608,7 +2181,9 @@
     if (Date.now() - loginSince < LOGIN_CONFIRM_MS) return;
     r.hold = { at: Date.now(), reason: "logout" };
     saveRun(r);
-    log("⏸ Dijeda otomatis — sesi FASIH berakhir (logout). Login ulang, lalu klik ▶ Lanjut. Progres tidak hilang.");
+    log(
+      "⏸ Dijeda otomatis — sesi FASIH berakhir (logout). Login ulang, lalu klik ▶ Lanjut. Progres tidak hilang.",
+    );
     beepAlert();
   }
 
@@ -1616,7 +2191,10 @@
     console.log(`[${APP.name}] ${msg}`);
     const r = loadRun();
     r.lastLog = msg;
-    r.logs = [...(r.logs || []), `${new Date().toLocaleTimeString("id-ID")} ${msg}`].slice(-6);
+    r.logs = [
+      ...(r.logs || []),
+      `${new Date().toLocaleTimeString("id-ID")} ${msg}`,
+    ].slice(-6);
     saveRun(r);
     updateHud();
   }
@@ -1629,28 +2207,45 @@
   }
 
   const did = (item) => item.docId || item.id;
-  const docUrl = (item) => item.url || `${location.origin}/app/assignment/${item.prefix}/${item.id}`;
-  const onReviewOf = (id) => new RegExp(`/app/assignment/[^/]+/${id}/?$`, "i").test(location.pathname);
-  const onEditOf = (id) => new RegExp(`/app/assignment/[^/]+/${id}/edit`, "i").test(location.pathname);
+  const docUrl = (item) =>
+    item.url || `${location.origin}/app/assignment/${item.prefix}/${item.id}`;
+  const onReviewOf = (id) =>
+    new RegExp(`/app/assignment/[^/]+/${id}/?$`, "i").test(location.pathname);
+  const onEditOf = (id) =>
+    new RegExp(`/app/assignment/[^/]+/${id}/edit`, "i").test(location.pathname);
 
   function ensureReview(item) {
     if (onReviewOf(did(item))) return true;
     const r = loadRun();
     if (Date.now() - (r.navAt || 0) < 4000) return false;
     const tries = (r.cur && r.cur.navTries) || 0;
-    if (tries >= 4) throw Object.assign(new Error("link tidak benar / dokumen tidak bisa dibuka (cek link di Excel / akses akun)"), { soft: true, noRetry: true });
+    if (tries >= 4)
+      throw Object.assign(
+        new Error(
+          "link tidak benar / dokumen tidak bisa dibuka (cek link di Excel / akses akun)",
+        ),
+        { soft: true, noRetry: true },
+      );
     r.cur.navTries = tries + 1;
     r.navAt = Date.now();
     saveRun(r);
     log(`Membuka dokumen${tries ? ` (percobaan ${tries + 1})` : ""}`);
-    location.href = tries % 2 === 0 ? docUrl(item) : `${location.origin}/app/assignment-detail/${did(item)}`;
+    location.href =
+      tries % 2 === 0
+        ? docUrl(item)
+        : `${location.origin}/app/assignment-detail/${did(item)}`;
     return false;
   }
   function followDetailLink(item) {
-    if (!new RegExp(`/app/assignment-detail/${did(item)}`, "i").test(location.pathname)) return false;
-    const a = Array.from(document.querySelectorAll('a[href*="/app/assignment/"]')).find((x) =>
-      x.getAttribute("href").toLowerCase().includes(did(item)),
-    );
+    if (
+      !new RegExp(`/app/assignment-detail/${did(item)}`, "i").test(
+        location.pathname,
+      )
+    )
+      return false;
+    const a = Array.from(
+      document.querySelectorAll('a[href*="/app/assignment/"]'),
+    ).find((x) => x.getAttribute("href").toLowerCase().includes(did(item)));
     if (!a) return false;
     const r = loadRun();
     r.navAt = Date.now();
@@ -1663,7 +2258,9 @@
     item.targets
       .map((t, i) => {
         const res = results && results[i];
-        const nm = (t.nama || (res && res.card) || "usaha").split("(")[0].trim();
+        const nm = (t.nama || (res && res.card) || "usaha")
+          .split("(")[0]
+          .trim();
         if (!res) return `${nm}: kartu tidak ketemu`;
         return `${nm}: ${res.summary}`;
       })
@@ -1678,12 +2275,16 @@
     const gap = T().gap;
     r.nextAt = Date.now() + gap[0] + Math.random() * (gap[1] - gap[0]);
     saveRun(r);
-    log(`${FINISHED.includes(status) ? "✅" : status === "tested" ? "🧪" : "⚠️"} ${reason}`);
+    log(
+      `${FINISHED.includes(status) ? "✅" : status === "tested" ? "🧪" : "⚠️"} ${reason}`,
+    );
     refreshPanel();
   }
   function nextItem(run) {
     const only = run.onlyIds ? new Set(run.onlyIds) : null;
-    return loadQueue().find((q) => q.status === "pending" && (!only || only.has(q.id)));
+    return loadQueue().find(
+      (q) => q.status === "pending" && (!only || only.has(q.id)),
+    );
   }
 
   async function tick() {
@@ -1713,17 +2314,23 @@
           return;
         }
         const item = nextItem(run);
-        if (!item || (run.limit && run.processed >= run.limit)) return stopRun("Selesai ✓");
+        if (!item || (run.limit && run.processed >= run.limit))
+          return stopRun("Selesai ✓");
         setStage("open", { id: item.id, submitClicked: false });
         log(`▶ ${item.targets.map((t) => t.nama).join(" + ")}`);
         return;
       }
       const cur = run.cur;
       const item = loadQueue().find((q) => q.id === cur.id);
-      if (!item) return finishItem(cur.id, "red", "dokumen hilang dari antrean");
+      if (!item)
+        return finishItem(cur.id, "red", "dokumen hilang dari antrean");
       if (Date.now() - (run.phaseAt || 0) > STAGE_TIMEOUT_MS * P().x) {
         if (await retryStage(cur, "tahap terlalu lama")) return;
-        return finishItem(item.id, "red", `macet di tahap "${STEP_LABEL[cur.stage] || cur.stage}"`);
+        return finishItem(
+          item.id,
+          "red",
+          `macet di tahap "${STEP_LABEL[cur.stage] || cur.stage}"`,
+        );
       }
       try {
         if (forbiddenPage()) throw forbiddenError();
@@ -1731,21 +2338,36 @@
       } catch (e) {
         console.error(`[${APP.name}]`, e);
         if (e.forbidden) {
-          const edited = cur.revoked || ["fill", "anomali", "submit"].includes(cur.stage) ? " (dokumen sempat dibuka edit, cek manual)" : "";
-          return finishItem(item.id, "forbidden", `halaman Forbidden (tidak ada akses), dilewati${edited}`);
+          const edited =
+            cur.revoked || ["fill", "anomali", "submit"].includes(cur.stage)
+              ? " (dokumen sempat dibuka edit, cek manual)"
+              : "";
+          return finishItem(
+            item.id,
+            "forbidden",
+            `halaman Forbidden (tidak ada akses), dilewati${edited}`,
+          );
         }
         pressKey("Escape");
         if (!e.noRetry && (await retryStage(cur, e.message))) return;
         const where = STEP_LABEL[cur.stage] || cur.stage;
-        const after = cur.revoked || ["fill", "anomali", "submit"].includes(cur.stage) ? " — dokumen sudah dibuka edit, cek manual" : "";
-        finishItem(item.id, e.soft ? "yellow" : "red", `[${where}] ${e.message}${after}`);
+        const after =
+          cur.revoked || ["fill", "anomali", "submit"].includes(cur.stage)
+            ? " — dokumen sudah di-revoke / dibuka edit, cek manual"
+            : "";
+        finishItem(
+          item.id,
+          e.soft ? "yellow" : "red",
+          `[${where}] ${e.message}${after}`,
+        );
       }
     } finally {
       busy = false;
       // Pindah tahap di halaman yang sama -> tahap berikutnya langsung dijalankan. Pindah halaman tidak
       // mengubah tahap (ensureReview dkk.), jadi tidak ikut dipercepat.
       const now = loadRun();
-      if (now.running && stageKey(now) && stageKey(now) !== before) setTimeout(tick, 50);
+      if (now.running && stageKey(now) && stageKey(now) !== before)
+        setTimeout(tick, 50);
     }
   }
 
@@ -1760,20 +2382,64 @@
       }
       case "check": {
         if (!ensureReview(item)) return;
+        // Kasus #0 (Edit KBLI = 0, atau Edit KBLI = 1 tapi KBLI sudah benar): yang kurang cuma catatan #0.
+        // Dokumen sudah di-approve -> revoke SAJA (tetap di Review, tanpa masuk Edit) -> tulis #0 di Review -> Approve.
+        await waitFor(
+          () => buttonByIcon("edit") || buttonByIcon("rotate-clockwise"),
+          20000,
+        );
+        await sleep(W(600));
+        const editBtn = buttonByIcon("edit");
+        const approved = !editBtn || editBtn.disabled; // sudah di-approve: catatan tidak bisa ditulis sebelum revoke
+        const allNoEdit =
+          item.targets.length > 0 &&
+          item.targets.every((t) => t.noEdit && catatanTag(t));
+        const revokeForNote = async () => {
+          await revokeDoc();
+          log("Revoke selesai → tulis catatan di Review (tanpa Edit)");
+          return setStage("check", { revoked: true });
+        };
         try {
-          const { results, notes } = await scanDoc(item, false);
-          if (results.length && results.every((r) => r && r.already))
-            return finishItem(item.id, "already", `tidak diubah, sudah sesuai · ${summary(item, results)}`);
+          const { results, notes } = await scanDoc(item, false, !approved);
+          if (results.length && results.every((r) => r && r.already)) {
+            // Catatan baru ditulis di Review, atau dokumen tadi di-revoke -> wajib Approve lagi
+            if (results.some((r) => r.noteWritten) || cur.revoked) {
+              updateItem(item.id, { result: summary(item, results) });
+              return setStage("approve", { viaReview: true });
+            }
+            return finishItem(
+              item.id,
+              "already",
+              `tidak diubah, sudah sesuai · ${summary(item, results)}`,
+            );
+          }
+          if (
+            approved &&
+            results.length &&
+            results.every((r) => r && (r.already || r.noteOnly))
+          )
+            return revokeForNote();
           if (results.every((r) => !r))
             throw Object.assign(
-              new Error(`link tidak benar / tidak ada kartu yang sesuai nama_usaha Excel (${notes.join("; ") || "-"}) — tidak di-revoke, cek manual`),
+              new Error(
+                `link tidak benar / tidak ada kartu yang sesuai nama_usaha Excel (${notes.join("; ") || "-"}) — ${cur.revoked ? "dokumen sudah di-revoke," : "tidak di-revoke,"} cek manual`,
+              ),
               { soft: true },
             );
-          if (results.some((r) => !r)) log(`⚠ cek Review: ${notes.join("; ") || "sebagian kartu belum ketemu"}, lanjut ke Edit`);
+          if (results.some((r) => !r))
+            log(
+              `⚠ cek Review: ${notes.join("; ") || "sebagian kartu belum ketemu"}, lanjut ke Edit`,
+            );
           // Selaras posisi dgn targets (null = usaha itu belum ketemu kartunya) — dipakai scanDoc(write=true)
           // nanti biar tahu langsung nama kartu yg cocok, tanpa cocokkan nama dari awal lagi.
-          updateItem(item.id, { cardHints: results.map((r) => (r ? r.card : null)) });
+          updateItem(item.id, {
+            cardHints: results.map((r) => (r ? r.card : null)),
+          });
         } catch (e) {
+          // Halaman Review dokumen yang sudah di-approve tidak bisa dibaca (hanya Revoke & Info), padahal
+          // semua baris Excel-nya cuma butuh catatan #0 -> revoke saja
+          if (approved && allNoEdit && !e.forbidden && !e.soft)
+            return revokeForNote();
           if (e.forbidden || e.soft || !cur.retries) throw e;
           log(`⚠ cek Review gagal (${e.message}), lanjut ke Edit`);
         }
@@ -1788,25 +2454,40 @@
       case "fill": {
         if (!onEditOf(did(item))) return setStage("edit");
         const { results, notes, filled } = await scanDoc(item, true);
-        updateItem(item.id, { result: summary(item, results), kbliNotes: notes });
+        updateItem(item.id, {
+          result: summary(item, results),
+          kbliNotes: notes,
+        });
         if (results.some((r) => !r))
-          throw Object.assign(new Error(`${summary(item, results)}${notes.length ? ` (${notes.join("; ")})` : ""}`), { soft: true });
+          throw Object.assign(
+            new Error(
+              `${summary(item, results)}${notes.length ? ` (${notes.join("; ")})` : ""}`,
+            ),
+            { soft: true },
+          );
         const umkmNotes = await sweepUmkmTidakAda(filled);
-        if (umkmNotes.length) updateItem(item.id, { kbliNotes: [...notes, ...umkmNotes] });
-        return setStage("anomali", { submitClicked: false, changed: results.some((r) => r.changed) });
+        if (umkmNotes.length)
+          updateItem(item.id, { kbliNotes: [...notes, ...umkmNotes] });
+        return setStage("anomali", {
+          submitClicked: false,
+          changed: results.some((r) => r.changed),
+        });
       }
       case "anomali": {
         if (!onEditOf(did(item))) return setStage("edit");
         const notes = await handleKbliAnomali();
         if (notes.length) {
           const q = loadQueue().find((x) => x.id === item.id);
-          updateItem(item.id, { kbliNotes: [...((q && q.kbliNotes) || []), ...notes] });
+          updateItem(item.id, {
+            kbliNotes: [...((q && q.kbliNotes) || []), ...notes],
+          });
         }
         return setStage("submit");
       }
       case "submit": {
         if (!onEditOf(did(item))) {
-          if (cur.submitClicked && onReviewOf(did(item))) return setStage("approve");
+          if (cur.submitClicked && onReviewOf(did(item)))
+            return setStage("approve");
           throw new Error("halaman edit tertutup sebelum dikirim");
         }
         if (cur.submitClicked) {
@@ -1817,7 +2498,9 @@
           if (!run.paused) {
             run.paused = { stage: "submit" };
             saveRun(run);
-            log('MODE UJI: KBLI sudah diganti. Periksa, lalu "Kirim sekarang" atau "Lewati"');
+            log(
+              'MODE UJI: KBLI sudah diganti. Periksa, lalu "Kirim sekarang" atau "Lewati"',
+            );
           }
           return;
         }
@@ -1826,6 +2509,16 @@
       }
       case "approve": {
         if (!ensureReview(item)) return;
+        if (cur.viaReview && run.testMode && cur.confirmed !== "approve") {
+          if (!run.paused) {
+            run.paused = { stage: "approve" };
+            saveRun(run);
+            log(
+              'MODE UJI: catatan #0 sudah beres di Review. Periksa, lalu "Approve sekarang" atau "Lewati"',
+            );
+          }
+          return;
+        }
         let note = "";
         if (conf.approve) {
           try {
@@ -1837,11 +2530,13 @@
           closeDialogs();
         }
         const q = loadQueue().find((x) => x.id === item.id) || item;
-        const anomaliNote = (q.kbliNotes || []).filter((n) => /anomali/i.test(n));
+        const anomaliNote = (q.kbliNotes || []).filter((n) =>
+          /anomali/i.test(n),
+        );
         return finishItem(
           item.id,
           "done",
-          `${q.result || "terkirim"} · terkirim${conf.approve && !note ? " & approve" : ""}${note}${anomaliNote.length ? ` · ${anomaliNote.join("; ")}` : ""}`,
+          `${q.result || "terkirim"} · ${cur.viaReview ? (cur.revoked ? "revoke, catatan di Review tanpa Edit" : "catatan di Review tanpa revoke") : "terkirim"}${conf.approve && !note ? " & approve" : ""}${note}${anomaliNote.length ? ` · ${anomaliNote.join("; ")}` : ""}`,
         );
       }
       default:
@@ -1856,13 +2551,17 @@
         .filter((q) => q.status === "pending")
         .slice(0, opts.limit)
         .map((q) => q.id);
-    if (onlyIds && !onlyIds.length) return toast("Tidak ada dokumen berstatus Belum untuk dijalankan.");
-    if (!onlyIds && !loadQueue().some((q) => q.status === "pending")) return toast("Semua dokumen sudah diproses.");
+    if (onlyIds && !onlyIds.length)
+      return toast("Tidak ada dokumen berstatus Belum untuk dijalankan.");
+    if (!onlyIds && !loadQueue().some((q) => q.status === "pending"))
+      return toast("Semua dokumen sudah diproses.");
     saveRun({
       running: true,
       testMode: !!opts.testMode,
       onlyIds,
-      total: onlyIds ? onlyIds.length : loadQueue().filter((q) => q.status === "pending").length,
+      total: onlyIds
+        ? onlyIds.length
+        : loadQueue().filter((q) => q.status === "pending").length,
       processed: 0,
       cur: null,
       logs: [],
@@ -1892,7 +2591,8 @@
     stopRequested = true;
     log(msg || "Dihentikan.");
     updateHud();
-    if (/Selesai/.test(msg || "")) toast(`Selesai — ${r.processed || 0} dokumen diproses.`);
+    if (/Selesai/.test(msg || ""))
+      toast(`Selesai — ${r.processed || 0} dokumen diproses.`);
     // Jangan dibiarkan di halaman dokumen terakhir setelah berhenti -> FASIH bisa menganggap sesi
     // "tidak login" kalau dibiarkan lama di sana. goHome=false dipakai alur yang sengaja langsung
     // pindah ke dokumen lain sendiri (mis. "Kerjakan manual"), supaya tidak dobel navigasi.
@@ -2044,7 +2744,13 @@
   }
 
   // ---------- Panel ----------
-  const ui = { filter: "all", search: "", selected: new Set(), limit: 60, file: "" };
+  const ui = {
+    filter: "all",
+    search: "",
+    selected: new Set(),
+    limit: 60,
+    file: "",
+  };
 
   function closePanel() {
     document.getElementById("kk-panel")?.remove();
@@ -2052,7 +2758,9 @@
 
   function itemHtml(q) {
     const st = STATUS[q.status] || STATUS.pending;
-    const names = q.targets.map((t) => esc(t.nama || "(tanpa nama)")).join(" <span style='color:#a0a4bb'>+</span> ");
+    const names = q.targets
+      .map((t) => esc(t.nama || "(tanpa nama)"))
+      .join(" <span style='color:#a0a4bb'>+</span> ");
     const diff = q.targets
       .map((t) => {
         const kbli =
@@ -2065,11 +2773,22 @@
         const keg = t.kegUtamaBaru
           ? `<span class="kk-chg"><span class="k">Keg. utama</span><span class="o">${esc(t.kegUtamaLama)}</span>→<span class="a">${esc(t.kegUtamaBaru)}</span></span>`
           : "";
-        const note0 = t.noEdit ? `<span class="kk-chg"><span class="k">Edit KBLI = 0</span><span class="u">${catatanTag(t) ? `catatan ${esc(catatanTag(t))} saja` : "tidak dikerjakan (catatan mati)"}</span></span>` : "";
+        const note0 = t.noEdit
+          ? `<span class="kk-chg"><span class="k">Edit KBLI = 0</span><span class="u">${catatanTag(t) ? `catatan ${esc(catatanTag(t))} saja` : "tidak dikerjakan (catatan mati)"}</span></span>`
+          : "";
         return `${q.targets.length > 1 ? `<span class="kk-chg"><span class="u">${esc((t.nama || "").split("(")[0].trim())}</span></span>` : ""}${kbli}${produk}${keg}${note0}`;
       })
       .join("");
-    const meta = [q.kec, q.desa, q.sls, q.targets.length > 1 ? `${q.targets.length} usaha` : "", q.statusAwal].filter(Boolean).map(esc).join(" · ");
+    const meta = [
+      q.kec,
+      q.desa,
+      q.sls,
+      q.targets.length > 1 ? `${q.targets.length} usaha` : "",
+      q.statusAwal,
+    ]
+      .filter(Boolean)
+      .map(esc)
+      .join(" · ");
     return `<div class="kk-item" style="--c:${st.color}">
       <input type="checkbox" data-sel="${q.id}" ${ui.selected.has(q.id) ? "checked" : ""}>
       <div style="min-width:0">
@@ -2091,7 +2810,15 @@
     return loadQueue().filter(
       (q) =>
         (ui.filter === "all" || q.status === ui.filter) &&
-        (!s || normalize([q.kec, q.desa, q.sls, ...q.targets.map((t) => `${t.nama} ${t.codeIdentity}`)].join(" ")).includes(s)),
+        (!s ||
+          normalize(
+            [
+              q.kec,
+              q.desa,
+              q.sls,
+              ...q.targets.map((t) => `${t.nama} ${t.codeIdentity}`),
+            ].join(" "),
+          ).includes(s)),
     );
   }
 
@@ -2107,7 +2834,10 @@
         <div class="seg" style="width:${pct(c.yellow + c.red + c.tested)}%;background:#fcd34d"></div>
       </div>
       <div class="lbl"><span>${doneN} dari ${c.all} dokumen beres${c.forbidden ? ` · ${c.forbidden} forbidden dilewati` : ""}</span><span>${c.all ? Math.round(pct(doneN)) : 0}%</span></div>`;
-    root.querySelector("[data-stats]").innerHTML = [["all", "Semua", "#4f46e5"], ...Object.entries(STATUS).map(([k, v]) => [k, v.label, v.color])]
+    root.querySelector("[data-stats]").innerHTML = [
+      ["all", "Semua", "#4f46e5"],
+      ...Object.entries(STATUS).map(([k, v]) => [k, v.label, v.color]),
+    ]
       .map(
         ([k, l, col]) =>
           `<button class="kk-stat ${ui.filter === k ? "on" : ""}" style="--c:${col}" data-filter="${k}"><div class="n">${c[k] || 0}</div><div class="l">${l}</div></button>`,
@@ -2116,12 +2846,20 @@
     const items = filteredItems();
     root.querySelector("[data-list]").innerHTML = items.length
       ? items.slice(0, ui.limit).map(itemHtml).join("") +
-        (items.length > ui.limit ? `<div class="kk-more"><button class="kk-btn sm" data-more>Tampilkan ${Math.min(60, items.length - ui.limit)} lagi (sisa ${items.length - ui.limit})</button></div>` : "")
+        (items.length > ui.limit
+          ? `<div class="kk-more"><button class="kk-btn sm" data-more>Tampilkan ${Math.min(60, items.length - ui.limit)} lagi (sisa ${items.length - ui.limit})</button></div>`
+          : "")
       : `<div class="kk-empty">${c.all ? "Tidak ada dokumen di filter ini." : "📄 Muat file Excel Pengecekan KBLI dulu."}</div>`;
-    root.querySelector("[data-selinfo]").textContent = ui.selected.size ? `${ui.selected.size} dicentang` : "";
+    root.querySelector("[data-selinfo]").textContent = ui.selected.size
+      ? `${ui.selected.size} dicentang`
+      : "";
     const pend = c.pending;
-    root.querySelectorAll("[data-needpend]").forEach((b) => (b.disabled = !pend));
-    root.querySelectorAll("[data-runsel]").forEach((b) => (b.disabled = !ui.selected.size));
+    root
+      .querySelectorAll("[data-needpend]")
+      .forEach((b) => (b.disabled = !pend));
+    root
+      .querySelectorAll("[data-runsel]")
+      .forEach((b) => (b.disabled = !ui.selected.size));
   }
 
   function refreshPanel() {
@@ -2141,8 +2879,14 @@
   // Keterangan di bawah kotak isian catatan / penjelasan anomali di panel
   function textHint(k, v) {
     const val = String(v ?? "").trim();
-    if (k === "anomaliText") return val ? `Dipakai: "${val}"` : `Kosong → pakai bawaan: "${KBLI_ANOMALI_EXPLANATION}"`;
-    if (!val) return k === "noteNoEdit" ? "Mati: baris Edit KBLI = 0 langsung dianggap selesai, dokumennya tidak dibuka-ubah" : "Mati: tidak menambah catatan";
+    if (k === "anomaliText")
+      return val
+        ? `Dipakai: "${val}"`
+        : `Kosong → pakai bawaan: "${KBLI_ANOMALI_EXPLANATION}"`;
+    if (!val)
+      return k === "noteNoEdit"
+        ? "Mati: baris Edit KBLI = 0 langsung dianggap selesai, dokumennya tidak dibuka-ubah"
+        : "Mati: tidak menambah catatan";
     return `Aktif: "${val}" ditambahkan di rincian KBLI (tidak ditambah lagi kalau sudah ada)`;
   }
 
@@ -2196,12 +2940,28 @@
                 <label class="kk-tog"><input type="checkbox" data-conf="approve" ${conf.approve ? "checked" : ""}><span class="sw"></span><span>Approve setelah kirim</span></label>
                 <label class="kk-tog"><input type="checkbox" data-conf="forceOnGalat" ${conf.forceOnGalat ? "checked" : ""}><span class="sw"></span><span>Submit Paksa kalau ada galat<small>Mati: dokumen bergalat ditandai "Perlu cek"</small></span></label>
                 ${[
-                  ["noteEdit", "Catatan KBLI · Edit KBLI = 1 (dikoreksi)", "kosong = tanpa catatan"],
-                  ["noteNoEdit", "Catatan KBLI · Edit KBLI = 0 (tidak diubah)", "kosong = baris Edit KBLI = 0 tidak dikerjakan"],
-                  ["anomaliText", "Penjelasan anomali KBLI", "kosong = pakai teks bawaan"],
+                  [
+                    "noteEdit",
+                    "Catatan KBLI · Edit KBLI = 1 (dikoreksi)",
+                    "kosong = tanpa catatan",
+                  ],
+                  [
+                    "noteNoEdit",
+                    "Catatan KBLI · Edit KBLI = 0 (tidak diubah)",
+                    "kosong = baris Edit KBLI = 0 tidak dikerjakan",
+                  ],
+                  [
+                    "anomaliText",
+                    "Penjelasan anomali KBLI",
+                    "kosong = pakai teks bawaan",
+                  ],
                 ]
                   .map(
-                    ([k, label, ph]) => `<div style="padding:6px 0;font-size:13px">${label}
+                    ([
+                      k,
+                      label,
+                      ph,
+                    ]) => `<div style="padding:6px 0;font-size:13px">${label}
                   <input data-text-conf="${k}" value="${esc(conf[k] ?? "")}" placeholder="${ph}" style="display:block;width:100%;margin-top:5px;border:1px solid var(--line);border-radius:10px;padding:7px 11px;font-size:13px;outline:none">
                   <small class="kk-hint" data-text-hint="${k}">${textHint(k, conf[k])}</small></div>`,
                   )
@@ -2247,7 +3007,10 @@
       if (e.target === overlay) closePanel();
     });
     const fileInput = overlay.querySelector("[data-file]");
-    fileInput.addEventListener("change", () => fileInput.files[0] && loadExcel(fileInput.files[0]));
+    fileInput.addEventListener(
+      "change",
+      () => fileInput.files[0] && loadExcel(fileInput.files[0]),
+    );
     const drop = overlay.querySelector("[data-drop]");
     drop.addEventListener("dragover", (e) => {
       e.preventDefault();
@@ -2261,7 +3024,10 @@
       if (f) loadExcel(f);
     });
     const imp = overlay.querySelector("[data-importfile]");
-    imp.addEventListener("change", () => imp.files[0] && importJson(imp.files[0]));
+    imp.addEventListener(
+      "change",
+      () => imp.files[0] && importJson(imp.files[0]),
+    );
     overlay.querySelector(".kk-search").addEventListener("input", (e) => {
       ui.search = e.target.value;
       ui.limit = 60;
@@ -2270,7 +3036,9 @@
     overlay.addEventListener("change", (e) => {
       const sel = e.target.closest("[data-sel]");
       if (sel) {
-        sel.checked ? ui.selected.add(sel.dataset.sel) : ui.selected.delete(sel.dataset.sel);
+        sel.checked
+          ? ui.selected.add(sel.dataset.sel)
+          : ui.selected.delete(sel.dataset.sel);
         renderDynamic(overlay);
       }
       const cf = e.target.closest("[data-conf]");
@@ -2296,7 +3064,9 @@
         const c = loadConf();
         c.patience = Number(pt.dataset.patience);
         saveConf(c);
-        overlay.querySelectorAll("button[data-patience]").forEach((b) => b.classList.toggle("on", b === pt));
+        overlay
+          .querySelectorAll("button[data-patience]")
+          .forEach((b) => b.classList.toggle("on", b === pt));
         return;
       }
       const sp = e.target.closest("button[data-speed]");
@@ -2304,7 +3074,9 @@
         const c = loadConf();
         c.speed = Number(sp.dataset.speed);
         saveConf(c);
-        overlay.querySelectorAll("button[data-speed]").forEach((b) => b.classList.toggle("on", b === sp));
+        overlay
+          .querySelectorAll("button[data-speed]")
+          .forEach((b) => b.classList.toggle("on", b === sp));
         return;
       }
       const f = e.target.closest("[data-filter]");
@@ -2320,7 +3092,8 @@
       const man = e.target.closest("[data-manual]");
       if (man) {
         e.preventDefault();
-        if (loadRun().running) stopRun("Dihentikan untuk dikerjakan manual.", false);
+        if (loadRun().running)
+          stopRun("Dihentikan untuk dikerjakan manual.", false);
         try {
           localStorage.removeItem(HELPER_KEY);
         } catch (err) {}
@@ -2339,14 +3112,28 @@
       if (act === "n5") startRun({ limit: 5 });
       if (act === "n20") startRun({ limit: 20 });
       if (act === "all") {
-        if (confirm(`Jalankan ${counts().pending} dokumen sekarang (Kirim${loadConf().approve ? " + Approve" : ""} otomatis)?`)) startRun({});
+        if (
+          confirm(
+            `Jalankan ${counts().pending} dokumen sekarang (Kirim${loadConf().approve ? " + Approve" : ""} otomatis)?`,
+          )
+        )
+          startRun({});
       }
       if (act === "runsel") {
         const ids = Array.from(ui.selected);
         const q = loadQueue();
-        q.forEach((x) => ids.includes(x.id) && !FINISHED.includes(x.status) && Object.assign(x, { status: "pending", reason: "" }));
+        q.forEach(
+          (x) =>
+            ids.includes(x.id) &&
+            !FINISHED.includes(x.status) &&
+            Object.assign(x, { status: "pending", reason: "" }),
+        );
         saveQueue(q);
-        startRun({ onlyIds: ids.filter((id) => q.find((x) => x.id === id && x.status === "pending")) });
+        startRun({
+          onlyIds: ids.filter((id) =>
+            q.find((x) => x.id === id && x.status === "pending"),
+          ),
+        });
       }
       if (act === "retry") {
         const q = loadQueue();
@@ -2378,7 +3165,10 @@
       if (act === "csv") exportCsv();
       if (act === "export") exportJson();
       if (act === "import") overlay.querySelector("[data-importfile]").click();
-      if (act === "clear" && confirm("Hapus seluruh antrean & progres di browser ini?")) {
+      if (
+        act === "clear" &&
+        confirm("Hapus seluruh antrean & progres di browser ini?")
+      ) {
         saveQueue([]);
         ui.selected.clear();
         ui.file = "";
@@ -2408,7 +3198,8 @@
     const modal = document.createElement("div");
     modal.id = "kk-status";
     modal.className = "kk kk-overlay";
-    modal.style.cssText = "align-items:center;justify-content:center;z-index:1000003;";
+    modal.style.cssText =
+      "align-items:center;justify-content:center;z-index:1000003;";
     const options = Object.entries(STATUS)
       .map(
         ([k, v]) =>
@@ -2437,14 +3228,24 @@
 
   async function loadExcel(file) {
     try {
-      const { items, sheet, rows, skipped, notFlagged } = await parseWorkbook(await file.arrayBuffer());
+      const { items, sheet, rows, skipped, notFlagged } = await parseWorkbook(
+        await file.arrayBuffer(),
+      );
       const old = new Map(loadQueue().map((q) => [q.id, q]));
       let kept = 0;
       const merged = items.map((it) => {
         const o = old.get(it.id);
         if (o && o.status !== "pending") {
           kept++;
-          return { ...it, status: o.status, reason: o.reason, result: o.result, doneAt: o.doneAt, cardHints: o.cardHints, kbliNotes: o.kbliNotes };
+          return {
+            ...it,
+            status: o.status,
+            reason: o.reason,
+            result: o.result,
+            doneAt: o.doneAt,
+            cardHints: o.cardHints,
+            kbliNotes: o.kbliNotes,
+          };
         }
         return it;
       });
@@ -2471,43 +3272,103 @@
       a.remove();
     }, 1000);
   }
-  const stamp = () => new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
+  const stamp = () =>
+    new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
   function wilayahTag() {
     const queue = loadQueue();
     const kecs = [...new Set(queue.map((q) => q.kec).filter(Boolean))];
     const desas = [...new Set(queue.map((q) => q.desa).filter(Boolean))];
     let tag = "semua-wilayah";
-    if (desas.length === 1) tag = kecs.length === 1 ? `${kecs[0]}-${desas[0]}` : desas[0];
+    if (desas.length === 1)
+      tag = kecs.length === 1 ? `${kecs[0]}-${desas[0]}` : desas[0];
     else if (kecs.length === 1) tag = kecs[0];
     else if (kecs.length > 1) tag = `${kecs.length}-kecamatan`;
-    return tag.replace(/[\\/:*?"<>|\s]+/g, "_").replace(/_+/g, "_").slice(0, 80);
+    return tag
+      .replace(/[\\/:*?"<>|\s]+/g, "_")
+      .replace(/_+/g, "_")
+      .slice(0, 80);
   }
 
   function exportCsv() {
     const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const lines = [
-      ["no", "baris_excel", "nama_usaha", "kec", "desa", "sls", "kbli_lama", "kbli_baru", "produk_lama", "produk_baru", "kegiatan_utama_lama", "kegiatan_utama_baru", "status", "keterangan", "hasil", "waktu", "link"].join(","),
+      [
+        "no",
+        "baris_excel",
+        "nama_usaha",
+        "kec",
+        "desa",
+        "sls",
+        "kbli_lama",
+        "kbli_baru",
+        "produk_lama",
+        "produk_baru",
+        "kegiatan_utama_lama",
+        "kegiatan_utama_baru",
+        "status",
+        "keterangan",
+        "hasil",
+        "waktu",
+        "link",
+      ].join(","),
     ];
     loadQueue().forEach((q) =>
       q.targets.forEach((t) =>
         lines.push(
-          [t.no, t.row, t.nama, q.kec, q.desa, q.sls, t.kbliLama, t.kbliBaru, t.produkLama, t.produkBaru, t.kegUtamaLama, t.kegUtamaBaru, (STATUS[q.status] || {}).label, q.reason, q.result, q.doneAt, docUrl(q)]
+          [
+            t.no,
+            t.row,
+            t.nama,
+            q.kec,
+            q.desa,
+            q.sls,
+            t.kbliLama,
+            t.kbliBaru,
+            t.produkLama,
+            t.produkBaru,
+            t.kegUtamaLama,
+            t.kegUtamaBaru,
+            (STATUS[q.status] || {}).label,
+            q.reason,
+            q.result,
+            q.doneAt,
+            docUrl(q),
+          ]
             .map(cell)
             .join(","),
         ),
       ),
     );
-    download(`laporan-${APP.file}-${wilayahTag()}-${stamp()}.csv`, "﻿" + lines.join("\n"), "text/csv");
+    download(
+      `laporan-${APP.file}-${wilayahTag()}-${stamp()}.csv`,
+      "﻿" + lines.join("\n"),
+      "text/csv",
+    );
   }
   function exportJson() {
-    download(`antrean-${APP.file}-${wilayahTag()}-${stamp()}.json`, JSON.stringify({ v: 1, queue: loadQueue(), conf: loadConf() }), "application/json");
+    download(
+      `antrean-${APP.file}-${wilayahTag()}-${stamp()}.json`,
+      JSON.stringify({ v: 1, queue: loadQueue(), conf: loadConf() }),
+      "application/json",
+    );
   }
   async function importJson(file) {
     try {
       const data = JSON.parse(await file.text());
-      if (!Array.isArray(data.queue) || data.queue.some((q) => !q.targets || q.targets.some((t) => !("kbliBaru" in t))))
+      if (
+        !Array.isArray(data.queue) ||
+        data.queue.some(
+          (q) => !q.targets || q.targets.some((t) => !("kbliBaru" in t)),
+        )
+      )
         throw new Error(`bukan file ekspor skrip ${APP.name}`);
-      if (loadQueue().length && !confirm(`Timpa antrean sekarang (${loadQueue().length} dokumen) dengan isi file (${data.queue.length} dokumen)?`)) return;
+      if (
+        loadQueue().length &&
+        !confirm(
+          `Timpa antrean sekarang (${loadQueue().length} dokumen) dengan isi file (${data.queue.length} dokumen)?`,
+        )
+      )
+        return;
       saveQueue(data.queue);
       if (data.conf) saveConf({ ...loadConf(), ...data.conf });
       ui.file = file.name;
@@ -2530,7 +3391,9 @@
     });
   }
   const docIdHere = () => {
-    const m = location.pathname.match(/\/app\/assignment\/[^/]+\/([0-9a-f-]{36})/i);
+    const m = location.pathname.match(
+      /\/app\/assignment\/[^/]+\/([0-9a-f-]{36})/i,
+    );
     return m ? m[1].toLowerCase() : null;
   };
   function openCardNow() {
@@ -2550,10 +3413,16 @@
   }
   function targetFor(q, card) {
     const t = q.targets;
-    const byName = card.name ? t.filter((x) => nameMatch(card.name, x.nama) >= NAME_OK) : [];
+    const byName = card.name
+      ? t.filter((x) => nameMatch(card.name, x.nama) >= NAME_OK)
+      : [];
     if (byName.length === 1) return byName[0];
     const pool = byName.length ? byName : t;
-    return pool.find((x) => card.code === x.kbliBaru) || pool.find((x) => card.code === x.kbliLama) || (t.length === 1 ? t[0] : null);
+    return (
+      pool.find((x) => card.code === x.kbliBaru) ||
+      pool.find((x) => card.code === x.kbliLama) ||
+      (t.length === 1 ? t[0] : null)
+    );
   }
 
   // Baris "apa yang diubah" per usaha (KBLI/produk/kegiatan utama lama → baru) — dipakai di panel
@@ -2566,8 +3435,12 @@
         const kbliLine = x.kbliBaru
           ? `<div class="line">KBLI: <span class="o">${esc(x.kbliLama || "-")}</span> → <span class="n">${esc(x.kbliBaru)}</span>${now === null ? "" : ok ? " ✓" : ` (sekarang ${esc(now || "-")})`}</div>`
           : `<div class="line">KBLI: <span class="n">tetap</span> (tidak diubah)${now ? ` · sekarang ${esc(now)}` : ""}</div>`;
-        const produkLine = x.produkBaru ? `<div class="line">Produk: <span class="o">${esc(x.produkLama)}</span> → <span class="n">${esc(x.produkBaru)}</span></div>` : "";
-        const kegLine = x.kegUtamaBaru ? `<div class="line">Keg. utama: <span class="o">${esc(x.kegUtamaLama)}</span> → <span class="n">${esc(x.kegUtamaBaru)}</span></div>` : "";
+        const produkLine = x.produkBaru
+          ? `<div class="line">Produk: <span class="o">${esc(x.produkLama)}</span> → <span class="n">${esc(x.produkBaru)}</span></div>`
+          : "";
+        const kegLine = x.kegUtamaBaru
+          ? `<div class="line">Keg. utama: <span class="o">${esc(x.kegUtamaLama)}</span> → <span class="n">${esc(x.kegUtamaBaru)}</span></div>`
+          : "";
         return `<div class="doc" style="margin-top:8px">${esc(x.nama)}</div>${kbliLine}${produkLine}${kegLine}`;
       })
       .join("");
@@ -2578,24 +3451,54 @@
   function placeEl(el, key) {
     if (!el) return;
     const pos = loadJson(key, null);
-    if (!pos) return Object.assign(el.style, { left: "", top: "", right: "", bottom: "", transform: "" });
+    if (!pos)
+      return Object.assign(el.style, {
+        left: "",
+        top: "",
+        right: "",
+        bottom: "",
+        transform: "",
+      });
     const w = Math.min(el.offsetWidth || 400, window.innerWidth);
     const x = Math.min(Math.max(0, pos.x), window.innerWidth - w);
     const y = Math.min(Math.max(0, pos.y), window.innerHeight - 48);
-    Object.assign(el.style, { left: `${x}px`, top: `${y}px`, right: "auto", bottom: "auto", transform: "none" });
+    Object.assign(el.style, {
+      left: `${x}px`,
+      top: `${y}px`,
+      right: "auto",
+      bottom: "auto",
+      transform: "none",
+    });
   }
   function makeDraggable(el, key) {
     el.addEventListener("pointerdown", (e) => {
-      if (!e.target.closest(".top") || e.target.closest("button") || e.button !== 0) return;
+      if (
+        !e.target.closest(".top") ||
+        e.target.closest("button") ||
+        e.button !== 0
+      )
+        return;
       e.preventDefault();
       const r = el.getBoundingClientRect();
       const dx = e.clientX - r.left;
       const dy = e.clientY - r.top;
       el.classList.add("drag");
       const move = (ev) => {
-        const x = Math.min(Math.max(0, ev.clientX - dx), window.innerWidth - r.width);
-        const y = Math.min(Math.max(0, ev.clientY - dy), window.innerHeight - 48);
-        Object.assign(el.style, { left: `${x}px`, top: `${y}px`, right: "auto", bottom: "auto", transform: "none" });
+        const x = Math.min(
+          Math.max(0, ev.clientX - dx),
+          window.innerWidth - r.width,
+        );
+        const y = Math.min(
+          Math.max(0, ev.clientY - dy),
+          window.innerHeight - 48,
+        );
+        Object.assign(el.style, {
+          left: `${x}px`,
+          top: `${y}px`,
+          right: "auto",
+          bottom: "auto",
+          transform: "none",
+        });
       };
       const up = () => {
         window.removeEventListener("pointermove", move);
@@ -2623,7 +3526,10 @@
   function updateHelper() {
     let el = document.getElementById("kk-help");
     const id = docIdHere();
-    const q = id && !loadRun().running ? loadQueue().find((x) => did(x) === id || x.id === id) : null;
+    const q =
+      id && !loadRun().running
+        ? loadQueue().find((x) => did(x) === id || x.id === id)
+        : null;
     if (!q || loadJson(HELPER_KEY, null) === id) {
       if (el) el.remove();
       helpSig = "";
@@ -2644,13 +3550,24 @@
     el.classList.toggle("min", mini);
     const card = openCardNow();
     const editing = onEditOf(id);
-    const sig = JSON.stringify([q.status, q.reason, card && card.code, card && card.name, editing, helpBusy, mini]);
+    const sig = JSON.stringify([
+      q.status,
+      q.reason,
+      card && card.code,
+      card && card.name,
+      editing,
+      helpBusy,
+      mini,
+    ]);
     if (sig === helpSig) return;
     helpSig = sig;
     const st = STATUS[q.status] || STATUS.pending;
     const t = card ? targetFor(q, card) : null;
     const rows = diffRows(q, card, t);
-    const nameWarn = card && t && card.name && nameMatch(card.name, t.nama) < NAME_OK ? ` ⚠ nama di kartu "${esc(card.name)}" beda dengan Excel` : "";
+    const nameWarn =
+      card && t && card.name && nameMatch(card.name, t.nama) < NAME_OK
+        ? ` ⚠ nama di kartu "${esc(card.name)}" beda dengan Excel`
+        : "";
     const hint = !editing
       ? "Klik Edit (revoke kalau perlu), lalu buka kartu usahanya."
       : card
@@ -2707,20 +3624,45 @@
       const card = openCardNow();
       let t = card && targetFor(q, card);
       if (!t && card && q.targets.length > 1) {
-        const pick = prompt(`Kartu ini untuk usaha yang mana?\n${q.targets.map((x, i) => `${i + 1}. ${x.nama}`).join("\n")}`, "1");
+        const pick = prompt(
+          `Kartu ini untuk usaha yang mana?\n${q.targets.map((x, i) => `${i + 1}. ${x.nama}`).join("\n")}`,
+          "1",
+        );
         t = q.targets[Number(pick) - 1];
       }
-      if (!t) return toast("Kartu yang terbuka tidak cocok dengan baris Excel dokumen ini.");
+      if (!t)
+        return toast(
+          "Kartu yang terbuka tidak cocok dengan baris Excel dokumen ini.",
+        );
       const warn = [];
-      if (card.name && nameMatch(card.name, t.nama) < NAME_OK) warn.push(`nama usaha di kartu "${card.name}" beda dengan Excel "${t.nama}"`);
-      if (t.kbliBaru && card.code && card.code !== t.kbliLama && card.code !== t.kbliBaru) warn.push(`KBLI di kartu (${card.code}) beda dari KBLI lama/baru di Excel`);
-      if (warn.length && !confirm(`Perhatian: ${warn.join("; ")}.\n\nTetap ganti ke KBLI baru?`)) return;
+      if (card.name && nameMatch(card.name, t.nama) < NAME_OK)
+        warn.push(
+          `nama usaha di kartu "${card.name}" beda dengan Excel "${t.nama}"`,
+        );
+      if (
+        t.kbliBaru &&
+        card.code &&
+        card.code !== t.kbliLama &&
+        card.code !== t.kbliBaru
+      )
+        warn.push(
+          `KBLI di kartu (${card.code}) beda dari KBLI lama/baru di Excel`,
+        );
+      if (
+        warn.length &&
+        !confirm(`Perhatian: ${warn.join("; ")}.\n\nTetap ganti ke KBLI baru?`)
+      )
+        return;
       helpBusy = true;
       updateHelper();
       try {
         const r = await ensureKbliCard(card.inst, t);
-        updateItem(q.id, { result: `${t.nama.split("(")[0].trim()}: ${r.summary} (manual)` });
-        toast("KBLI/produk sudah diganti. Cek Anomali KBLI & isian “Pilih UMKM dalam satu SLS” di kartu lain, Kirim & Approve di FASIH, lalu klik “Tandai selesai manual”.");
+        updateItem(q.id, {
+          result: `${t.nama.split("(")[0].trim()}: ${r.summary} (manual)`,
+        });
+        toast(
+          "KBLI/produk sudah diganti. Cek Anomali KBLI & isian “Pilih UMKM dalam satu SLS” di kartu lain, Kirim & Approve di FASIH, lalu klik “Tandai selesai manual”.",
+        );
       } catch (err) {
         alert(`Gagal mengisi: ${err.message}`);
       } finally {
@@ -2763,7 +3705,12 @@
         }
         if (act === "pass") {
           const r = loadRun();
-          if (r.cur) finishItem(r.cur.id, "tested", "MODE UJI: KBLI diganti tapi TIDAK dikirim (dokumen masih terbuka edit)");
+          if (r.cur)
+            finishItem(
+              r.cur.id,
+              "tested",
+              "MODE UJI: KBLI diganti tapi TIDAK dikirim (dokumen masih terbuka edit)",
+            );
         }
         if (act === "min") {
           saveJson(HUD_MIN_KEY, !loadJson(HUD_MIN_KEY, false));
@@ -2785,7 +3732,18 @@
     const done = run.processed || 0;
     const card = it ? openCardNow() : null;
     const t = it && card ? targetFor(it, card) : null;
-    const sig = JSON.stringify([run.cur, run.paused, run.logs, limited, done, run.testMode, run.hold, hudMini, card && card.code, card && card.name]);
+    const sig = JSON.stringify([
+      run.cur,
+      run.paused,
+      run.logs,
+      limited,
+      done,
+      run.testMode,
+      run.hold,
+      hudMini,
+      card && card.code,
+      card && card.name,
+    ]);
     if (sig === hudSig) return;
     hudSig = sig;
     hud.innerHTML = `
@@ -2795,7 +3753,7 @@
         <div class="ttl">${esc(APP.name)}</div>
         <div class="dim">${run.hold ? "⏸ DIJEDA · " : ""}${T().name}${run.testMode ? " · Mode uji" : ""} · ${done}/${total} dokumen</div>
         <span style="flex:1"></span>
-        ${run.paused ? `<button class="kk-btn go" data-hud="go">✓ Kirim sekarang</button><button class="kk-btn" data-hud="pass">Lewati</button>` : ""}
+        ${run.paused ? `<button class="kk-btn go" data-hud="go">✓ ${run.paused.stage === "approve" ? "Approve" : "Kirim"} sekarang</button><button class="kk-btn" data-hud="pass">Lewati</button>` : ""}
         ${run.hold ? `<button class="kk-btn go" data-hud="resume">▶ Lanjut</button>` : `<button class="kk-btn" data-hud="hold" title="Tahan sementara; langkah yang sedang jalan dilanjutkan dari titik yang sama">⏸ Jeda</button>`}
         <button class="kk-btn" data-hud="panel" title="Buka panel">☰</button>
         <button class="kk-btn" data-hud="min" title="${hudMini ? "Perbesar" : "Perkecil"}">${hudMini ? "▢" : "–"}</button>
@@ -2839,7 +3797,8 @@
   let lastPanelRefresh = 0;
   setInterval(() => {
     ensureLauncher();
-    if (isListPage() && loadJson(LIST_KEY, "") !== location.href) saveJson(LIST_KEY, location.href);
+    if (isListPage() && loadJson(LIST_KEY, "") !== location.href)
+      saveJson(LIST_KEY, location.href);
     const run = loadRun();
     if (run.running && !busy) tick();
     if (run.running) updateHud();
@@ -2850,5 +3809,7 @@
     }
   }, 700);
 
-  console.log(`[${APP.name} v${APP.version}] Aktif. Tombol di kiri bawah (Alt+${APP.hotkey}).`);
+  console.log(
+    `[${APP.name} v${APP.version}] Aktif. Tombol di kiri bawah (Alt+${APP.hotkey}).`,
+  );
 })();
