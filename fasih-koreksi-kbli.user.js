@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi KBLI & Anomali
 // @namespace    hanif-bps-hst
-// @version      1.22
+// @version      1.23
 // @description  Baca Excel "Pengecekan KBLI" (Edit KBLI = 1 dikoreksi; Edit KBLI = 0 cuma diberi catatan #0 di rincian KBLI: revoke saja, catatan ditulis di Review tanpa Edit, lalu Approve), buka tiap dokumen, ganti KBLI akhir ke KBLI Baru di kartu usaha yang tepat, sesuaikan produk & kegiatan utama kalau ada Produk Baru, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" lalu Kirim & Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -31,7 +31,7 @@
 
   const APP = {
     name: "Koreksi KBLI",
-    version: "1.22",
+    version: "1.23",
     title: "Koreksi KBLI & Anomali",
     badge: "KBLI",
     launch: "Koreksi KBLI",
@@ -571,15 +571,6 @@
       const col = {};
       for (const [k, names] of Object.entries(COLS))
         col[k] = headers.findIndex((h) => names.includes(h));
-      // Bisa ada beberapa pasang kolom Edit KBLI + KBLI Baru (mis. "Edit KBLI (1=Ya, 0=Tidak)" + "KBLI BARU " dan
-      // "Edit KBLI (1=Ya)" + "KBLI Baru"): tiap kolom Edit dipasangkan dengan kolom KBLI Baru terdekat di kanannya
-      const kbliCols = headers.map((h, i) => (h === ANCHOR ? i : -1)).filter((i) => i >= 0);
-      const editCols = headers.map((h, i) => (/^EDITKBLI/.test(h) ? i : -1)).filter((i) => i >= 0);
-      const pairs = editCols.map((e) => {
-        const k = kbliCols.find((i) => i > e) ?? kbliCols[kbliCols.length - 1];
-        return { e, k };
-      });
-      kbliCols.filter((k) => !pairs.some((p) => p.k === k)).forEach((k) => pairs.push({ e: -1, k }));
       const missing = [];
       if (col.link < 0) missing.push("link");
       if (col.nama < 0) missing.push("nama_usaha");
@@ -597,29 +588,13 @@
         .filter((r) => r.some((x) => String(x ?? "").trim()));
       dataRows.forEach((r, i) => {
         const get = (k) => (col[k] >= 0 ? String(r[col[k]] ?? "").trim() : "");
-        const cell = (c) => (c >= 0 ? String(r[c] ?? "").trim() : "");
-        // Gabungan semua pasangan: pasangan Edit = 1 yang KBLI Baru-nya terisi dipakai dulu, lalu Edit = 1 tanpa KBLI Baru,
-        // lalu Edit = 0. Dua pasangan sama-sama Edit = 1 tapi KBLI Baru-nya beda -> tidak ditebak, ditandai Perlu cek.
-        const ps = pairs.map((p) => ({ flag: cell(p.e), kbli: padKbli(cell(p.k)) }));
-        const ones = ps.filter((p) => p.flag === "1");
-        const withKbli = ones.filter((p) => p.kbli);
-        const codes = [...new Set(withKbli.map((p) => p.kbli))];
-        const pick =
-          withKbli[0] ||
-          ones[0] ||
-          ps.find((p) => p.flag === "0") ||
-          ps.find((p) => !p.flag && p.kbli) ||
-          ps.find((p) => !p.flag) ||
-          ps[0] || { flag: "", kbli: "" };
-        const flag = pick.flag;
+        const flag = get("editKbli");
         // Edit KBLI = 1 (atau kolomnya kosong) -> dikoreksi; = 0 -> KBLI dibiarkan, cuma diberi catatan #0
         const noEdit = flag === "0";
         if (flag && flag !== "1" && !noEdit) {
           notFlagged++;
           return;
         }
-        const conflict =
-          codes.length > 1 ? `KBLI Baru di dua kolom berbeda (${codes.join(" vs ")}) — pilih salah satu di Excel` : "";
         const rawLink = get("link");
         let url = (rawLink.match(/https?:\/\/[^"'\s<>]+/) || [""])[0];
         let ids =
@@ -637,7 +612,7 @@
           }
         }
         // KBLI Baru kosong = KBLI tidak diubah (dibiarkan seperti sebelumnya); produk/kegiatan utama tetap diproses
-        const kbliBaru = noEdit ? "" : pick.kbli;
+        const kbliBaru = noEdit ? "" : padKbli(get("kbliBaru"));
         if (!ids.length || (kbliBaru && !/^\d{5}$/.test(kbliBaru))) {
           skipped++;
           return;
@@ -677,11 +652,6 @@
         if (st && !doc.excelStatus) {
           doc.excelReason = get("ketWeb");
           doc.excelStatus = fixApproveFail(st, doc.excelReason);
-        }
-        // Belum pernah diproses tapi KBLI Baru-nya bentrok antar kolom -> jangan dijalankan, Perlu cek
-        if (conflict && !doc.excelStatus) {
-          doc.excelStatus = "yellow";
-          doc.excelReason = `${target.nama}: ${conflict}`;
         }
       });
       return {
