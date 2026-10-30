@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi KBLI & Anomali
 // @namespace    hanif-bps-hst
-// @version      1.20
+// @version      1.21
 // @description  Baca Excel "Pengecekan KBLI" (Edit KBLI = 1 dikoreksi; Edit KBLI = 0 cuma diberi catatan #0 di rincian KBLI: revoke saja, catatan ditulis di Review tanpa Edit, lalu Approve), buka tiap dokumen, ganti KBLI akhir ke KBLI Baru di kartu usaha yang tepat, sesuaikan produk & kegiatan utama kalau ada Produk Baru, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" lalu Kirim & Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -31,7 +31,7 @@
 
   const APP = {
     name: "Koreksi KBLI",
-    version: "1.20",
+    version: "1.21",
     title: "Koreksi KBLI & Anomali",
     badge: "KBLI",
     launch: "Koreksi KBLI",
@@ -533,7 +533,27 @@
     editKbli: ["EDITKBLI1YA", "EDITKBLI"],
     kbliBaru: ["KBLIBARU"],
     catatan: ["CATATAN"],
+    // Hasil skrip yang sudah pernah dicatat di Excel (laporan / rekap web): dipakai sebagai status awal antrean
+    statusWeb: ["STATUSWEB"],
+    ketWeb: ["KETERANGANWEB", "KETERANGAN"],
   };
+  // Teks status di Excel ("Selesai", "Perlu cek", "Gagal", ...) -> kunci STATUS; "Belum" / "Belum dicek" = tidak dipakai
+  const STATUS_BY_TEXT = Object.fromEntries(
+    Object.entries(STATUS).flatMap(([k, v]) => [
+      [squash(v.label), k],
+      [squash(k), k],
+    ]),
+  );
+  const statusFromExcel = (...vals) => {
+    for (const v of vals) {
+      const k = STATUS_BY_TEXT[squash(v)];
+      if (k && k !== "pending") return k;
+    }
+    return "";
+  };
+  // "Selesai" tapi approve-nya gagal (dicatat sebelum v1.20) = belum beres -> Perlu cek
+  const fixApproveFail = (status, reason) =>
+    status === "done" && /approve gagal/i.test(reason || "") ? "yellow" : status;
   // "1121" (Excel membuang nol di depan angka) -> "01121"
   const padKbli = (s) => {
     const d = String(s ?? "").trim();
@@ -625,7 +645,14 @@
             status: "pending",
             reason: "",
           });
-        byDoc.get(id).targets.push(target);
+        const doc = byDoc.get(id);
+        doc.targets.push(target);
+        // Status hasil dari Excel (status_web dulu, lalu kolom Status); baris pertama dokumen yang berisi yang dipakai
+        const st = statusFromExcel(get("statusWeb"), get("status"));
+        if (st && !doc.excelStatus) {
+          doc.excelReason = get("ketWeb");
+          doc.excelStatus = fixApproveFail(st, doc.excelReason);
+        }
       });
       return {
         items: Array.from(byDoc.values()),
@@ -3247,18 +3274,28 @@
       );
       const old = new Map(loadQueue().map((q) => [q.id, q]));
       let kept = 0;
+      let fromExcel = 0;
       const merged = items.map((it) => {
         const o = old.get(it.id);
+        // Progres di browser ini dipakai dulu; kalau belum ada, status yang tercatat di Excel
         if (o && o.status !== "pending") {
           kept++;
           return {
             ...it,
-            status: o.status,
+            status: fixApproveFail(o.status, o.reason),
             reason: o.reason,
             result: o.result,
             doneAt: o.doneAt,
             cardHints: o.cardHints,
             kbliNotes: o.kbliNotes,
+          };
+        }
+        if (it.excelStatus) {
+          fromExcel++;
+          return {
+            ...it,
+            status: it.excelStatus,
+            reason: it.excelReason || `status dari Excel: ${STATUS[it.excelStatus].label}`,
           };
         }
         return it;
@@ -3268,7 +3305,7 @@
       ui.selected.clear();
       openPanel();
       toast(
-        `${rows} baris → ${merged.length} dokumen dari sheet "${sheet}"${kept ? ` · ${kept} progres lama dipertahankan` : ""}${notFlagged ? ` · ${notFlagged} baris Edit KBLI bukan 0/1 dilewati` : ""}${skipped ? ` · ${skipped} baris tanpa link / KBLI Baru tidak valid dilewati` : ""}`,
+        `${rows} baris → ${merged.length} dokumen dari sheet "${sheet}"${kept ? ` · ${kept} progres lama dipertahankan` : ""}${fromExcel ? ` · ${fromExcel} status diambil dari kolom Status Excel` : ""}${notFlagged ? ` · ${notFlagged} baris Edit KBLI bukan 0/1 dilewati` : ""}${skipped ? ` · ${skipped} baris tanpa link / KBLI Baru tidak valid dilewati` : ""}`,
       );
     } catch (e) {
       alert(`Gagal membaca Excel: ${e.message}`);
