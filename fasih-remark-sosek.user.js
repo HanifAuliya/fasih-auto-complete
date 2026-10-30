@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Remark Anomali Sosek
 // @namespace    hanif-bps-hst
-// @version      1.5
+// @version      1.7
 // @description  Baca Excel "anomali_sosek" (sheet sosek = daftar kategori & remark; R149/R143/R154/R161 = Blok IV keluarga; R63/R31-R34 = Blok I per anggota), buka tiap dokumen, pasang remark (#0) di catatan rincian yang tepat — Blok I di kartu anggota yang NIK-nya cocok — lalu Kirim & Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -33,7 +33,7 @@
 
   const APP = {
     name: "Remark Sosek",
-    version: "1.5",
+    version: "1.7",
     title: "Remark Anomali Sosek",
     badge: "SOS",
     launch: "Remark Sosek",
@@ -1118,6 +1118,24 @@
     !!document.querySelector("table thead");
 
   // ---------- Review -> Edit (revoke bila perlu) ----------
+  // Revoke saja (tetap di halaman Review): klik Revoke, Konfirmasi, tunggu Edit/Approve aktif lagi
+  async function revokeDoc() {
+    const revoke = buttonByIcon("rotate-clockwise");
+    if (!revoke || revoke.disabled)
+      throw new Error("tombol Edit & Revoke tidak aktif");
+    log("Revoke dokumen");
+    triggerClick(revoke);
+    const ok = await waitFor(() => buttonByText("Konfirmasi"), 8000);
+    if (!ok) throw new Error("konfirmasi revoke tidak muncul");
+    triggerClick(ok);
+    const edit = await waitFor(() => {
+      const b = buttonByIcon("edit");
+      return b && !b.disabled ? b : null;
+    }, 20000);
+    if (!edit) throw new Error("tombol Edit belum aktif setelah revoke");
+    await sleep(W(600));
+    return edit;
+  }
   async function reviewToEdit() {
     await waitFor(
       () => buttonByIcon("edit") || buttonByIcon("rotate-clockwise"),
@@ -1127,21 +1145,8 @@
     let revoked = false;
     let edit = buttonByIcon("edit");
     if (!edit || edit.disabled) {
-      const revoke = buttonByIcon("rotate-clockwise");
-      if (!revoke || revoke.disabled)
-        throw new Error("tombol Edit & Revoke tidak aktif");
-      log("Revoke dokumen");
-      triggerClick(revoke);
-      const ok = await waitFor(() => buttonByText("Konfirmasi"), 8000);
-      if (!ok) throw new Error("konfirmasi revoke tidak muncul");
-      triggerClick(ok);
+      edit = await revokeDoc();
       revoked = true;
-      edit = await waitFor(() => {
-        const b = buttonByIcon("edit");
-        return b && !b.disabled ? b : null;
-      }, 20000);
-      if (!edit) throw new Error("tombol Edit belum aktif setelah revoke");
-      await sleep(W(600));
     }
     triggerClick(edit);
     if (
@@ -1714,7 +1719,7 @@
         const where = STEP_LABEL[cur.stage] || cur.stage;
         const after =
           cur.revoked || ["fill", "submit"].includes(cur.stage)
-            ? " — dokumen sudah dibuka edit, cek manual"
+            ? " — dokumen sudah di-revoke / dibuka edit, cek manual"
             : "";
         finishItem(
           item.id,
@@ -1739,15 +1744,33 @@
       case "check": {
         if (!ensureReview(item)) return;
         const direct = reviewOnly(item);
+        // Dokumen sudah di-approve: di Review cuma ada Revoke & Info (tanpa Edit/Approve/Catatan).
+        await waitFor(
+          () => buttonByIcon("edit") || buttonByIcon("rotate-clockwise"),
+          20000,
+        );
+        await sleep(W(600));
+        const editBtn = buttonByIcon("edit");
+        if (!editBtn || editBtn.disabled) {
+          if (!direct) {
+            log(
+              "Dokumen sudah di-approve (tombol Edit tidak aktif) → revoke lewat Edit",
+            );
+            return setStage("edit");
+          }
+          // Remark #0: revoke saja, tetap di halaman Review (tanpa masuk Edit), lalu tulis catatan & Approve
+          await revokeDoc();
+          log("Revoke selesai → tulis remark #0 di Review (tanpa Edit)");
+          return setStage("check", { revoked: true });
+        }
         try {
-          // Remark cuma #0: catatan langsung ditulis di Review (tanpa revoke), lalu Approve
+          // Remark cuma #0: catatan langsung ditulis di Review (tanpa masuk Edit), lalu Approve
           const acc = await scanDoc(item, direct);
           if (direct) {
             updateItem(item.id, { result: accSummary(acc) });
-            const notFound = acc.problems.some((p) =>
-              /tidak ketemu|tidak muncul|tidak ada/.test(p),
-            );
-            if (!acc.problems.length && acc.added)
+            const notFound = acc.problems.some((p) => /tidak ketemu/.test(p)); // anggota tidak ada di form = cek manual; isian/tombol Catatan tidak ada di Review = lewat Edit
+            // Kalau dokumen tadi di-revoke, harus tetap di-approve walau semua remark ternyata sudah ada
+            if (!acc.problems.length && (acc.added || cur.revoked))
               return setStage("approve", { viaReview: true });
             if (!acc.problems.length)
               return finishItem(
@@ -1757,11 +1780,15 @@
               );
             if (notFound)
               throw Object.assign(
-                new Error(`${accSummary(acc)} — tidak di-revoke, cek manual`),
+                new Error(
+                  `${accSummary(acc)}${cur.revoked ? " — dokumen sudah di-revoke," : " — tidak di-revoke,"} cek manual`,
+                ),
                 { soft: true },
               );
-            // Catatan tidak bisa disimpan di Review (mis. terkunci) -> jalur biasa: revoke, Edit, Kirim, Approve
-            log(`⚠ remark #0 gagal disimpan di Review → lewat Edit`);
+            // Catatan tidak bisa disimpan di Review (mis. terkunci) -> jalur biasa: Edit, Kirim, Approve
+            log(
+              `⚠ remark #0 tidak bisa ditulis di Review (${accSummary(acc)}) → lewat Edit`,
+            );
             closeDialogs();
             return setStage("edit");
           }
@@ -1847,18 +1874,22 @@
           closeDialogs();
         }
         const q = loadQueue().find((x) => x.id === item.id) || item;
-        if (cur.viaReview)
+        if (cur.viaReview) {
+          const how = cur.revoked
+            ? "revoke, remark di Review tanpa Edit"
+            : "di Review tanpa revoke";
           return note
             ? finishItem(
                 item.id,
                 "yellow",
-                `${q.result || "remark dipasang"} · di Review tanpa revoke${note}`,
+                `${q.result || "remark dipasang"} · ${how}${note}`,
               )
             : finishItem(
                 item.id,
                 "done",
-                `${q.result || "remark dipasang"} · di Review tanpa revoke${conf.approve ? " & approve" : ""}`,
+                `${q.result || "remark dipasang"} · ${how}${conf.approve ? " & approve" : ""}`,
               );
+        }
         return finishItem(
           item.id,
           "done",
