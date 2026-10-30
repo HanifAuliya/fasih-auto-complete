@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi KBLI & Anomali
 // @namespace    hanif-bps-hst
-// @version      1.17
+// @version      1.19
 // @description  Baca Excel "Pengecekan KBLI" (Edit KBLI = 1 dikoreksi; Edit KBLI = 0 cuma diberi catatan #0 di rincian KBLI: revoke saja, catatan ditulis di Review tanpa Edit, lalu Approve), buka tiap dokumen, ganti KBLI akhir ke KBLI Baru di kartu usaha yang tepat, sesuaikan produk & kegiatan utama kalau ada Produk Baru, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" lalu Kirim & Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -31,7 +31,7 @@
 
   const APP = {
     name: "Koreksi KBLI",
-    version: "1.17",
+    version: "1.19",
     title: "Koreksi KBLI & Anomali",
     badge: "KBLI",
     launch: "Koreksi KBLI",
@@ -2632,7 +2632,7 @@
       .kk-body { flex:1; overflow:auto; padding:18px 24px 28px; display:flex; flex-direction:column; gap:14px; }
       .kk-card { background:var(--bg); border:1px solid var(--line); border-radius:16px; padding:16px; box-shadow:0 1px 2px rgba(15,18,34,.04); }
       .kk-sec { display:flex; align-items:center; gap:8px; font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--mut); margin-bottom:12px; }
-      .kk-grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+      .kk-grid2 { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:14px; }
       @media (max-width:720px){ .kk-grid2{grid-template-columns:1fr} .kk-stats{grid-template-columns:repeat(4,1fr)!important} }
       .kk-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
       .kk-btn { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); background:var(--bg); color:var(--tx); border-radius:10px; padding:8px 13px; font-size:13px; font-weight:600; cursor:pointer; transition:all .15s; }
@@ -2648,7 +2648,7 @@
       .kk-drop { border:1.5px dashed #c9cbe0; border-radius:14px; padding:16px; display:flex; align-items:center; gap:14px; cursor:pointer; transition:all .15s; background:#fbfbfe; }
       .kk-drop:hover, .kk-drop.over { border-color:var(--acc); background:#f4f4ff; }
       .kk-drop .ic { width:42px; height:42px; border-radius:12px; display:grid; place-items:center; background:#e9fbe9; font-size:20px; flex:none; }
-      .kk-drop b { font-size:13.5px; }
+      .kk-drop b { display:block; font-size:13.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .kk-hint { font-size:12px; color:var(--mut); line-height:1.5; }
       .kk-seg { display:inline-flex; background:#f0f1f6; border-radius:10px; padding:3px; gap:2px; }
       .kk-seg button { border:none; background:transparent; padding:6px 12px; border-radius:8px; font-size:12.5px; font-weight:600; color:var(--mut); cursor:pointer; }
@@ -2917,7 +2917,7 @@
               <label class="kk-drop" data-drop>
                 <div class="ic">📊</div>
                 <div style="min-width:0">
-                  <b>${esc(ui.file || (loadQueue().length ? "Antrean tersimpan di browser" : "Pilih / seret file .xlsx"))}</b>
+                  <b title="${esc(ui.file)}">${esc(ui.file || (loadQueue().length ? "Antrean tersimpan di browser" : "Pilih / seret file .xlsx"))}</b>
                   <div class="kk-hint">Kolom wajib: <i>link / link_fasih_sm (atau assignment_id), nama_usaha, KBLI Baru</i>; opsional: <i>Edit KBLI (1=Ya), kbli_akhir, Produk, Produk Baru, keg_utama</i>. Edit KBLI = 1 dikoreksi; Edit KBLI = 0 tidak diubah, cuma diberi catatan (atur di ② Pengaturan). Muat ulang file yang sama tidak menghapus progres.</div>
                 </div>
                 <input type="file" accept=".xlsx" data-file hidden>
