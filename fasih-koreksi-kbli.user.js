@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FASIH Koreksi KBLI & Anomali
 // @namespace    hanif-bps-hst
-// @version      1.19
+// @version      1.20
 // @description  Baca Excel "Pengecekan KBLI" (Edit KBLI = 1 dikoreksi; Edit KBLI = 0 cuma diberi catatan #0 di rincian KBLI: revoke saja, catatan ditulis di Review tanpa Edit, lalu Approve), buka tiap dokumen, ganti KBLI akhir ke KBLI Baru di kartu usaha yang tepat, sesuaikan produk & kegiatan utama kalau ada Produk Baru, tandai anomali KBLI "Ya, Sesuai Kondisi Lapangan" lalu Kirim & Approve.
 // @match        https://fasih-sm.bps.go.id/*
 // @run-at       document-idle
@@ -31,7 +31,7 @@
 
   const APP = {
     name: "Koreksi KBLI",
-    version: "1.19",
+    version: "1.20",
     title: "Koreksi KBLI & Anomali",
     badge: "KBLI",
     launch: "Koreksi KBLI",
@@ -776,6 +776,10 @@
   }
 
   async function writeText(id, inst, value) {
+    // Isian angka ditampilkan berpemisah ribuan ("16.608.000" = 16608000) -> dibanding angkanya saja
+    const same = (v) =>
+      String(v || "").trim() === value ||
+      (/^\d+$/.test(value) && String(v || "").replace(/\D/g, "") === value);
     for (let attempt = 0; attempt < 3; attempt++) {
       const c = box(id, inst);
       if (!c) throw new Error(`isian ${id} tidak ada`);
@@ -783,7 +787,7 @@
         'input[type="text"]:not([disabled]), textarea:not([disabled])',
       );
       if (!input) throw new Error(`isian ${id} terkunci`);
-      if (input.value.trim() === value) return;
+      if (same(input.value)) return;
       setFieldValue(input, value);
       commitField(input);
       await sleep(W(300));
@@ -791,13 +795,13 @@
         fresh(c).querySelector(
           'input[type="text"]:not([disabled]), textarea:not([disabled])',
         ) || input;
-      if (again.value.trim() === value) return;
+      if (same(again.value)) return;
     }
     const now = box(id, inst);
     const val = now
       ? (now.querySelector("input, textarea") || {}).value || ""
       : "";
-    if (val.trim() !== value)
+    if (!same(val))
       throw new Error(
         `isian ${id} tidak mau berubah (sekarang "${val}", seharusnya "${value}")`,
       );
@@ -2525,7 +2529,17 @@
             log("Approve");
             await approveDocument();
           } catch (e) {
-            note = ` (approve gagal: ${e.message})`;
+            // Tombol ✔ kadang baru aktif setelah halaman dimuat ulang (habis Kirim): coba sekali lagi
+            if (!cur.approveReload) {
+              const r = loadRun();
+              r.cur = Object.assign(r.cur || {}, { approveReload: true });
+              r.phaseAt = r.navAt = Date.now();
+              saveRun(r);
+              log(`⟳ approve gagal (${e.message}) → muat ulang & coba approve sekali lagi`);
+              location.reload();
+              return;
+            }
+            note = ` (approve gagal: ${e.message} — approve manual)`;
           }
           closeDialogs();
         }
@@ -2535,7 +2549,7 @@
         );
         return finishItem(
           item.id,
-          "done",
+          note ? "yellow" : "done",
           `${q.result || "terkirim"} · ${cur.viaReview ? (cur.revoked ? "revoke, catatan di Review tanpa Edit" : "catatan di Review tanpa revoke") : "terkirim"}${conf.approve && !note ? " & approve" : ""}${note}${anomaliNote.length ? ` · ${anomaliNote.join("; ")}` : ""}`,
         );
       }
